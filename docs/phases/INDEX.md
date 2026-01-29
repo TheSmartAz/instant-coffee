@@ -227,19 +227,19 @@ Assuming **3 developers working in parallel**:
 ```
 docs/phases/
 ├── database/
-│   └── phase-d1-core-schema.md
+│   └── v01-phase-d1-core-schema.md
 │
 ├── backend/
-│   ├── phase-b1-chat-api-agents.md
-│   ├── phase-b2-session-management.md
-│   ├── phase-b3-token-tracking.md
-│   └── phase-b4-export-service.md
+│   ├── v01-phase-b1-chat-api-agents.md
+│   ├── v01-phase-b2-session-management.md
+│   ├── v01-phase-b3-token-tracking.md
+│   └── v01-phase-b4-export-service.md
 │
 └── frontend/
-    ├── phase-f1-cli-framework.md
-    ├── phase-f2-chat-command.md
-    ├── phase-f3-history-export.md
-    └── phase-f4-stats-command.md
+    ├── v01-phase-f1-cli-framework.md
+    ├── v01-phase-f2-chat-command.md
+    ├── v01-phase-f3-history-export.md
+    └── v01-phase-f4-stats-command.md
 ```
 
 ## Quick Start Commands
@@ -247,25 +247,25 @@ docs/phases/
 ### For Developer 1 (Critical Path):
 ```bash
 # Read the phases in order
-cat docs/phases/database/phase-d1-core-schema.md
-cat docs/phases/backend/phase-b1-chat-api-agents.md
-cat docs/phases/backend/phase-b2-session-management.md
-cat docs/phases/backend/phase-b4-export-service.md
+cat docs/phases/database/v01-phase-d1-core-schema.md
+cat docs/phases/backend/v01-phase-b1-chat-api-agents.md
+cat docs/phases/backend/v01-phase-b2-session-management.md
+cat docs/phases/backend/v01-phase-b4-export-service.md
 ```
 
 ### For Developer 2 (Frontend):
 ```bash
 # Read the phases in order
-cat docs/phases/frontend/phase-f1-cli-framework.md
-cat docs/phases/frontend/phase-f2-chat-command.md
-cat docs/phases/frontend/phase-f3-history-export.md
+cat docs/phases/frontend/v01-phase-f1-cli-framework.md
+cat docs/phases/frontend/v01-phase-f2-chat-command.md
+cat docs/phases/frontend/v01-phase-f3-history-export.md
 ```
 
 ### For Developer 3 (Auxiliary):
 ```bash
 # Read the phases in order
-cat docs/phases/backend/phase-b3-token-tracking.md
-cat docs/phases/frontend/phase-f4-stats-command.md
+cat docs/phases/backend/v01-phase-b3-token-tracking.md
+cat docs/phases/frontend/v01-phase-f4-stats-command.md
 ```
 
 ## Testing Strategy
