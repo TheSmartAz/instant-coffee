@@ -2,323 +2,272 @@
 
 ## Overview
 
-This document provides an overview of all development phases organized by category (Frontend, Backend, Database). The project has been broken down into **9 phases** that can be developed in parallel by different agents or team members.
+This document provides an overview of all development phases organized by category (Frontend, Backend, Database). The project is organized into **spec versions** with v01 for CLI features and v02 for Web features.
 
-## Database Phases
+**Latest Version**: v0.3 - Agent LLM Calling + Tools System
 
-| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
-|----------|------|----------|------------|-----------|------------|--------|
-| D1       | Core Schema Design | P0 | Low | ✅ | - | B1, B2, B3, B4 |
+---
 
-## Backend Phases
+## Version 0.3: Agent LLM Calling + Tools System
 
-| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
-|----------|------|----------|------------|-----------|------------|--------|
-| B1       | Chat API & Agent Orchestration | P0 | High | ⚠️ | D1 | F2, B2 |
-| B2       | Session & History Management | P0 | Medium | ⚠️ | D1, B1 | F3 |
-| B3       | Token Tracking & Stats Service | P1 | Low | ⚠️ | D1 | F4 |
-| B4       | Export Service | P0 | Low | ⚠️ | D1, B2 | F3 |
-
-## Frontend Phases
+### Backend Phases (v03)
 
 | Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
 |----------|------|----------|------------|-----------|------------|--------|
-| F1       | CLI Framework Setup | P0 | Low | ✅ | - | F2, F3, F4 |
-| F2       | Chat Command Implementation | P0 | High | ⚠️ | F1, B1 | - |
-| F3       | History & Export Commands | P0 | Medium | ⚠️ | F1, B2, B4 | - |
-| F4       | Stats Command Implementation | P1 | Low | ⚠️ | F1, B3 | - |
+| B1 | LLM Client Layer | P0 | High | ✅ | - | B3, B5-B7 |
+| B2 | Tools System | P0 | Medium | ✅ | - | B5-B7, B8 |
+| B3 | BaseAgent Enhancement | P0 | Medium | ⚠️ | B1 | B5-B7 |
+| B4 | Agent Prompts | P0 | Low | ✅ | - | B5-B7 |
+| B5 | InterviewAgent Implementation | P0 | Medium | ⚠️ | B3, B4 | - |
+| B6 | GenerationAgent Implementation | P0 | High | ⚠️ | B2, B3, B4 | - |
+| B7 | RefinementAgent Implementation | P0 | Medium | ⚠️ | B2, B3, B4 | - |
+| B8 | Tool Event Integration | P0 | Medium | ⚠️ | B3, B5-B7 | F1 |
+| B9 | Error Handling & Retry | P1 | Medium | ✅ | B1 | - |
 
-## Dependency Graph
+### Frontend Phases (v03)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Status |
+|----------|------|----------|------------|-----------|------------|--------|
+| F1 | Event Display Enhancement | P1 | Medium | ⚠️ | B8 | ✅ Complete |
+| F2 | Token Cost Display | P1 | Low | ✅ | - | ✅ Complete |
+
+### v03 Dependency Graph
 
 ```
 Wave 1 (Can start immediately):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-D1 (Database Schema)    ✅ No dependencies
-F1 (CLI Framework)      ✅ No dependencies
+B4 (Agent Prompts)       ✅ Complete
+B9 (Error Handling)      ✅ Complete
+B1 (LLM Client)          ✅ Complete
+B2 (Tools System)        ✅ Complete
+B3 (BaseAgent)           ✅ Complete (LLM calls + events + token tracking)
+F2 (Token Cost Display)  ✅ Complete
 
-Wave 2 (After D1 completes):
+Wave 2 (After B4 completes):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B1 (Chat API)           ⚠️ Depends on: D1
-B3 (Token Tracking)     ⚠️ Depends on: D1
+B5 (InterviewAgent)      ✅ Complete
+B6 (GenerationAgent)     ✅ Complete (Depends on: B2, B3, B4)
+B7 (RefinementAgent)     ✅ Complete
 
-Wave 3 (After B1 completes):
+Wave 4 (After B5-B7 complete):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B2 (Session Mgmt)       ⚠️ Depends on: D1, B1
-F2 (Chat Command)       ⚠️ Depends on: F1, B1
+B8 (Tool Event Integration) ✅ Complete
 
-Wave 4 (After B2 completes):
+Wave 5 (After B8 completes):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B4 (Export Service)     ⚠️ Depends on: D1, B2
+F1 (Event Display)       ✅ Complete
 
-Wave 5 (After B3, B4 complete):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-F3 (History/Export)     ⚠️ Depends on: F1, B2, B4
-F4 (Stats Command)      ⚠️ Depends on: F1, B3
-
-Dependency Tree:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-D1 (Database Schema)
- ├─> B1 (Chat API & Agents)
- │    ├─> B2 (Session Management)
- │    │    └─> B4 (Export Service)
- │    │         └─> F3 (History & Export Commands)
- │    └─> F2 (Chat Command)
- │
- └─> B3 (Token Tracking)
-      └─> F4 (Stats Command)
-
-F1 (CLI Framework)
- ├─> F2 (Chat Command)
- ├─> F3 (History & Export Commands)
- └─> F4 (Stats Command)
+v0.3 Complete! 🎉
 ```
 
-## Development Strategy
+---
 
-### Critical Path (Must complete in order)
+## Version 0.2: Web Frontend + Planner
 
-The **critical path** that blocks other work:
+### Database Phases (v02)
 
-```
-D1 → B1 → B2 → B4 → F3
-```
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| D1 | Plan & Task Schema | P0 | Medium | ✅ | - | B1-B4 |
 
-This is the longest dependency chain and determines minimum project duration.
+### Backend Phases (v02)
 
-### Wave 1 - Start Immediately (No Dependencies)
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| B1 | Event Protocol | P0 | Medium | ✅ | - | F2, B2-B4 |
+| B2 | Planner Service | P0 | High | ⚠️ | B1 | B3 |
+| B3 | Parallel Executor | P0 | High | ⚠️ | B1, B2 | B4 |
+| B4 | Task Control API | P0 | Medium | ⚠️ | B1, B3 | F3-F5 |
 
-**Can begin development RIGHT NOW:**
+### Frontend Phases (v02)
 
-- **D1: Core Database Schema**
-  - Priority: P0
-  - Complexity: Low
-  - Description: Design and implement SQLite schema with all 4 tables
-  - Estimated Duration: 1-2 days
-  - Files: `packages/backend/app/db/`
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| F1 | Web Skeleton | P0 | Low | ✅ | - | F2-F5 |
+| F2 | SSE Event Flow | P0 | Medium | ⚠️ | B1 | - |
+| F3 | Todo Panel | P0 | Medium | ⚠️ | F1, B4 | - |
+| F4 | Task Card View | P0 | High | ⚠️ | F1, B4 | - |
+| F5 | Failure Handling UI | P0 | Medium | ⚠️ | F1, B4 | - |
 
-- **F1: CLI Framework Setup**
-  - Priority: P0
-  - Complexity: Low
-  - Description: Set up TypeScript CLI with Commander.js, utilities, and API client
-  - Estimated Duration: 1-2 days
-  - Files: `packages/cli/src/`
+---
 
-**Impact**: These two phases block all other work, so start them immediately!
+## Version 0.1: CLI + Backend Core
 
-### Wave 2 - After Wave 1 (After D1 completes)
+### Database Phases (v01)
 
-**Can begin after D1 is done:**
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| D1 | Core Schema Design | P0 | Low | ✅ | - | B1-B4 |
 
-- **B1: Chat API & Agent Orchestration**
-  - Priority: P0
-  - Complexity: High
-  - Description: Build FastAPI app, 3 agents (Interview, Generation, Refinement), and orchestration
-  - Estimated Duration: 4-5 days
-  - Files: `packages/backend/app/agents/`, `packages/backend/app/api/chat.py`
+### Backend Phases (v01)
 
-- **B3: Token Tracking & Stats Service**
-  - Priority: P1
-  - Complexity: Low
-  - Description: Track token usage and provide statistics
-  - Estimated Duration: 1-2 days
-  - Files: `packages/backend/app/services/token_tracker.py`
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| B1 | Chat API & Agent Orchestration | P0 | High | ⚠️ | D1 | F2, B2 |
+| B2 | Session & History Management | P0 | Medium | ⚠️ | D1, B1 | F3 |
+| B3 | Token Tracking & Stats Service | P1 | Low | ⚠️ | D1 | F4 |
+| B4 | Export Service | P0 | Low | ⚠️ | D1, B2 | F3 |
 
-**Parallel Work**: B1 and B3 can be developed in parallel since they don't depend on each other.
+### Frontend Phases (v01)
 
-### Wave 3 - After Wave 2 (After B1 completes)
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| F1 | CLI Framework Setup | P0 | Low | ✅ | - | F2-F4 |
+| F2 | Chat Command Implementation | P0 | High | ⚠️ | F1, B1 | - |
+| F3 | History & Export Commands | P0 | Medium | ⚠️ | F1, B2, B4 | - |
+| F4 | Stats Command Implementation | P1 | Low | ⚠️ | F1, B3 | - |
 
-**Can begin after B1 is done:**
-
-- **B2: Session & History Management**
-  - Priority: P0
-  - Complexity: Medium
-  - Description: Session CRUD, message storage, version control, filesystem operations
-  - Estimated Duration: 2-3 days
-  - Files: `packages/backend/app/services/session.py`, `message.py`, `version.py`
-
-- **F2: Chat Command Implementation**
-  - Priority: P0
-  - Complexity: High
-  - Description: Interactive chat loop with progress displays for all 3 agent phases
-  - Estimated Duration: 3-4 days
-  - Files: `packages/cli/src/commands/chat.ts`
-  - Note: Also requires F1 to be complete
-
-**Parallel Work**: B2 and F2 can be developed in parallel.
-
-### Wave 4 - After Wave 3 (After B2 completes)
-
-**Can begin after B2 is done:**
-
-- **B4: Export Service**
-  - Priority: P0
-  - Complexity: Low
-  - Description: Export HTML to filesystem
-  - Estimated Duration: 1 day
-  - Files: `packages/backend/app/services/export.py`
-
-### Wave 5 - Final Commands (After B3, B4 complete)
-
-**Can begin after B3 and B4 are done:**
-
-- **F3: History & Export Commands**
-  - Priority: P0
-  - Complexity: Medium
-  - Description: List sessions, view details, rollback, export
-  - Estimated Duration: 2-3 days
-  - Files: `packages/cli/src/commands/history.ts`, `export.ts`, `rollback.ts`
-  - Requires: F1, B2, B4
-
-- **F4: Stats Command Implementation**
-  - Priority: P1
-  - Complexity: Low
-  - Description: Display token usage statistics
-  - Estimated Duration: 1 day
-  - Files: `packages/cli/src/commands/stats.ts`
-  - Requires: F1, B3
-
-**Parallel Work**: F3 and F4 can be developed in parallel.
-
-## Parallel Development Guide
-
-You can run **3 Claude Code instances in parallel** for maximum efficiency:
-
-### Agent 1: Database + Backend Core (Critical Path)
-
-**Recommended sequence:**
-1. Start with D1 (Database Schema) - 1-2 days
-2. Then B1 (Chat API & Agents) - 4-5 days
-3. Then B2 (Session Management) - 2-3 days
-4. Then B4 (Export Service) - 1 day
-
-**Total Duration**: ~9-11 days
-**Priority**: Highest (blocks all other work)
-
-### Agent 2: Frontend CLI (User Interface)
-
-**Recommended sequence:**
-1. Start with F1 (CLI Framework) - 1-2 days
-2. Wait for B1, then F2 (Chat Command) - 3-4 days
-3. Wait for B2 & B4, then F3 (History & Export) - 2-3 days
-
-**Total Duration**: ~6-9 days
-**Priority**: High (user-facing)
-
-### Agent 3: Backend Services (Auxiliary Features)
-
-**Recommended sequence:**
-1. Wait for D1, then B3 (Token Tracking) - 1-2 days
-2. Then F4 (Stats Command) - 1 day
-
-**Total Duration**: ~2-3 days
-**Priority**: Medium (P1 features)
-
-## Estimated Timeline
-
-Assuming **1 developer working full-time**:
-- Sequential: ~15-20 days
-- With 3 parallel agents: ~9-11 days (limited by critical path)
-
-Assuming **3 developers working in parallel**:
-- Total: ~9-11 days (limited by critical path: D1 → B1 → B2 → B4)
+---
 
 ## Phase File Locations
 
 ```
-docs/phases/
-├── database/
-│   └── v01-phase-d1-core-schema.md
+docs/
+├── v03-summary.md (v0.3 implementation progress)
+├── phases/
+│   ├── INDEX.md (this file)
+│   │
+│   ├── v03 - Agent LLM Calling + Tools
+│   ├── backend/
+│   │   ├── v03-phase-b1-llm-client.md
+│   │   ├── v03-phase-b2-tools-system.md
+│   │   ├── v03-phase-b3-base-agent-enhancement.md
+│   │   ├── v03-phase-b4-agent-prompts.md
+│   │   ├── v03-phase-b5-interview-agent.md
+│   │   ├── v03-phase-b6-generation-agent.md
+│   │   ├── v03-phase-b7-refinement-agent.md
+│   │   ├── v03-phase-b8-tool-event-integration.md ✅
+│   │   └── v03-phase-b9-error-handling-retry.md
+│   └── frontend/
+│       ├── v03-phase-f1-event-display.md ✅
+│       └── v03-phase-f2-token-cost-display.md ✅
 │
-├── backend/
-│   ├── v01-phase-b1-chat-api-agents.md
-│   ├── v01-phase-b2-session-management.md
-│   ├── v01-phase-b3-token-tracking.md
-│   └── v01-phase-b4-export-service.md
+├── v02 - Web Frontend + Planner
+│   ├── database/
+│   │   └── v02-phase-d1-plan-task-schema.md
+│   ├── backend/
+│   │   ├── v02-phase-b1-event-protocol.md
+│   │   ├── v02-phase-b2-planner-service.md
+│   │   ├── v02-phase-b3-parallel-executor.md
+│   │   └── v02-phase-b4-task-control-api.md
+│   └── frontend/
+│       ├── v02-phase-f1-web-skeleton.md
+│       ├── v02-phase-f2-sse-event-flow.md
+│       ├── v02-phase-f2-implementation.md
+│       ├── v02-phase-f3-todo-panel.md
+│       ├── v02-phase-f3-implementation.md
+│       ├── v02-phase-f4-task-card-view.md
+│       ├── v02-phase-f4-implementation.md
+│       ├── v02-phase-f5-failure-handling-ui.md
+│       ├── v02-phase-f5-implementation.md
+│       └── v02-phase-f5-testing-guide.md
 │
-└── frontend/
-    ├── v01-phase-f1-cli-framework.md
-    ├── v01-phase-f2-chat-command.md
-    ├── v01-phase-f3-history-export.md
-    └── v01-phase-f4-stats-command.md
+└── v01 - CLI + Backend Core
+    ├── database/
+    │   └── v01-phase-d1-core-schema.md
+    ├── backend/
+    │   ├── v01-phase-b1-chat-api-agents.md
+    │   ├── v01-phase-b2-session-management.md
+    │   ├── v01-phase-b3-token-tracking.md
+    │   └── v01-phase-b4-export-service.md
+    └── frontend/
+        ├── v01-phase-f1-cli-framework.md
+        ├── v01-phase-f2-chat-command.md
+        ├── v01-phase-f3-history-export.md
+        └── v01-phase-f4-stats-command.md
 ```
-
-## Quick Start Commands
-
-### For Developer 1 (Critical Path):
-```bash
-# Read the phases in order
-cat docs/phases/database/v01-phase-d1-core-schema.md
-cat docs/phases/backend/v01-phase-b1-chat-api-agents.md
-cat docs/phases/backend/v01-phase-b2-session-management.md
-cat docs/phases/backend/v01-phase-b4-export-service.md
-```
-
-### For Developer 2 (Frontend):
-```bash
-# Read the phases in order
-cat docs/phases/frontend/v01-phase-f1-cli-framework.md
-cat docs/phases/frontend/v01-phase-f2-chat-command.md
-cat docs/phases/frontend/v01-phase-f3-history-export.md
-```
-
-### For Developer 3 (Auxiliary):
-```bash
-# Read the phases in order
-cat docs/phases/backend/v01-phase-b3-token-tracking.md
-cat docs/phases/frontend/v01-phase-f4-stats-command.md
-```
-
-## Testing Strategy
-
-### Per-Phase Testing
-Each phase document includes:
-- Unit test requirements
-- Integration test requirements
-- E2E test requirements (where applicable)
-
-### Integration Testing Checkpoints
-
-**After Wave 2 completes (D1 + B1):**
-- Test: Database operations with agent API calls
-- Test: Complete interview → generation flow
-
-**After Wave 3 completes (+ B2 + F2):**
-- Test: Full CLI chat experience end-to-end
-- Test: Session persistence and continuation
-
-**After Wave 5 completes (All phases):**
-- Test: Complete user journey (chat → history → export → stats)
-- Test: All commands work together seamlessly
-
-## Notes & Best Practices
-
-### Communication Between Agents
-
-When working in parallel:
-- **Share database schema** immediately after D1 completes
-- **Share API contracts** from B1 to frontend developers
-- **Document data models** for consistency
-- **Use the same coding standards** across all phases
-
-### Handling Blockers
-
-If a developer is blocked:
-1. Check the dependency graph
-2. Work on tests for current phase
-3. Start documentation
-4. Review and improve existing phases
-5. Help with code review on other phases
-
-### Code Review Strategy
-
-- **D1 review**: Critical - all backend depends on this
-- **B1 review**: Critical - agents are complex, review carefully
-- **F1 review**: Important - sets standards for all CLI commands
-- **Other phases**: Standard review process
 
 ---
 
-**Document Version**: v1.0
-**Last Updated**: 2025-01-30
-**Total Phases**: 9 (1 Database, 4 Backend, 4 Frontend)
-**Estimated Duration**: 9-11 days (with 3 parallel developers)
+## Development Strategy for v0.3
+
+### Parallel Development Opportunities
+
+**Wave 1 - Start Immediately:**
+- ~~B4: Agent Prompts (Backend)~~ ✅ Complete
+- ~~B9: Error Handling (Backend)~~ ✅ Complete
+- ~~B3: BaseAgent Enhancement (Backend)~~ ✅ Complete (LLM calls + events + token tracking)
+- ~~F2: Token Cost Display (Frontend)~~ ✅ Complete
+
+**Wave 2 - After B4:**
+- B5: InterviewAgent (Backend) ✅ Complete
+- B6: GenerationAgent (Backend) ✅ Complete
+- B7: RefinementAgent (Backend) ✅ Complete
+
+**Wave 4 - After B5-B7:**
+- B8: Tool Event Integration (Backend) ✅ Complete
+
+**Wave 5 - After B8:**
+- F1: Event Display Enhancement (Frontend) ⏳ Pending
+
+### Critical Path (v0.3)
+
+```
+F1 (Event Display)
+```
+
+### Estimated Duration (v0.3)
+
+Assuming **3 developers working in parallel**:
+- **Total Duration**: ~6-8 days (limited by critical path)
+
+### Per-Developer Tracks
+
+**Developer 1 (LLM Core):**
+1. B1: LLM Client Layer
+2. B3: BaseAgent Enhancement
+3. B5: InterviewAgent
+
+**Developer 2 (Tools & Agents):**
+1. B2: Tools System
+2. B4: Agent Prompts
+3. B6: GenerationAgent
+4. B7: RefinementAgent
+
+**Developer 3 (Events & Frontend):**
+1. B9: Error Handling ✅ Complete
+2. F2: Token Cost Display ✅ Complete
+3. B8: Tool Event Integration ✅ Complete
+4. F1: Event Display Enhancement ✅ Complete
+
+---
+
+## Quick Start Commands
+
+### For v0.3 Development:
+
+```bash
+# Developer 1 - LLM Core
+cat docs/phases/backend/v03-phase-b1-llm-client.md
+cat docs/phases/backend/v03-phase-b3-base-agent-enhancement.md
+cat docs/phases/backend/v03-phase-b5-interview-agent.md
+
+# Developer 2 - Tools & Agents
+cat docs/phases/backend/v03-phase-b2-tools-system.md
+cat docs/phases/backend/v03-phase-b4-agent-prompts.md
+cat docs/phases/backend/v03-phase-b6-generation-agent.md
+cat docs/phases/backend/v03-phase-b7-refinement-agent.md
+
+# Developer 3 - Events & Frontend
+cat docs/phases/backend/v03-phase-b9-error-handling-retry.md
+cat docs/phases/frontend/v03-phase-f2-token-cost-display.md
+cat docs/phases/backend/v03-phase-b8-tool-event-integration.md
+cat docs/phases/frontend/v03-phase-f1-event-display.md
+```
+
+---
+
+## Version Compatibility
+
+| Version | Spec | Status | Key Features |
+|---------|------|--------|--------------|
+| v0.1 | spec-01.md | ✅ Complete | CLI, Backend Core, Database |
+| v0.2 | spec-02.md | ✅ Complete | Web Frontend, Planner, Executor |
+| v0.3 | spec-03.md | ✅ Complete | LLM Calling, Tools, Real Agents |
+
+---
+
+**Document Version**: v2.0
+**Last Updated**: 2026-01-31
+**Total Phases**: 32 (3 Database, 24 Backend, 5 Frontend)
+**Current Spec**: v0.3 - Agent LLM Calling + Tools System (11 phases)
