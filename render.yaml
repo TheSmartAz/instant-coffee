@@ -20,10 +20,9 @@ services:
   - type: web
     name: instant-coffee-web
     runtime: static
-    plan: free
     rootDir: packages/web
     buildCommand: npm install && npm run build
-    staticPublishPath: packages/web/dist
+    staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
         sync: false
