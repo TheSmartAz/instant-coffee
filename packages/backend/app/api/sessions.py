@@ -3,16 +3,21 @@ from __future__ import annotations
 from typing import Generator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from ..db.models import Message, Session as SessionModel, Version
+from ..db.models import Message, PageVersion, Session as SessionModel, Version
 from ..db.utils import get_db
 from ..services.message import MessageService
+from ..services.page import PageService
+from ..services.page_version import PageVersionService
+from ..services.product_doc import ProductDocService
 from ..services.session import SessionService
 from ..services.version import VersionService
+from ..utils.html import inject_hide_scrollbar_style, strip_prompt_artifacts
+from ..utils.style import build_global_style_css
 from .utils import build_preview_url
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -29,6 +34,52 @@ class RollbackRequest(BaseModel):
 def _get_db_session() -> Generator[DbSession, None, None]:
     with get_db() as session:
         yield session
+
+
+def _get_index_page(session: DbSession, session_id: str):
+    return PageService(session).get_by_slug(session_id, "index")
+
+
+def _build_preview_css(session: DbSession, session_id: str) -> str | None:
+    product_doc = ProductDocService(session).get_by_session_id(session_id)
+    if product_doc is None:
+        return None
+    structured = getattr(product_doc, "structured", None)
+    if not isinstance(structured, dict):
+        structured = {}
+    global_style = structured.get("global_style") or structured.get("globalStyle") or {}
+    if not isinstance(global_style, dict):
+        global_style = {}
+    design_direction = structured.get("design_direction") or structured.get("designDirection") or {}
+    if not isinstance(design_direction, dict):
+        design_direction = {}
+    try:
+        return build_global_style_css(global_style, design_direction)
+    except Exception:
+        return None
+
+
+def _get_index_preview(session: DbSession, session_id: str) -> tuple[Optional[str], Optional[int]]:
+    page = _get_index_page(session, session_id)
+    if page is None:
+        return None, None
+    css = _build_preview_css(session, session_id)
+    preview = PageVersionService(session).build_preview(page.id, global_style_css=css)
+    if preview is None:
+        return None, None
+    version, html = preview
+    return html, version.version
+
+
+def _get_page_version_by_number(
+    session: DbSession, page_id: str, version_number: int
+) -> Optional[PageVersion]:
+    return (
+        session.query(PageVersion)
+        .filter(PageVersion.page_id == page_id)
+        .filter(PageVersion.version == version_number)
+        .first()
+    )
 
 
 def _session_payload(db: DbSession, record: SessionModel) -> dict:
@@ -92,20 +143,33 @@ def get_session(
     if record is None:
         raise HTTPException(status_code=404, detail="Session not found")
     payload = _session_payload(db, record)
-    version = None
-    if record.current_version is not None:
-        version = (
-            db.query(Version)
-            .filter(Version.session_id == session_id)
-            .filter(Version.version == record.current_version)
-            .first()
-        )
-    if version is not None:
-        payload["preview_html"] = version.html
+    preview_html, _page_version = _get_index_preview(db, session_id)
+    if preview_html is None:
+        version = None
+        if record.current_version is not None:
+            version = (
+                db.query(Version)
+                .filter(Version.session_id == session_id)
+                .filter(Version.version == record.current_version)
+                .first()
+            )
+        payload["preview_html"] = strip_prompt_artifacts(version.html) if version is not None else None
     else:
-        payload["preview_html"] = None
+        payload["preview_html"] = preview_html
     payload["preview_url"] = build_preview_url(request, session_id)
     return payload
+
+
+@router.get("/{session_id}/fallbacks")
+def get_session_fallbacks(
+    session_id: str,
+    limit: int = Query(10, ge=1, le=50),
+    db: DbSession = Depends(_get_db_session),
+) -> dict:
+    if db.get(SessionModel, session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    service = PageVersionService(db)
+    return service.fallback_stats_by_session(session_id, limit=limit)
 
 
 @router.get("/{session_id}/messages")
@@ -128,16 +192,61 @@ def get_messages(
     }
 
 
+@router.delete("/{session_id}/messages")
+def clear_messages(
+    session_id: str,
+    db: DbSession = Depends(_get_db_session),
+) -> dict:
+    session = db.get(SessionModel, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    service = MessageService(db)
+    deleted = service.clear_messages(session_id)
+    db.commit()
+    return {"deleted": deleted}
+
+
+@router.delete("/{session_id}")
+def delete_session(
+    session_id: str,
+    db: DbSession = Depends(_get_db_session),
+) -> dict:
+    service = SessionService(db)
+    deleted = service.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.commit()
+    return {"deleted": True}
+
+
 @router.get("/{session_id}/versions")
 def get_versions(
     session_id: str,
     db: DbSession = Depends(_get_db_session),
 ) -> dict:
-    service = VersionService(db)
-    versions = service.get_versions(session_id)
     session = db.get(SessionModel, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    index_page = _get_index_page(db, session_id)
+    if index_page is not None:
+        page_version_service = PageVersionService(db)
+        versions = page_version_service.list_by_page(index_page.id)
+        current = page_version_service.get_current(index_page.id)
+        return {
+            "versions": [
+                {
+                    "id": version.id,
+                    "version": version.version,
+                    "description": version.description,
+                    "created_at": version.created_at,
+                    "preview_html": strip_prompt_artifacts(version.html),
+                }
+                for version in versions
+            ],
+            "current_version": current.version if current is not None else None,
+        }
+    service = VersionService(db)
+    versions = service.get_versions(session_id)
     return {
         "versions": [
             {
@@ -145,7 +254,7 @@ def get_versions(
                 "version": version.version,
                 "description": version.description,
                 "created_at": version.created_at,
-                "preview_html": version.html,
+                "preview_html": strip_prompt_artifacts(version.html),
             }
             for version in versions
         ],
@@ -161,6 +270,11 @@ def get_preview(
     session = db.get(SessionModel, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    preview_html, _page_version = _get_index_preview(db, session_id)
+    if preview_html is not None:
+        preview_html = inject_hide_scrollbar_style(preview_html or "")
+        return HTMLResponse(content=preview_html or "")
+
     version_service = VersionService(db)
     version = None
     if session.current_version is not None:
@@ -170,7 +284,8 @@ def get_preview(
         version = versions[0] if versions else None
     if version is None:
         raise HTTPException(status_code=404, detail="No preview available")
-    return HTMLResponse(content=version.html or "")
+    preview_html = inject_hide_scrollbar_style(strip_prompt_artifacts(version.html or ""))
+    return HTMLResponse(content=preview_html or "")
 
 
 @router.post("/{session_id}/rollback")
@@ -180,6 +295,16 @@ def rollback_session(
     request: Request,
     db: DbSession = Depends(_get_db_session),
 ) -> dict:
+    index_page = _get_index_page(db, session_id)
+    if index_page is not None:
+        return JSONResponse(
+            status_code=410,
+            content={
+                "error": "rollback_not_supported",
+                "message": "Session rollback via PageVersion is no longer supported. Use ProjectSnapshot rollback instead.",
+                "preview_url": build_preview_url(request, session_id),
+            },
+        )
     service = VersionService(db)
     version = service.rollback(session_id, payload.version)
     if version is None:
@@ -189,7 +314,7 @@ def rollback_session(
         "success": True,
         "current_version": payload.version,
         "preview_url": build_preview_url(request, session_id),
-        "preview_html": version.html,
+            "preview_html": strip_prompt_artifacts(version.html),
     }
 
 
@@ -200,6 +325,16 @@ def revert_session_version(
     request: Request,
     db: DbSession = Depends(_get_db_session),
 ) -> dict:
+    index_page = _get_index_page(db, session_id)
+    if index_page is not None:
+        return JSONResponse(
+            status_code=410,
+            content={
+                "error": "rollback_not_supported",
+                "message": "Session rollback via PageVersion is no longer supported. Use ProjectSnapshot rollback instead.",
+                "preview_url": build_preview_url(request, session_id),
+            },
+        )
     service = VersionService(db)
     version = service.rollback(session_id, int(version_id))
     if version is None:
@@ -209,7 +344,7 @@ def revert_session_version(
         "success": True,
         "current_version": int(version_id),
         "preview_url": build_preview_url(request, session_id),
-        "preview_html": version.html,
+        "preview_html": strip_prompt_artifacts(version.html),
     }
 
 

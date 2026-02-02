@@ -54,10 +54,10 @@ export function TodoPanel({
                     'h-3 w-3 rounded-full border',
                     task.status === 'done'
                       ? 'border-emerald-500 bg-emerald-500'
-                      : task.status === 'failed'
+                      : task.status === 'failed' || task.status === 'timeout'
                         ? 'border-destructive bg-destructive'
-                        : task.status === 'in_progress'
-                          ? 'border-primary bg-primary'
+                      : task.status === 'in_progress'
+                        ? 'border-primary bg-primary'
                           : 'border-border bg-background'
                   )}
                 />

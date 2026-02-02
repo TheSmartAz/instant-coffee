@@ -40,7 +40,7 @@ class AnthropicPlanner(BasePlanner):
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
 
     async def plan(self, user_message: str, context: Optional[str] = None) -> Plan:
-        context_str = f"上下文: {context}" if context else ""
+        context_str = f"Context: {context}" if context else ""
         user_prompt = PLANNER_USER_PROMPT.format(
             user_message=user_message,
             context=context_str,

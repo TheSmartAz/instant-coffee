@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 
-from app.agents.generation import GenerationProgress, GenerationResult
+from app.agents.generation import GenerationAgent, GenerationProgress, GenerationResult
 from app.agents.orchestrator import AgentOrchestrator
+from app.agents.sitemap import SitemapResult
 from app.db.database import Database
 from app.db.migrations import init_db
-from app.db.models import Session as SessionModel
+from app.db.models import ProductDocStatus, Session as SessionModel
 from app.db.utils import get_db
 from app.events.emitter import EventEmitter
 from app.events.models import AgentProgressEvent, AgentStartEvent, DoneEvent, ToolCallEvent, ToolResultEvent
 from app.events.types import EventType
+from app.schemas.sitemap import GlobalStyle, NavItem, SitemapPage
+from app.services.product_doc import ProductDocService
 
 
 def test_event_model_serialization() -> None:
@@ -20,10 +23,10 @@ def test_event_model_serialization() -> None:
     assert "timestamp" in payload
     assert payload["session_id"] == "session-1"
 
-    progress = AgentProgressEvent(agent_id="agent-1", message="中文提示")
+    progress = AgentProgressEvent(agent_id="agent-1", message="Sample prompt")
     sse = progress.to_sse()
     assert sse.startswith("data: ")
-    assert "中文提示" in sse
+    assert "Sample prompt" in sse
 
 
 def test_event_emitter_emit_and_clear() -> None:
@@ -40,53 +43,68 @@ def test_orchestrator_stream_events(monkeypatch, tmp_path) -> None:
     database = Database(f"sqlite:///{db_path}")
     init_db(database)
 
-    class DummyGenerationAgent:
-        agent_type = "generation"
-
-        def __init__(
-            self,
-            db,
-            session_id,
-            settings,
-            event_emitter=None,
-            agent_id=None,
-            task_id=None,
-        ) -> None:
-            self.event_emitter = event_emitter
-            self.agent_id = agent_id or "generation_1"
-
-        def progress_steps(self):
-            return [
-                GenerationProgress(message="step", progress=10),
-                GenerationProgress(message="done", progress=100),
-            ]
-
-        async def generate(self, *, requirements, output_dir, history):
-            if self.event_emitter:
-                self.event_emitter.emit(
-                    ToolCallEvent(agent_id=self.agent_id, tool_name="dummy", tool_input=None)
-                )
-                self.event_emitter.emit(
-                    ToolResultEvent(
-                        agent_id=self.agent_id,
-                        tool_name="dummy",
-                        success=True,
-                        tool_output={"ok": True},
-                    )
-                )
-            return GenerationResult(
-                html="<p>ok</p>",
-                preview_url="file://preview",
-                filepath=str(tmp_path / "index.html"),
+    async def fake_generate(
+        self,
+        *,
+        requirements=None,
+        output_dir=None,
+        history=None,
+        **kwargs,
+    ):
+        if self.event_emitter:
+            self.event_emitter.emit(
+                ToolCallEvent(agent_id=self.agent_id or "generation_1", tool_name="dummy", tool_input=None)
             )
+            self.event_emitter.emit(
+                ToolResultEvent(
+                    agent_id=self.agent_id or "generation_1",
+                    tool_name="dummy",
+                    success=True,
+                    tool_output={"ok": True},
+                )
+            )
+        return GenerationResult(
+            html="<p>ok</p>",
+            preview_url="file://preview",
+            filepath=str(tmp_path / "index.html"),
+        )
 
-    from app.agents import orchestrator as orchestrator_module
+    async def fake_sitemap_generate(self, product_doc, multi_page=True, explicit_multi_page=False):
+        page = SitemapPage(
+            title="Home",
+            slug="index",
+            purpose="Landing",
+            sections=["hero"],
+            required=True,
+        )
+        nav = [NavItem(slug="index", label="Home", order=0)]
+        style = GlobalStyle(primary_color="#111111", secondary_color="#222222", font_family="Test")
+        return SitemapResult(pages=[page], nav=nav, global_style=style, tokens_used=0)
 
-    monkeypatch.setattr(orchestrator_module, "GenerationAgent", DummyGenerationAgent)
+    monkeypatch.setattr(GenerationAgent, "generate", fake_generate)
+    monkeypatch.setattr("app.agents.sitemap.SitemapAgent.generate", fake_sitemap_generate)
 
     with get_db(database) as session:
         record = SessionModel(id="session-1", title="Test Session")
         session.add(record)
+        session.flush()
+        ProductDocService(session).create(
+            record.id,
+            content="# Doc",
+            structured={
+                "project_name": "Test",
+                "pages": [
+                    {
+                        "title": "Home",
+                        "slug": "index",
+                        "purpose": "Landing",
+                        "sections": ["hero"],
+                        "required": True,
+                    }
+                ],
+            },
+            status=ProductDocStatus.CONFIRMED,
+        )
         session.flush()
         orchestrator = AgentOrchestrator(session, record)
 

@@ -21,9 +21,15 @@ type SettingsSection = 'account' | 'model' | 'preferences'
 
 export function SettingsPage() {
   const [activeSection, setActiveSection] = React.useState<SettingsSection>('account')
-  const { settings, isLoading, error, updateSettings } = useSettings()
+  const { settings, isLoading, error, updateSettings, modelOptions } = useSettings()
   const [draft, setDraft] = React.useState(settings)
   const [isSaving, setIsSaving] = React.useState(false)
+
+  const availableModels = React.useMemo(() => {
+    if (modelOptions.length > 0) return modelOptions
+    if (draft.model) return [{ id: draft.model, label: draft.model }]
+    return []
+  }, [modelOptions, draft.model])
 
   React.useEffect(() => {
     setDraft(settings)
@@ -128,8 +134,17 @@ export function SettingsPage() {
                         <SelectValue placeholder="Select model" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="sonnet-4">Claude Sonnet 4</SelectItem>
-                        <SelectItem value="haiku-3">Claude Haiku 3</SelectItem>
+                        {availableModels.length > 0 ? (
+                          availableModels.map((option) => (
+                            <SelectItem key={option.id} value={option.id}>
+                              {option.label ?? option.id}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value={draft.model ?? 'default'} disabled>
+                            No models configured
+                          </SelectItem>
+                        )}
                       </SelectContent>
                     </Select>
                   </div>

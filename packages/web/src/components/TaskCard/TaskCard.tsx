@@ -73,7 +73,10 @@ const getStatusStyle = (status: Task['status']) => {
     case 'done':
       return 'border-emerald-200 bg-emerald-50/60'
     case 'failed':
+    case 'timeout':
       return 'border-destructive/30 bg-destructive/10'
+    case 'aborted':
+      return 'border-muted-foreground/20 bg-muted/30'
     case 'in_progress':
       return 'border-primary/20 bg-primary/5'
     case 'blocked':
@@ -90,6 +93,7 @@ const getStatusIcon = (status: Task['status']) => {
     case 'done':
       return 'done'
     case 'failed':
+    case 'timeout':
       return 'failed'
     case 'in_progress':
     case 'retrying':
@@ -98,6 +102,8 @@ const getStatusIcon = (status: Task['status']) => {
       return 'pending'
     case 'skipped':
       return 'done'
+    case 'aborted':
+      return 'pending'
     default:
       return 'pending'
   }
@@ -190,7 +196,7 @@ export function TaskCard({ task, events, isActive }: TaskCardProps) {
             </div>
           ) : null}
 
-          {task.status === 'failed' && task.error_message ? (
+          {(task.status === 'failed' || task.status === 'timeout') && task.error_message ? (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
               {task.error_message}
             </div>

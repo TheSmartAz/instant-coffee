@@ -41,6 +41,16 @@ const statusStyles = {
     iconClass: 'text-destructive',
     textClass: 'text-destructive',
   },
+  timeout: {
+    icon: AlertTriangle,
+    iconClass: 'text-destructive',
+    textClass: 'text-destructive',
+  },
+  aborted: {
+    icon: PauseCircle,
+    iconClass: 'text-muted-foreground',
+    textClass: 'text-muted-foreground',
+  },
   blocked: {
     icon: PauseCircle,
     iconClass: 'text-amber-500',
@@ -83,13 +93,13 @@ export function TodoItem({ task, onAction }: TodoItemProps) {
           {task.status === 'in_progress' ? (
             <ProgressBar value={task.progress} className="mt-2" />
           ) : null}
-          {task.status === 'failed' && task.error_message ? (
+          {(task.status === 'failed' || task.status === 'timeout') && task.error_message ? (
             <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">
               <AlertTriangle className="mt-0.5 h-3 w-3" />
               <span>{task.error_message}</span>
             </div>
           ) : null}
-          {task.status === 'failed' && onAction ? (
+          {(task.status === 'failed' || task.status === 'timeout') && onAction ? (
             <div className="flex gap-2 pt-1">
               <Button
                 size="sm"

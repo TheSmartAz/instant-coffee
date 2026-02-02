@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import AsyncGenerator, List, Optional, Union
+from typing import AsyncGenerator, List, Optional, Union, TYPE_CHECKING
 
-from ..services.event_store import EventStoreService
+if TYPE_CHECKING:
+    from ..services.event_store import EventStoreService
 
 from .models import (
     AgentEndEvent,
@@ -15,6 +16,19 @@ from .models import (
     ErrorEvent,
     PlanCreatedEvent,
     PlanUpdatedEvent,
+    PageCreatedEvent,
+    PagePreviewReadyEvent,
+    PageVersionCreatedEvent,
+    HistoryCreatedEvent,
+    InterviewAnswerEvent,
+    InterviewQuestionEvent,
+    ProductDocConfirmedEvent,
+    ProductDocGeneratedEvent,
+    ProductDocOutdatedEvent,
+    ProductDocUpdatedEvent,
+    SnapshotCreatedEvent,
+    MultiPageDecisionEvent,
+    SitemapProposedEvent,
     TaskBlockedEvent,
     TaskDoneEvent,
     TaskFailedEvent,
@@ -25,6 +39,7 @@ from .models import (
     ToolCallEvent,
     ToolResultEvent,
     TokenUsageEvent,
+    VersionCreatedEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +53,14 @@ EventUnion = Union[
     TokenUsageEvent,
     PlanCreatedEvent,
     PlanUpdatedEvent,
+    PageCreatedEvent,
+    PageVersionCreatedEvent,
+    PagePreviewReadyEvent,
+    InterviewQuestionEvent,
+    InterviewAnswerEvent,
+    VersionCreatedEvent,
+    SnapshotCreatedEvent,
+    HistoryCreatedEvent,
     TaskStartedEvent,
     TaskProgressEvent,
     TaskDoneEvent,
@@ -45,6 +68,12 @@ EventUnion = Union[
     TaskRetryingEvent,
     TaskSkippedEvent,
     TaskBlockedEvent,
+    MultiPageDecisionEvent,
+    SitemapProposedEvent,
+    ProductDocGeneratedEvent,
+    ProductDocUpdatedEvent,
+    ProductDocConfirmedEvent,
+    ProductDocOutdatedEvent,
     ErrorEvent,
     DoneEvent,
 ]
@@ -73,7 +102,7 @@ class EventEmitter:
                 self._event_store.record_event(event)
             except Exception:
                 logger.exception("Failed to persist event")
-        logger.debug("Event emitted: %s", event.type.value)
+        logger.debug("Event emitted: %s", getattr(event.type, "value", event.type))
 
     def get_events(self) -> List[EventUnion]:
         """Get all emitted events."""

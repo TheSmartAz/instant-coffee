@@ -35,6 +35,8 @@ class AgentResult:
     confidence: Optional[float] = None
     context: Optional[str] = None
     rounds_used: Optional[int] = None
+    questions: Optional[list[dict]] = None
+    missing_info: Optional[list[str]] = None
 
 
 class BaseAgent:
@@ -47,6 +49,7 @@ class BaseAgent:
         agent_id=None,
         task_id=None,
         token_tracker: TokenTrackerService | None = None,
+        emit_lifecycle_events: bool = True,
     ) -> None:
         self.db = db
         self.session_id = session_id
@@ -55,6 +58,7 @@ class BaseAgent:
         resolved_agent_type = getattr(self, "agent_type", "agent")
         self.agent_id = agent_id or f"{resolved_agent_type}_1"
         self.task_id = task_id
+        self.emit_lifecycle_events = emit_lifecycle_events
         if token_tracker is not None:
             self.token_tracker = token_tracker
         elif db is not None:
@@ -62,11 +66,28 @@ class BaseAgent:
         else:
             self.token_tracker = None
         self._llm_client: OpenAIClient | None = None
+        self._warned_responses_fallback = False
 
     def _get_llm_client(self) -> OpenAIClient:
         if self._llm_client is None:
             self._llm_client = OpenAIClient(settings=self.settings, token_tracker=self.token_tracker)
         return self._llm_client
+
+    def _use_chat_completions(self, client: OpenAIClient | None = None) -> bool:
+        mode = getattr(self.settings, "openai_api_mode", "responses") or "responses"
+        normalized = str(mode).strip().lower()
+        if normalized in {"chat", "chat_completions", "chat-completions", "completions"}:
+            return True
+        resolved_client = client or self._get_llm_client()
+        if not resolved_client.supports_responses():
+            if not self._warned_responses_fallback:
+                logger.warning(
+                    "OpenAI SDK lacks Responses API support; falling back to chat completions. "
+                    "Set OPENAI_API_MODE=chat or upgrade the openai package."
+                )
+                self._warned_responses_fallback = True
+            return True
+        return False
 
     async def _call_llm(
         self,
@@ -90,7 +111,12 @@ class BaseAgent:
             if stream:
                 full_response = ""
                 last_progress = 0
-                async for chunk in client.chat_completion_stream(
+                stream_iter = (
+                    client.chat_completion_stream
+                    if self._use_chat_completions(client)
+                    else client.responses_stream
+                )
+                async for chunk in stream_iter(
                     messages=messages,
                     model=model,
                     temperature=temperature,
@@ -111,14 +137,24 @@ class BaseAgent:
                             )
                 response = LLMResponse(content=full_response)
             else:
-                response = await client.chat_completion(
-                    messages=messages,
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    tools=tools,
-                    **kwargs,
-                )
+                if self._use_chat_completions(client):
+                    response = await client.chat_completion(
+                        messages=messages,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        tools=tools,
+                        **kwargs,
+                    )
+                else:
+                    response = await client.responses_create(
+                        messages=messages,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        tools=tools,
+                        **kwargs,
+                    )
 
             if response.token_usage and self.token_tracker is not None:
                 self.token_tracker.record_usage(
@@ -165,15 +201,26 @@ class BaseAgent:
         }
         client = self._get_llm_client()
         try:
-            response = await client.chat_with_tools(
-                messages=messages,
-                tools=tools,
-                tool_handlers=wrapped_handlers,
-                model=model,
-                temperature=temperature,
-                max_iterations=max_iterations,
-                **kwargs,
-            )
+            if self._use_chat_completions(client):
+                response = await client.chat_with_tools(
+                    messages=messages,
+                    tools=tools,
+                    tool_handlers=wrapped_handlers,
+                    model=model,
+                    temperature=temperature,
+                    max_iterations=max_iterations,
+                    **kwargs,
+                )
+            else:
+                response = await client.responses_with_tools(
+                    messages=messages,
+                    tools=tools,
+                    tool_handlers=wrapped_handlers,
+                    model=model,
+                    temperature=temperature,
+                    max_iterations=max_iterations,
+                    **kwargs,
+                )
             if response.token_usage and self.token_tracker is not None:
                 self.token_tracker.record_usage(
                     session_id=self.session_id,
@@ -330,7 +377,7 @@ class BaseAgent:
         self.event_emitter.emit(ToolCallEvent(**payload))
 
     def _emit_agent_start(self, *, context: Optional[str] = None, agent_type: Optional[str] = None) -> None:
-        if not self.event_emitter:
+        if not self.event_emitter or not self.emit_lifecycle_events:
             return
         payload = {
             "task_id": self.task_id,
@@ -367,7 +414,7 @@ class BaseAgent:
         summary: Optional[str] = None,
         agent_type: Optional[str] = None,
     ) -> None:
-        if not self.event_emitter:
+        if not self.event_emitter or not self.emit_lifecycle_events:
             return
         payload = {
             "task_id": self.task_id,

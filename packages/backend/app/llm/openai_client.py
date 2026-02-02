@@ -48,6 +48,7 @@ class TokenUsage:
     output_tokens: int
     total_tokens: int
     cost_usd: float
+    raw: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -101,6 +102,7 @@ class OpenAIClient:
             base_url=resolved_base_url,
             timeout=self._timeout_seconds,
         )
+        self._supports_responses = hasattr(self._client, "responses")
         self._default_model = model or resolved_settings.model
         self._default_temperature = temperature if temperature is not None else resolved_settings.temperature
         self._default_max_tokens = max_tokens if max_tokens is not None else resolved_settings.max_tokens
@@ -124,19 +126,118 @@ class OpenAIClient:
         output_cost = (output_tokens / 1_000_000) * pricing["output"]
         return float(input_cost + output_cost)
 
-    def _build_usage(self, model: str, usage: Any) -> Optional[TokenUsage]:
+    def _usage_to_dict(self, usage: Any) -> Optional[Dict[str, Any]]:
         if not usage:
             return None
-        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        total_tokens = int(getattr(usage, "total_tokens", input_tokens + output_tokens) or 0)
+        if isinstance(usage, dict):
+            return dict(usage)
+        if hasattr(usage, "model_dump"):
+            try:
+                dumped = usage.model_dump()
+                if isinstance(dumped, dict):
+                    return dumped
+            except Exception:
+                pass
+        data: Dict[str, Any] = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens"):
+            value = getattr(usage, key, None)
+            if value is not None:
+                data[key] = value
+        return data or None
+
+    def _build_usage(self, model: str, usage: Any) -> Optional[TokenUsage]:
+        usage_data = self._usage_to_dict(usage)
+        if not usage_data:
+            return None
+        input_tokens = int(usage_data.get("prompt_tokens", usage_data.get("input_tokens", 0)) or 0)
+        output_tokens = int(usage_data.get("completion_tokens", usage_data.get("output_tokens", 0)) or 0)
+        total_tokens = int(usage_data.get("total_tokens", input_tokens + output_tokens) or 0)
         cost_usd = self._calculate_cost(model, input_tokens, output_tokens)
         return TokenUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             cost_usd=cost_usd,
+            raw=usage_data,
         )
+
+    def _read_attr(self, obj: Any, key: str, default: Any = None) -> Any:
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def supports_responses(self) -> bool:
+        return bool(self._supports_responses)
+
+    def _responses_client(self) -> Any:
+        responses = getattr(self._client, "responses", None)
+        if responses is None:
+            raise OpenAIClientError(
+                "OpenAI SDK does not support the Responses API. "
+                "Set OPENAI_API_MODE=chat or upgrade the openai package."
+            )
+        return responses
+
+    def _normalize_input_messages(self, messages: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [dict(message) for message in messages]
+
+    def _extract_response_text(self, response: Any) -> str:
+        output_text = self._read_attr(response, "output_text")
+        if callable(output_text):
+            try:
+                output_text = output_text()
+            except Exception:
+                output_text = None
+        if output_text:
+            return str(output_text)
+
+        text_parts: List[str] = []
+        output_items = self._read_attr(response, "output") or []
+        for item in output_items:
+            item_type = self._read_attr(item, "type")
+            if item_type == "message":
+                content_items = self._read_attr(item, "content") or []
+                for content in content_items:
+                    content_type = self._read_attr(content, "type")
+                    if content_type in {"output_text", "text"}:
+                        text = self._read_attr(content, "text") or self._read_attr(content, "value") or ""
+                        if text:
+                            text_parts.append(str(text))
+            elif item_type in {"output_text", "text"}:
+                text = self._read_attr(item, "text") or self._read_attr(item, "value") or ""
+                if text:
+                    text_parts.append(str(text))
+        return "".join(text_parts)
+
+    def _extract_response_tool_calls(self, response: Any) -> List[ChatCompletionMessageToolCall]:
+        tool_calls: List[ChatCompletionMessageToolCall] = []
+        output_items = self._read_attr(response, "output") or []
+        for item in output_items:
+            item_type = self._read_attr(item, "type")
+            if item_type not in {"function_call", "tool_call", "custom_tool_call"}:
+                continue
+            name = self._read_attr(item, "name") or self._read_attr(item, "tool_name")
+            arguments = self._read_attr(item, "arguments")
+            if arguments is None:
+                arguments = self._read_attr(item, "input")
+            call_id = self._read_attr(item, "call_id") or self._read_attr(item, "id")
+            if not call_id:
+                call_id = f"call_{len(tool_calls) + 1}"
+            if not isinstance(arguments, str):
+                try:
+                    arguments = json.dumps(arguments or {}, ensure_ascii=True)
+                except TypeError:
+                    arguments = str(arguments or "")
+            tool_calls.append(
+                ChatCompletionMessageToolCall(
+                    id=call_id,
+                    type="function",
+                    function={"name": name or "unknown", "arguments": arguments or ""},
+                )
+            )
+        return tool_calls
 
     def _normalize_tools(self, tools: Optional[Sequence[Any]]) -> Optional[List[ChatCompletionToolParam]]:
         if not tools:
@@ -248,6 +349,275 @@ class OpenAIClient:
                     delay,
                 )
                 await asyncio.sleep(delay)
+
+    def _build_responses_payload(
+        self,
+        *,
+        input_items: Sequence[Dict[str, Any]],
+        model: str,
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        max_output_tokens: Optional[int],
+        tools: Optional[List[Any]],
+        reasoning_effort: Optional[str],
+        extra: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "input": list(input_items),
+            "temperature": temperature if temperature is not None else self._default_temperature,
+        }
+        resolved_max_output = (
+            max_output_tokens
+            if max_output_tokens is not None
+            else (max_tokens if max_tokens is not None else self._default_max_tokens)
+        )
+        if resolved_max_output is not None and "max_output_tokens" not in extra:
+            payload["max_output_tokens"] = resolved_max_output
+        normalized_tools = self._normalize_tools(tools)
+        if normalized_tools is not None:
+            payload["tools"] = normalized_tools
+        if reasoning_effort and "reasoning" not in extra:
+            payload["reasoning"] = {"effort": reasoning_effort}
+        payload.update(extra)
+        return payload
+
+    async def responses_create(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
+        tools: Optional[List[Any]] = None,
+        reasoning_effort: Optional[str] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        resolved_model = model or self._default_model
+        payload = self._build_responses_payload(
+            input_items=self._normalize_input_messages(messages),
+            model=resolved_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            tools=tools,
+            reasoning_effort=reasoning_effort,
+            extra=dict(kwargs),
+        )
+        responses = self._responses_client()
+
+        async def _request() -> Any:
+            try:
+                return await responses.create(**payload)
+            except Exception as exc:  # pragma: no cover - relies on SDK
+                raise self._handle_error(exc) from exc
+
+        response = await with_retry(
+            _request,
+            max_retries=self._max_retries,
+            base_delay=self._base_delay,
+            retry_on=self._retryable_errors,
+        )
+
+        content = self._extract_response_text(response)
+        tool_calls = self._extract_response_tool_calls(response) or None
+        token_usage = self._build_usage(resolved_model, self._read_attr(response, "usage"))
+        return LLMResponse(content=content, tool_calls=tool_calls, token_usage=token_usage)
+
+    async def responses_stream(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
+        stream_options: Optional[dict] = None,
+        reasoning_effort: Optional[str] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        resolved_model = model or self._default_model
+        base_payload = self._build_responses_payload(
+            input_items=self._normalize_input_messages(messages),
+            model=resolved_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            tools=None,
+            reasoning_effort=reasoning_effort,
+            extra=dict(kwargs),
+        )
+        if stream_options is not None:
+            base_payload["stream_options"] = stream_options
+        responses = self._responses_client()
+
+        async def _create_stream() -> Any:
+            try:
+                if hasattr(responses, "stream"):
+                    payload = dict(base_payload)
+                    payload.pop("stream", None)
+                    return responses.stream(**payload)
+                payload = dict(base_payload)
+                payload["stream"] = True
+                return await responses.create(**payload)
+            except Exception as exc:  # pragma: no cover - relies on SDK
+                raise self._handle_error(exc) from exc
+
+        attempts = max(1, int(self._max_retries))
+        for attempt in range(1, attempts + 1):
+            yielded_any = False
+            try:
+                stream = await _create_stream()
+                if hasattr(stream, "__aenter__"):
+                    async with stream as active_stream:
+                        async for event in active_stream:
+                            event_type = self._read_attr(event, "type") or ""
+                            if event_type == "response.output_text.delta":
+                                delta = self._read_attr(event, "delta")
+                                if isinstance(delta, dict):
+                                    delta = delta.get("text") or delta.get("value") or delta.get("content")
+                                if delta:
+                                    yielded_any = True
+                                    yield str(delta)
+                    return
+                async for event in stream:
+                    event_type = self._read_attr(event, "type") or ""
+                    if event_type == "response.output_text.delta":
+                        delta = self._read_attr(event, "delta")
+                        if isinstance(delta, dict):
+                            delta = delta.get("text") or delta.get("value") or delta.get("content")
+                        if delta:
+                            yielded_any = True
+                            yield str(delta)
+                return
+            except Exception as exc:  # pragma: no cover - depends on streaming
+                handled = exc if isinstance(exc, OpenAIClientError) else self._handle_error(exc)
+                retryable = isinstance(handled, self._retryable_errors)
+                if not retryable or yielded_any or attempt >= attempts:
+                    raise handled
+                delay = float(self._base_delay) * (2 ** (attempt - 1))
+                logger.warning(
+                    "Attempt %s/%s failed: %s. Retrying in %.2fs...",
+                    attempt,
+                    attempts,
+                    handled,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+    async def responses_with_tools(
+        self,
+        messages: List[Dict[str, str]],
+        tools: List[Any],
+        tool_handlers: Dict[str, Callable[..., Any]],
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
+        max_iterations: int = 10,
+        reasoning_effort: Optional[str] = None,
+        parallel_tools: bool = True,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        resolved_model = model or self._default_model
+        total_input = 0
+        total_output = 0
+        total_cost = 0.0
+        raw_usage: List[Dict[str, Any]] = []
+        last_response: Optional[Any] = None
+        final_text_parts: List[str] = []
+        previous_response_id: Optional[str] = None
+
+        base_payload = self._build_responses_payload(
+            input_items=self._normalize_input_messages(messages),
+            model=resolved_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            tools=tools,
+            reasoning_effort=reasoning_effort,
+            extra=dict(kwargs),
+        )
+        responses = self._responses_client()
+        fallback_input = list(base_payload.get("input") or [])
+
+        for _ in range(max_iterations):
+            payload = dict(base_payload)
+            if previous_response_id:
+                payload["previous_response_id"] = previous_response_id
+                payload["input"] = payload.get("input") or []
+
+            async def _request() -> Any:
+                try:
+                    return await responses.create(**payload)
+                except Exception as exc:  # pragma: no cover - relies on SDK
+                    raise self._handle_error(exc) from exc
+
+            response = await with_retry(
+                _request,
+                max_retries=self._max_retries,
+                base_delay=self._base_delay,
+                retry_on=self._retryable_errors,
+            )
+            last_response = response
+            previous_response_id = self._read_attr(response, "id") or previous_response_id
+
+            usage = self._build_usage(resolved_model, self._read_attr(response, "usage"))
+            if usage:
+                total_input += usage.input_tokens
+                total_output += usage.output_tokens
+                total_cost += usage.cost_usd
+                if usage.raw:
+                    raw_usage.append(usage.raw)
+
+            content = self._extract_response_text(response)
+            if content:
+                final_text_parts.append(content)
+
+            tool_calls = self._extract_response_tool_calls(response)
+            if not tool_calls:
+                break
+
+            if parallel_tools and len(tool_calls) > 1:
+                results = await asyncio.gather(
+                    *(self._execute_tool_call(tool_call, tool_handlers) for tool_call in tool_calls)
+                )
+            else:
+                results = []
+                for tool_call in tool_calls:
+                    results.append(await self._execute_tool_call(tool_call, tool_handlers))
+
+            tool_outputs: List[Dict[str, Any]] = []
+            for tool_call, tool_result in zip(tool_calls, results):
+                tool_outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": tool_call.id,
+                        "output": json.dumps(tool_result, ensure_ascii=True),
+                    }
+                )
+            if previous_response_id:
+                base_payload["input"] = tool_outputs
+            else:
+                fallback_input = list(fallback_input) + tool_outputs
+                base_payload["input"] = fallback_input
+
+        token_usage: Optional[TokenUsage] = None
+        if total_input or total_output:
+            token_usage = TokenUsage(
+                input_tokens=total_input,
+                output_tokens=total_output,
+                total_tokens=total_input + total_output,
+                cost_usd=total_cost,
+                raw={"steps": raw_usage} if raw_usage else None,
+            )
+        final_content = "".join(final_text_parts) if final_text_parts else ""
+        if last_response is None:
+            return LLMResponse(content=final_content, tool_calls=None, token_usage=token_usage)
+        return LLMResponse(
+            content=final_content or self._extract_response_text(last_response),
+            tool_calls=self._extract_response_tool_calls(last_response) or None,
+            token_usage=token_usage,
+        )
 
     async def chat_with_tools(
         self,

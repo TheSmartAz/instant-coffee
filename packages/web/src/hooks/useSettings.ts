@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { api } from '@/api/client'
 import { toast } from '@/hooks/use-toast'
-import type { Settings } from '@/types'
+import type { ModelOption, Settings } from '@/types'
 
 type ApiSettings = {
   api_key?: string
@@ -10,6 +10,7 @@ type ApiSettings = {
   max_tokens?: number
   output_dir?: string
   auto_save?: boolean
+  available_models?: ModelOption[]
 }
 
 const defaultSettings: Settings = {
@@ -28,6 +29,15 @@ const normalizeSettings = (data?: ApiSettings): Settings => ({
   autoSave: data?.auto_save ?? defaultSettings.autoSave,
 })
 
+const normalizeModelOptions = (data?: ApiSettings): ModelOption[] => {
+  if (!data?.available_models || !Array.isArray(data.available_models)) {
+    return []
+  }
+  return data.available_models
+    .filter((option) => option && typeof option.id === 'string')
+    .map((option) => ({ id: option.id, label: option.label }))
+}
+
 const serializeSettings = (settings: Settings) => ({
   api_key: settings.apiKey,
   model: settings.model,
@@ -39,6 +49,7 @@ const serializeSettings = (settings: Settings) => ({
 
 export function useSettings() {
   const [settings, setSettings] = React.useState<Settings>(defaultSettings)
+  const [modelOptions, setModelOptions] = React.useState<ModelOption[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -48,6 +59,7 @@ export function useSettings() {
     try {
       const response = (await api.settings.get()) as ApiSettings | undefined
       setSettings(normalizeSettings(response))
+      setModelOptions(normalizeModelOptions(response))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load settings'
       setError(message)
@@ -63,6 +75,7 @@ export function useSettings() {
         const response = (await api.settings.get()) as ApiSettings | undefined
         if (!active) return
         setSettings(normalizeSettings(response))
+        setModelOptions(normalizeModelOptions(response))
       } catch (err) {
         if (!active) return
         const message = err instanceof Error ? err.message : 'Failed to load settings'
@@ -85,6 +98,9 @@ export function useSettings() {
         | undefined
       const updated = normalizeSettings(response ?? serializeSettings(next))
       setSettings(updated)
+      if (response) {
+        setModelOptions(normalizeModelOptions(response))
+      }
       return updated
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update settings'
@@ -101,5 +117,6 @@ export function useSettings() {
     refresh,
     updateSettings,
     setSettings,
+    modelOptions,
   }
 }

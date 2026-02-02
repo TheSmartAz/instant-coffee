@@ -8,6 +8,18 @@ export type RequestError = Error & {
 const buildUrl = (path: string) =>
   path.startsWith('http') ? path : `${API_BASE}${path}`
 
+const buildQuery = (
+  params: Record<string, string | number | boolean | undefined>
+) => {
+  const search = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined) return
+    search.set(key, String(value))
+  })
+  const query = search.toString()
+  return query ? `?${query}` : ''
+}
+
 const parseBody = async (response: Response) => {
   const text = await response.text()
   if (!text) return null
@@ -52,12 +64,18 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+    remove: (id: string) =>
+      request<{ deleted: boolean }>(`/api/sessions/${id}`, { method: 'DELETE' }),
     messages: (id: string) =>
       request<{ messages: unknown[] }>(`/api/sessions/${id}/messages`),
     versions: (id: string) =>
       request<{ versions: unknown[]; current_version?: number }>(
         `/api/sessions/${id}/versions`
       ),
+    clearMessages: (id: string) =>
+      request<{ deleted: number }>(`/api/sessions/${id}/messages`, {
+        method: 'DELETE',
+      }),
     revert: async (id: string, versionId: string | number) => {
       try {
         return await request<unknown>(
@@ -77,14 +95,33 @@ export const api = {
     },
   },
   chat: {
-    send: (sessionId: string, message: string) =>
+    send: (
+      sessionId: string,
+      message: string,
+      options?: { interview?: boolean; generateNow?: boolean }
+    ) =>
       request<unknown>('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({ session_id: sessionId, message }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          message,
+          interview: options?.interview,
+          generate_now: options?.generateNow,
+        }),
       }),
-    streamUrl: (sessionId: string, message?: string) => {
+    streamUrl: (
+      sessionId: string,
+      message?: string,
+      options?: { interview?: boolean; generateNow?: boolean }
+    ) => {
       const params = new URLSearchParams({ session_id: sessionId })
       if (message) params.set('message', message)
+      if (options?.interview !== undefined) {
+        params.set('interview', options.interview ? 'true' : 'false')
+      }
+      if (options?.generateNow !== undefined) {
+        params.set('generate_now', options.generateNow ? 'true' : 'false')
+      }
       return buildUrl(`/api/chat/stream?${params.toString()}`)
     },
   },
@@ -101,6 +138,148 @@ export const api = {
       request<unknown>(`/api/task/${id}/retry`, { method: 'POST' }),
     skip: (id: string) =>
       request<unknown>(`/api/task/${id}/skip`, { method: 'POST' }),
+  },
+  productDocs: {
+    get: (sessionId: string) =>
+      request<unknown>(`/api/sessions/${sessionId}/product-doc`).catch(
+        (error: RequestError) => {
+          if (error.status === 404) return null
+          throw error
+        }
+      ),
+  },
+  productDocHistory: {
+    getProductDocHistory: (
+      sessionId: string,
+      options?: { includeReleased?: boolean }
+    ) =>
+      request<import('../types').ProductDocHistoryListResponse>(
+        `/api/sessions/${sessionId}/product-doc/history${buildQuery({
+          include_released: options?.includeReleased,
+        })}`
+      ),
+    getProductDocHistoryVersion: (sessionId: string, historyId: number) =>
+      request<import('../types').ProductDocHistoryResponse>(
+        `/api/sessions/${sessionId}/product-doc/history/${historyId}`
+      ),
+    pinProductDocHistory: (sessionId: string, historyId: number) =>
+      request<import('../types').ProductDocHistoryPinResponse | import('../types').ProductDocHistory>(
+        `/api/sessions/${sessionId}/product-doc/history/${historyId}/pin`,
+        { method: 'POST' }
+      ),
+    unpinProductDocHistory: (sessionId: string, historyId: number) =>
+      request<import('../types').ProductDocHistoryPinResponse | import('../types').ProductDocHistory>(
+        `/api/sessions/${sessionId}/product-doc/history/${historyId}/unpin`,
+        { method: 'POST' }
+      ),
+  },
+  pages: {
+    list: (sessionId: string) =>
+      request<{ pages: unknown[]; total: number }>(
+        `/api/sessions/${sessionId}/pages`
+      ),
+    get: (pageId: string) => request<unknown>(`/api/pages/${pageId}`),
+    previewUrl: (pageId: string) => buildUrl(`/api/pages/${pageId}/preview`),
+    getPreview: (pageId: string) =>
+      request<{ page_id: string; slug: string; html: string; version: number }>(
+        `/api/pages/${pageId}/preview`,
+        { headers: { Accept: 'application/json' } }
+      ),
+    getVersions: (pageId: string, includeReleased?: boolean) =>
+      request<import('../types').PageVersionListResponse>(
+        `/api/pages/${pageId}/versions${buildQuery({
+          include_released: includeReleased,
+        })}`
+      ),
+    previewVersion: (pageId: string, versionId: number) =>
+      request<import('../types').PageVersionPreview>(
+        `/api/pages/${pageId}/versions/${versionId}/preview`
+      ),
+    pinVersion: (pageId: string, versionId: number) =>
+      request<import('../types').PageVersionPinResponse>(
+        `/api/pages/${pageId}/versions/${versionId}/pin`,
+        { method: 'POST' }
+      ),
+    unpinVersion: (pageId: string, versionId: number) =>
+      request<import('../types').PageVersionPinResponse>(
+        `/api/pages/${pageId}/versions/${versionId}/unpin`,
+        { method: 'POST' }
+      ),
+    /** @deprecated PageVersion rollback is deprecated; use ProjectSnapshot rollback instead. */
+    rollback: (pageId: string, versionId: number) =>
+      request<{
+        page_id: string
+        rolled_back_to_version: number
+        new_current_version_id: number
+      }>(`/api/pages/${pageId}/rollback`, {
+        method: 'POST',
+        body: JSON.stringify({ version_id: versionId }),
+      }),
+  },
+  snapshots: {
+    getSnapshots: (
+      sessionId: string,
+      options?: { includeReleased?: boolean }
+    ) =>
+      request<import('../types').ProjectSnapshotListResponse>(
+        `/api/sessions/${sessionId}/snapshots${buildQuery({
+          include_released: options?.includeReleased,
+        })}`
+      ),
+    getSnapshot: (sessionId: string, snapshotId: string) =>
+      request<import('../types').ProjectSnapshot>(
+        `/api/sessions/${sessionId}/snapshots/${snapshotId}`
+      ),
+    createSnapshot: (sessionId: string, label?: string) =>
+      request<import('../types').ProjectSnapshot>(
+        `/api/sessions/${sessionId}/snapshots`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ label }),
+        }
+      ),
+    rollbackToSnapshot: (sessionId: string, snapshotId: string) =>
+      request<import('../types').SnapshotRollbackResponse>(
+        `/api/sessions/${sessionId}/snapshots/${snapshotId}/rollback`,
+        { method: 'POST' }
+      ),
+    pinSnapshot: (sessionId: string, snapshotId: string) =>
+      request<import('../types').SnapshotPinResponse>(
+        `/api/sessions/${sessionId}/snapshots/${snapshotId}/pin`,
+        { method: 'POST' }
+      ),
+    unpinSnapshot: (sessionId: string, snapshotId: string) =>
+      request<import('../types').SnapshotPinResponse>(
+        `/api/sessions/${sessionId}/snapshots/${snapshotId}/unpin`,
+        { method: 'POST' }
+      ),
+  },
+  files: {
+    getTree: (sessionId: string) =>
+      request<{ tree: import('../types').FileTreeNode[] }>(
+        `/api/sessions/${sessionId}/files`
+      ),
+    getContent: (sessionId: string, path: string) =>
+      request<import('../types').FileContent>(
+        `/api/sessions/${sessionId}/files/${encodeURIComponent(path)}`
+      ),
+  },
+  export: {
+    session: (sessionId: string) =>
+      request<{
+        export_dir: string
+        manifest: import('../types').ExportManifest
+        success: boolean
+      }>(`/api/sessions/${sessionId}/export`, { method: 'POST' }),
+  },
+  events: {
+    getSessionEvents: (sessionId: string, sinceSeq?: number, limit?: number) =>
+      request<import('../types/events').SessionEventsResponse>(
+        `/api/sessions/${sessionId}/events${buildQuery({
+          since_seq: sinceSeq,
+          limit,
+        })}`
+      ),
   },
 }
 

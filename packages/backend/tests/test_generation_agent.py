@@ -1,12 +1,20 @@
 import asyncio
 import time
+import uuid
 from pathlib import Path
 
 import pytest
 
 from app.agents import GenerationAgent
 from app.config import Settings
+from app.db.database import Database
+from app.db.migrations import init_db
+from app.db.models import PageVersion, Session as SessionModel
+from app.db.utils import get_db, transaction_scope
+from app.events.emitter import EventEmitter
 from app.llm.openai_client import LLMResponse, TokenUsage
+from app.schemas.sitemap import GlobalStyle, NavItem, SitemapPage
+from app.services.page import PageService
 
 
 def _make_agent() -> GenerationAgent:
@@ -139,3 +147,87 @@ def test_generate_integration_fallback(tmp_path, monkeypatch):
     assert "Fallback" in result.html
     assert Path(result.filepath).exists()
     assert (Path(result.filepath).parent / "v4444_index.html").exists()
+
+
+def test_generate_multi_page_creates_version(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "generation.db"
+    database = Database(f"sqlite:///{db_path}")
+    init_db(database)
+
+    session_id = uuid.uuid4().hex
+    with transaction_scope(database) as session:
+        session.add(SessionModel(id=session_id, title="Test Session"))
+
+    emitter = EventEmitter(session_id=session_id)
+
+    with get_db(database) as session:
+        page_service = PageService(session, event_emitter=emitter)
+        page = page_service.create(
+            session_id=session_id,
+            title="Home",
+            slug="index",
+            description="",
+            order_index=0,
+        )
+        session.commit()
+
+        settings = Settings(default_key="test-key", default_base_url="http://localhost")
+        agent = GenerationAgent(session, session_id, settings, event_emitter=emitter)
+
+        async def fake_call_llm(*args, **kwargs):
+            return LLMResponse(
+                content=(
+                    "<HTML_OUTPUT><!DOCTYPE html><html><head></head><body>"
+                    "<main><a href=\"about\">About</a></main>"
+                    "</body></html></HTML_OUTPUT>"
+                ),
+                token_usage=TokenUsage(
+                    input_tokens=5,
+                    output_tokens=5,
+                    total_tokens=10,
+                    cost_usd=0.0,
+                ),
+            )
+
+        monkeypatch.setattr(agent, "_call_llm", fake_call_llm)
+
+        page_spec = SitemapPage(
+            title="Home",
+            slug="index",
+            purpose="Landing page",
+            sections=["Hero", "Features"],
+            required=True,
+        )
+        global_style = GlobalStyle(
+            primary_color="#123ABC",
+            secondary_color="#456DEF",
+            font_family="Test",
+            font_size_base="16px",
+            font_size_heading="24px",
+            button_height="44px",
+            spacing_unit="8px",
+            border_radius="8px",
+        )
+        nav = [
+            NavItem(slug="index", label="Home", order=0),
+            NavItem(slug="about", label="About", order=1),
+        ]
+        result = asyncio.run(
+            agent.generate(
+                page_id=page.id,
+                page_spec=page_spec,
+                global_style=global_style,
+                nav=nav,
+                product_doc={"content": "Demo", "structured": {"project_name": "Demo"}},
+                all_pages=["index", "about"],
+                output_dir=str(tmp_path),
+            )
+        )
+        session.commit()
+
+        versions = session.query(PageVersion).filter(PageVersion.page_id == page.id).all()
+        assert len(versions) == 1
+        assert versions[0].version == 1
+        assert result.version == 1
+        assert "site-nav" in result.html
+        assert "pages/about.html" in result.html

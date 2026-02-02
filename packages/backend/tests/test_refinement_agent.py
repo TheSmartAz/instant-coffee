@@ -7,6 +7,7 @@ import pytest
 from app.agents import RefinementAgent
 from app.config import Settings
 from app.llm.openai_client import LLMResponse, TokenUsage
+from app.db.models import Page
 
 
 def _make_agent() -> RefinementAgent:
@@ -36,12 +37,18 @@ def test_build_messages_format():
         {"role": "user", "content": "Earlier request"},
         {"role": "assistant", "content": "Earlier response"},
     ]
+    page = Page(id="page-1", session_id="session-1", title="Home", slug="index", description="Landing")
     messages = agent._build_messages(
-        user_input="Change title",
-        current_html="<html><body>Old</body></html>",
+        page=page,
+        user_message="Change title",
+        product_doc=None,
+        global_style=None,
+        all_pages=[page],
         history=history,
+        current_html="<html><body>Old</body></html>",
     )
     assert messages[0]["role"] == "system"
+    assert "Title: Home" in messages[0]["content"]
     assert messages[1]["content"] == "Earlier request"
     assert messages[2]["content"] == "Earlier response"
     final = messages[-1]["content"]
@@ -82,8 +89,9 @@ def test_write_file_handler_rejects_traversal(tmp_path):
 def test_refine_integration_with_mocked_llm(tmp_path, monkeypatch):
     agent = _make_agent()
     monkeypatch.setattr(time, "time", lambda: 4242)
+    page = Page(id="page-1", session_id="session-1", title="Home", slug="index", description="Landing")
 
-    async def fake_call_llm_with_tools(*args, **kwargs):
+    async def fake_call_llm(*args, **kwargs):
         return LLMResponse(
             content=(
                 "<HTML_OUTPUT>\n<!DOCTYPE html>"
@@ -97,21 +105,21 @@ def test_refine_integration_with_mocked_llm(tmp_path, monkeypatch):
             ),
         )
 
-    monkeypatch.setattr(agent, "_call_llm_with_tools", fake_call_llm_with_tools)
+    monkeypatch.setattr(agent, "_call_llm", fake_call_llm)
     result = asyncio.run(
         agent.refine(
-            user_input="Update body",
+            user_message="Update body",
+            page=page,
+            product_doc=None,
+            global_style=None,
+            all_pages=[page],
             current_html="<html><body>Old</body></html>",
             output_dir=str(tmp_path),
         )
     )
     assert "Modified" in result.html
     assert result.html != "<html><body>Old</body></html>"
+    assert result.page_id == "page-1"
     assert Path(result.filepath).exists()
-    assert (tmp_path / "session-1" / "v4242000_refinement.html").exists()
-    assert result.token_usage == {
-        "input_tokens": 10,
-        "output_tokens": 20,
-        "total_tokens": 30,
-        "cost_usd": 0.01,
-    }
+    assert (tmp_path / "session-1" / "v4242000_index.html").exists()
+    assert result.tokens_used == 30

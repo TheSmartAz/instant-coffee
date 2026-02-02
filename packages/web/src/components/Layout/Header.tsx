@@ -24,7 +24,7 @@ export function Header() {
         className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
       >
         <Plus className="w-4 h-4" />
-        新会话
+        New session
       </Button>
     </header>
   )

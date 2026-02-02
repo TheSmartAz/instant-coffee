@@ -37,6 +37,10 @@ const getEventTitle = (event: ExecutionEvent): string => {
       return event.message
     case 'agent_end':
       return `${event.agent_id} ${event.status === 'success' ? 'completed' : 'failed'}`
+    case 'agent_complete':
+      return `${event.agent_id ?? 'Agent'} completed`
+    case 'agent_error':
+      return `${event.agent_id ?? 'Agent'} failed`
     case 'tool_call':
       return `Calling: ${event.tool_name}`
     case 'tool_result':
@@ -49,8 +53,12 @@ const getEventTitle = (event: ExecutionEvent): string => {
       return event.message ?? `Task progress: ${event.progress}%`
     case 'task_done':
       return event.result?.summary ? `Task done: ${event.result.summary}` : 'Task done'
+    case 'task_completed':
+      return 'Task completed'
     case 'task_failed':
       return `Task failed: ${event.error_message}`
+    case 'task_aborted':
+      return 'Task aborted'
     case 'task_retrying':
       return `Retrying task (attempt ${event.attempt}/${event.max_attempts})`
     case 'task_skipped':
@@ -63,6 +71,37 @@ const getEventTitle = (event: ExecutionEvent): string => {
       return event.summary ?? 'Execution complete'
     case 'token_usage':
       return `Token usage: ${event.total_tokens} tokens ($${event.cost_usd.toFixed(4)})`
+    case 'interview_question':
+      return 'Interview question'
+    case 'interview_answer':
+      return 'Interview answer'
+    // ProductDoc events
+    case 'product_doc_generated':
+      return `Product Doc generated (${event.status})`
+    case 'product_doc_updated':
+      return event.change_summary ?? 'Product Doc updated'
+    case 'product_doc_confirmed':
+      return 'Product Doc confirmed'
+    case 'product_doc_outdated':
+      return 'Product Doc is outdated'
+    // MultiPage events
+    case 'multipage_decision_made':
+      return `Decision: ${event.decision} (confidence: ${Math.round(event.confidence * 100)}%)`
+    case 'sitemap_proposed':
+      return `Sitemap proposed (${event.pages_count} pages)`
+    // Page events
+    case 'page_created':
+      return `Page created: ${event.title} (${event.slug})`
+    case 'page_version_created':
+      return `Page version created: ${event.slug} v${event.version}`
+    case 'page_preview_ready':
+      return `Preview ready: ${event.slug}`
+    case 'version_created':
+      return 'Version created'
+    case 'snapshot_created':
+      return 'Snapshot created'
+    case 'history_created':
+      return 'History created'
     default:
       return event.type
   }
@@ -80,16 +119,36 @@ const getEventStatus = (event: ExecutionEvent): EventStatus => {
       return 'in_progress'
     case 'agent_end':
       return event.status === 'success' ? 'done' : 'failed'
+    case 'agent_complete':
+      return 'done'
+    case 'agent_error':
+      return 'failed'
     case 'tool_result':
       return event.success ? 'done' : 'failed'
     case 'task_done':
+    case 'task_completed':
     case 'done':
     case 'plan_created':
     case 'plan_updated':
     case 'task_skipped':
+    case 'product_doc_generated':
+    case 'product_doc_updated':
+    case 'product_doc_confirmed':
+    case 'multipage_decision_made':
+    case 'sitemap_proposed':
+    case 'page_created':
+    case 'page_version_created':
+    case 'page_preview_ready':
+    case 'version_created':
+    case 'snapshot_created':
+    case 'history_created':
+    case 'interview_question':
+    case 'interview_answer':
       return 'done'
     case 'task_failed':
+    case 'task_aborted':
     case 'error':
+    case 'product_doc_outdated':
       return 'failed'
     case 'task_blocked':
       return 'pending'
@@ -106,6 +165,20 @@ const getBadge = (event: ExecutionEvent): string | undefined => {
   if (event.type === 'error') return 'Error'
   if (event.type === 'done') return 'Summary'
   if (event.type === 'token_usage') return 'Tokens'
+  if (event.type === 'interview_question') return 'Interview'
+  if (event.type === 'interview_answer') return 'Interview'
+  if (event.type === 'product_doc_generated') return 'Product Doc'
+  if (event.type === 'product_doc_updated') return 'Product Doc'
+  if (event.type === 'product_doc_confirmed') return 'Product Doc'
+  if (event.type === 'product_doc_outdated') return 'Product Doc'
+  if (event.type === 'multipage_decision_made') return 'Decision'
+  if (event.type === 'sitemap_proposed') return 'Sitemap'
+  if (event.type === 'page_created') return 'Page'
+  if (event.type === 'page_version_created') return 'Page'
+  if (event.type === 'page_preview_ready') return 'Preview'
+  if (event.type === 'version_created') return 'Version'
+  if (event.type === 'snapshot_created') return 'Snapshot'
+  if (event.type === 'history_created') return 'History'
   return undefined
 }
 
@@ -123,9 +196,17 @@ const buildDetails = (event: ExecutionEvent): ReactNode | undefined => {
     isAgentEvent(event) ||
     isPlanEvent(event) ||
     event.type === 'task_failed' ||
+    event.type === 'task_aborted' ||
     event.type === 'task_retrying' ||
     event.type === 'task_done' ||
-    event.type === 'token_usage'
+    event.type === 'task_completed' ||
+    event.type === 'token_usage' ||
+    event.type === 'multipage_decision_made' ||
+    event.type === 'sitemap_proposed' ||
+    event.type === 'product_doc_updated' ||
+    event.type === 'page_created' ||
+    event.type === 'interview_question' ||
+    event.type === 'interview_answer'
 
   if (!hasDetails) return undefined
 

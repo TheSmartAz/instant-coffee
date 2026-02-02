@@ -3,6 +3,8 @@ export type TaskStatus =
   | 'in_progress'
   | 'done'
   | 'failed'
+  | 'aborted'
+  | 'timeout'
   | 'blocked'
   | 'skipped'
   | 'retrying'

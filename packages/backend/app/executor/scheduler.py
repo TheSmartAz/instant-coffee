@@ -80,10 +80,23 @@ class TaskScheduler:
             task = node.task
             if task.status != TaskStatus.PENDING.value:
                 continue
+            if (task.agent_type or "").lower() == "export":
+                allowed_statuses = {
+                    TaskStatus.DONE.value,
+                    TaskStatus.SKIPPED.value,
+                    TaskStatus.FAILED.value,
+                    TaskStatus.BLOCKED.value,
+                    TaskStatus.ABORTED.value,
+                    TaskStatus.TIMEOUT.value,
+                }
+            else:
+                allowed_statuses = {
+                    TaskStatus.DONE.value,
+                    TaskStatus.SKIPPED.value,
+                }
 
             deps_completed = all(
-                self.nodes[dep_id].task.status
-                in (TaskStatus.DONE.value, TaskStatus.SKIPPED.value)
+                self.nodes[dep_id].task.status in allowed_statuses
                 for dep_id in node.dependencies
                 if dep_id in self.nodes
             )
@@ -146,6 +159,23 @@ class TaskScheduler:
         for dependent_id in self.nodes[task_id].dependents:
             dependent_node = self.nodes[dependent_id]
             if dependent_node.task.status == TaskStatus.PENDING.value:
+                if (dependent_node.task.agent_type or "").lower() == "export":
+                    continue
+                dependent_node.task.status = TaskStatus.BLOCKED.value
+                blocked.append(dependent_id)
+        return blocked
+
+    def mark_timeout(self, task_id: str) -> List[str]:
+        if task_id not in self.nodes:
+            return []
+
+        self.nodes[task_id].task.status = TaskStatus.TIMEOUT.value
+        blocked: List[str] = []
+        for dependent_id in self.nodes[task_id].dependents:
+            dependent_node = self.nodes[dependent_id]
+            if dependent_node.task.status == TaskStatus.PENDING.value:
+                if (dependent_node.task.agent_type or "").lower() == "export":
+                    continue
                 dependent_node.task.status = TaskStatus.BLOCKED.value
                 blocked.append(dependent_id)
         return blocked
@@ -159,7 +189,7 @@ class TaskScheduler:
 
     def has_failed(self) -> bool:
         return any(
-            node.task.status == TaskStatus.FAILED.value
+            node.task.status in (TaskStatus.FAILED.value, TaskStatus.TIMEOUT.value)
             for node in self.nodes.values()
         )
 

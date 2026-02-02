@@ -55,5 +55,12 @@ class SessionService:
             or 0
         )
 
+    def delete_session(self, session_id: str) -> bool:
+        record = self.db.get(Session, session_id)
+        if record is None:
+            return False
+        self.db.delete(record)
+        return True
+
 
 __all__ = ["SessionService"]

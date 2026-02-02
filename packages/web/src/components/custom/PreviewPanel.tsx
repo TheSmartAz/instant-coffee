@@ -1,27 +1,461 @@
 import * as React from 'react'
 import { RefreshCw, Download, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { PhoneFrame } from './PhoneFrame'
+import { PageSelector } from './PageSelector'
+
+const HIDE_SCROLLBAR_STYLE = `<style id="ic-hide-scrollbar">
+html, body {
+  height: 100%;
+  overflow: auto;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+</style>`
+
+const injectHideScrollbarStyle = (html: string) => {
+  if (!html) return html
+  if (html.includes('id="ic-hide-scrollbar"')) return html
+  if (html.includes('</head>')) {
+    return html.replace('</head>', `${HIDE_SCROLLBAR_STYLE}</head>`)
+  }
+  if (/<head[^>]*>/i.test(html)) {
+    return html.replace(/<head[^>]*>/i, (match) => `${match}${HIDE_SCROLLBAR_STYLE}`)
+  }
+  return `${HIDE_SCROLLBAR_STYLE}${html}`
+}
+
+const APP_MODE_SOURCE = 'ic-app-mode'
+
+const APP_MODE_SCRIPT = `<script id="ic-app-mode-runtime">
+(function () {
+  var SOURCE = '${APP_MODE_SOURCE}';
+  var NAV_EVENT = 'ic_nav';
+  var STATE_EVENT = 'ic_state';
+  var READY_EVENT = 'ic_ready';
+  var STATE_INIT = 'ic_state_init';
+  var appState = {};
+  var applying = false;
+
+  function isExternalHref(href) {
+    if (!href) return true;
+    if (href.indexOf('#') === 0) return true;
+    if (href.indexOf('//') === 0) return true;
+    return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href);
+  }
+
+  function normalizeSlug(href) {
+    if (!href) return null;
+    if (isExternalHref(href)) return null;
+    var raw = href.split('#')[0].split('?')[0];
+    if (!raw) return null;
+    if (raw.indexOf('./') === 0) raw = raw.slice(2);
+    if (raw.indexOf('/') === 0) raw = raw.slice(1);
+    if (raw === 'index' || raw === 'index.html') return 'index';
+    if (raw.indexOf('pages/') === 0) raw = raw.slice(6);
+    if (raw.slice(-5) === '.html') raw = raw.slice(0, -5);
+    if (!raw) return null;
+    if (raw.indexOf('/') !== -1) return null;
+    return raw;
+  }
+
+  function getKey(el) {
+    if (!el) return null;
+    return el.getAttribute('data-ic-key') || el.name || el.id || null;
+  }
+
+  function readValue(el) {
+    if (!el) return undefined;
+    var tag = el.tagName;
+    if (tag === 'INPUT') {
+      var type = el.type || 'text';
+      if (type === 'checkbox') return !!el.checked;
+      if (type === 'radio') return el.checked ? el.value : undefined;
+      if (type === 'file') return undefined;
+      return el.value;
+    }
+    if (tag === 'SELECT') {
+      if (el.multiple) {
+        var values = [];
+        for (var i = 0; i < el.options.length; i += 1) {
+          var opt = el.options[i];
+          if (opt.selected) values.push(opt.value);
+        }
+        return values;
+      }
+      return el.value;
+    }
+    if (tag === 'TEXTAREA') {
+      return el.value;
+    }
+    return undefined;
+  }
+
+  function writeValue(el, value) {
+    if (value === undefined || value === null) return;
+    var tag = el.tagName;
+    if (tag === 'INPUT') {
+      var type = el.type || 'text';
+      if (type === 'checkbox') {
+        el.checked = !!value;
+        return;
+      }
+      if (type === 'radio') {
+        el.checked = String(value) === el.value;
+        return;
+      }
+      if (type === 'file') return;
+      el.value = String(value);
+      return;
+    }
+    if (tag === 'SELECT') {
+      if (el.multiple && Array.isArray(value)) {
+        for (var i = 0; i < el.options.length; i += 1) {
+          el.options[i].selected = value.indexOf(el.options[i].value) !== -1;
+        }
+        return;
+      }
+      el.value = String(value);
+      return;
+    }
+    if (tag === 'TEXTAREA') {
+      el.value = String(value);
+    }
+  }
+
+  function applyState() {
+    applying = true;
+    try {
+      var fields = document.querySelectorAll('input, select, textarea');
+      for (var i = 0; i < fields.length; i += 1) {
+        var el = fields[i];
+        var key = getKey(el);
+        if (!key || !(key in appState)) continue;
+        writeValue(el, appState[key]);
+      }
+    } finally {
+      applying = false;
+    }
+  }
+
+  function emitState() {
+    if (!window.parent) return;
+    window.parent.postMessage(
+      { source: SOURCE, type: STATE_EVENT, state: appState },
+      '*'
+    );
+  }
+
+  function updateState(key, value) {
+    if (!key) return;
+    appState[key] = value;
+    emitState();
+  }
+
+  document.addEventListener('input', function (event) {
+    if (applying) return;
+    var target = event.target;
+    var key = getKey(target);
+    if (!key) return;
+    var value = readValue(target);
+    if (value === undefined) return;
+    updateState(key, value);
+  }, true);
+
+  document.addEventListener('change', function (event) {
+    if (applying) return;
+    var target = event.target;
+    var key = getKey(target);
+    if (!key) return;
+    var value = readValue(target);
+    if (value === undefined) return;
+    updateState(key, value);
+  }, true);
+
+  document.addEventListener('click', function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    var anchor = target.closest('a');
+    if (!anchor) return;
+    var href = anchor.getAttribute('href');
+    var slug = normalizeSlug(href);
+    if (!slug) return;
+    event.preventDefault();
+    if (window.parent) {
+      window.parent.postMessage(
+        { source: SOURCE, type: NAV_EVENT, slug: slug },
+        '*'
+      );
+    }
+  }, true);
+
+  window.addEventListener('message', function (event) {
+    var data = event.data || {};
+    if (!data || data.source !== SOURCE) return;
+    if (data.type === STATE_INIT) {
+      appState = data.state && typeof data.state === 'object' ? data.state : {};
+      applyState();
+    }
+  });
+
+  window.IC_APP = {
+    getState: function () {
+      return appState;
+    },
+    setState: function (keyOrState, value) {
+      if (typeof keyOrState === 'string') {
+        updateState(keyOrState, value);
+        return;
+      }
+      if (keyOrState && typeof keyOrState === 'object') {
+        for (var key in keyOrState) {
+          if (Object.prototype.hasOwnProperty.call(keyOrState, key)) {
+            appState[key] = keyOrState[key];
+          }
+        }
+        emitState();
+      }
+    },
+    navigate: function (slug) {
+      if (!slug || !window.parent) return;
+      window.parent.postMessage(
+        { source: SOURCE, type: NAV_EVENT, slug: slug },
+        '*'
+      );
+    }
+  };
+
+  if (window.parent) {
+    window.parent.postMessage({ source: SOURCE, type: READY_EVENT }, '*');
+  }
+})();
+</script>`;
+
+const injectAppModeRuntime = (html: string) => {
+  if (!html) return html
+  if (html.includes('id="ic-app-mode-runtime"')) return html
+  if (html.includes('</body>')) {
+    return html.replace('</body>', `${APP_MODE_SCRIPT}</body>`)
+  }
+  if (html.includes('</head>')) {
+    return html.replace('</head>', `${APP_MODE_SCRIPT}</head>`)
+  }
+  return `${html}${APP_MODE_SCRIPT}`
+}
+
+const EMPTY_PREVIEW_HTML = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      html, body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #ffffff;
+        color: #111827;
+      }
+      .wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+      }
+      .logo {
+        width: 40px;
+        height: 40px;
+        color: #d97706;
+      }
+      .text {
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10 2v2" />
+        <path d="M14 2v2" />
+        <path d="M6 8h11a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8" />
+        <path d="M5 8h12v5a6 6 0 0 1-6 6H8a6 6 0 0 1-6-6V8z" />
+      </svg>
+      <div class="text">Instant Coffee</div>
+    </div>
+  </body>
+</html>`
+
+export interface PageInfo {
+  id: string
+  title: string
+  slug: string
+}
 
 export interface PreviewPanelProps {
+  sessionId?: string
+  appMode?: boolean
+  onAppModeChange?: (next: boolean) => void
   htmlContent?: string
   previewUrl?: string | null
   onRefresh?: () => void
   onExport?: () => void
   isRefreshing?: boolean
   isExporting?: boolean
+  // Multi-page props (optional)
+  pages?: PageInfo[]
+  selectedPageId?: string | null
+  onSelectPage?: (pageId: string) => void
+  onRefreshPage?: (pageId: string) => void
 }
 
 export function PreviewPanel({
+  sessionId,
+  appMode = false,
+  onAppModeChange,
   htmlContent,
   previewUrl,
   onRefresh,
   onExport,
   isRefreshing = false,
   isExporting = false,
+  pages,
+  selectedPageId,
+  onSelectPage,
+  onRefreshPage,
 }: PreviewPanelProps) {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
+  const iframeRef = React.useRef<HTMLIFrameElement | null>(null)
   const [scale, setScale] = React.useState(1)
+  const [currentHtml, setCurrentHtml] = React.useState<string | null>(htmlContent ?? null)
+  const [currentUrl, setCurrentUrl] = React.useState<string | null>(previewUrl ?? null)
+  const [appState, setAppState] = React.useState<Record<string, unknown>>({})
+
+  const storageKey = sessionId ? `instant-coffee:app-state:${sessionId}` : null
+
+  React.useEffect(() => {
+    if (!storageKey) {
+      setAppState({})
+      return
+    }
+    try {
+      const raw = window.localStorage.getItem(storageKey)
+      if (!raw) {
+        setAppState({})
+        return
+      }
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') {
+        setAppState({})
+        return
+      }
+      setAppState(parsed as Record<string, unknown>)
+    } catch {
+      setAppState({})
+    }
+  }, [storageKey])
+
+  React.useEffect(() => {
+    if (!storageKey) return
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(appState))
+    } catch {
+      // ignore storage failures
+    }
+  }, [appState, storageKey])
+  const injectedHtml = React.useMemo(() => {
+    if (!currentHtml) return ''
+    const withRuntime = appMode ? injectAppModeRuntime(currentHtml) : currentHtml
+    return injectHideScrollbarStyle(withRuntime)
+  }, [appMode, currentHtml])
+  const htmlValue = currentHtml?.trim() ? injectedHtml : EMPTY_PREVIEW_HTML
+
+  // Update current preview when props change
+  React.useEffect(() => {
+    setCurrentHtml(htmlContent ?? null)
+  }, [htmlContent])
+
+  React.useEffect(() => {
+    setCurrentUrl(appMode ? null : previewUrl ?? null)
+  }, [appMode, previewUrl])
+
+  // Reset scroll position when page changes
+  React.useEffect(() => {
+    if (selectedPageId) {
+      setCurrentHtml(null)
+      setCurrentUrl(null)
+    }
+  }, [selectedPageId])
+
+  const isMultiPage = pages && pages.length > 1
+
+  const handleRefresh = React.useCallback(() => {
+    if (isMultiPage && selectedPageId && onRefreshPage) {
+      onRefreshPage(selectedPageId)
+    } else if (onRefresh) {
+      onRefresh()
+    }
+  }, [isMultiPage, selectedPageId, onRefreshPage, onRefresh])
+
+  const sendStateToIframe = React.useCallback(() => {
+    if (!appMode) return
+    const frame = iframeRef.current
+    if (!frame || !frame.contentWindow) return
+    frame.contentWindow.postMessage(
+      { source: APP_MODE_SOURCE, type: 'ic_state_init', state: appState },
+      '*'
+    )
+  }, [appMode, appState])
+
+  React.useEffect(() => {
+    if (!appMode) return
+    const handleMessage = (event: MessageEvent) => {
+      const payload = event.data as { source?: string; type?: string; slug?: string; state?: unknown }
+      if (!payload || payload.source !== APP_MODE_SOURCE) return
+      if (payload.type === 'ic_nav') {
+        if (!pages || !onSelectPage || !payload.slug) return
+        const target = pages.find((page) => page.slug === payload.slug)
+        if (target) {
+          onSelectPage(target.id)
+        }
+        return
+      }
+      if (payload.type === 'ic_state') {
+        if (payload.state && typeof payload.state === 'object') {
+          setAppState(payload.state as Record<string, unknown>)
+        }
+        return
+      }
+      if (payload.type === 'ic_ready') {
+        sendStateToIframe()
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [appMode, onSelectPage, pages, sendStateToIframe])
+
+  React.useEffect(() => {
+    if (!appMode) return
+    sendStateToIframe()
+  }, [appMode, sendStateToIframe])
 
   React.useEffect(() => {
     if (!containerRef.current) return
@@ -42,12 +476,30 @@ export function PreviewPanel({
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
-        <span className="text-sm font-semibold text-foreground">Preview</span>
+        <div className="flex items-center gap-4">
+          <span className="text-sm font-semibold text-foreground">
+            {isMultiPage && selectedPageId
+              ? `Preview: ${pages.find((p) => p.id === selectedPageId)?.title ?? 'Page'}`
+              : 'Preview'}
+          </span>
+          {onAppModeChange ? (
+            <div className="flex items-center gap-2">
+              <Label htmlFor="ic-app-mode" className="text-xs text-muted-foreground">
+                App Mode
+              </Label>
+              <Switch
+                id="ic-app-mode"
+                checked={appMode}
+                onCheckedChange={onAppModeChange}
+              />
+            </div>
+          ) : null}
+        </div>
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
             size="icon"
-            onClick={onRefresh}
+            onClick={handleRefresh}
             aria-label="Refresh preview"
             disabled={isRefreshing || !onRefresh}
           >
@@ -72,15 +524,26 @@ export function PreviewPanel({
           </Button>
         </div>
       </div>
+
+      {/* Page Selector - only show when multi-page */}
+      {isMultiPage && onSelectPage && (
+        <PageSelector
+          pages={pages}
+          selectedPageId={selectedPageId ?? null}
+          onSelectPage={onSelectPage}
+        />
+      )}
+
       <div ref={containerRef} className="flex flex-1 items-center justify-center bg-muted/30 p-6">
         <PhoneFrame scale={scale}>
           <iframe
+            ref={iframeRef}
+            key={`${selectedPageId ?? 'preview'}-${appMode ? 'app' : 'static'}`}
             title="Preview"
             className="h-full w-full border-0"
             sandbox="allow-scripts allow-same-origin"
-            {...(previewUrl
-              ? { src: previewUrl }
-              : { srcDoc: htmlContent ?? '' })}
+            onLoad={sendStateToIframe}
+            {...(currentUrl && !appMode ? { src: currentUrl } : { srcDoc: htmlValue })}
           />
         </PhoneFrame>
       </div>

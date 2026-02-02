@@ -5,10 +5,18 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { EventItem } from './EventItem'
 import { useVirtualList } from '@/hooks/useVirtualList'
 
 export type EventDisplayMode = 'streaming' | 'phase'
+export type EventTimeFilter = 'all' | '15m' | '1h' | '24h'
 
 interface EventListProps {
   events: ExecutionEvent[]
@@ -28,27 +36,46 @@ function filterEventsByMode(
   events: ExecutionEvent[],
   mode: EventDisplayMode
 ): ExecutionEvent[] {
+  const sanitized = events.filter((event) => Boolean(event?.type))
   if (mode === 'streaming') {
-    return events
+    return sanitized
   }
 
   // Phase mode: filter out progress updates and intermediate events
   const phaseEventTypes: Set<string> = new Set([
     'agent_start',
     'agent_end',
+    'agent_complete',
+    'agent_error',
     'plan_created',
     'plan_updated',
     'task_started',
     'task_done',
+    'task_completed',
     'task_failed',
+    'task_aborted',
     'task_blocked',
     'task_skipped',
     'token_usage',
     'done',
     'error',
+    'interview_question',
+    'interview_answer',
+    'product_doc_generated',
+    'product_doc_updated',
+    'product_doc_confirmed',
+    'product_doc_outdated',
+    'multipage_decision_made',
+    'sitemap_proposed',
+    'page_created',
+    'page_version_created',
+    'page_preview_ready',
+    'version_created',
+    'snapshot_created',
+    'history_created',
   ])
 
-  return events.filter((event) => phaseEventTypes.has(event.type))
+  return sanitized.filter((event) => phaseEventTypes.has(event.type))
 }
 
 export function EventList({
@@ -63,6 +90,7 @@ export function EventList({
   const viewportRef = React.useRef<HTMLDivElement | null>(null)
   const [autoScroll, setAutoScroll] = React.useState(true)
   const [scrollElement, setScrollElement] = React.useState<HTMLDivElement | null>(null)
+  const [timeFilter, setTimeFilter] = React.useState<EventTimeFilter>('all')
 
   // Internal state for display mode (uncontrolled)
   const [internalDisplayMode, setInternalDisplayMode] = React.useState<EventDisplayMode>('phase')
@@ -88,10 +116,22 @@ export function EventList({
     setScrollElement(viewport)
   }, [])
 
-  // Filter events based on display mode
   const filteredEvents = React.useMemo(() => {
-    return filterEventsByMode(events, displayMode)
-  }, [events, displayMode])
+    const byMode = filterEventsByMode(events, displayMode)
+    if (timeFilter === 'all') return byMode
+    const now = Date.now()
+    const cutoff =
+      timeFilter === '15m'
+        ? now - 15 * 60 * 1000
+        : timeFilter === '1h'
+          ? now - 60 * 60 * 1000
+          : now - 24 * 60 * 60 * 1000
+    return byMode.filter((event) => {
+      const timestamp = Date.parse(event.timestamp ?? '')
+      if (Number.isNaN(timestamp)) return true
+      return timestamp >= cutoff
+    })
+  }, [events, displayMode, timeFilter])
 
   const {
     start,
@@ -165,6 +205,20 @@ export function EventList({
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <Select
+            value={timeFilter}
+            onValueChange={(value) => setTimeFilter(value as EventTimeFilter)}
+          >
+            <SelectTrigger className="h-7 w-[110px] text-xs">
+              <SelectValue placeholder="All time" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All time</SelectItem>
+              <SelectItem value="15m">Last 15m</SelectItem>
+              <SelectItem value="1h">Last 1h</SelectItem>
+              <SelectItem value="24h">Last 24h</SelectItem>
+            </SelectContent>
+          </Select>
           <Label htmlFor="display-mode-toggle" className="cursor-pointer text-xs">
             Detailed
           </Label>

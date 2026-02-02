@@ -96,6 +96,24 @@ export function useProjects() {
     }
   }, [refresh])
 
+  const deleteProjects = React.useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return
+    setError(null)
+    try {
+      await Promise.all(ids.map((id) => api.sessions.remove(id)))
+      setProjects((prev) => prev.filter((project) => !ids.includes(project.id)))
+      toast({
+        title: 'Projects deleted',
+        description: `${ids.length} project${ids.length === 1 ? '' : 's'} removed.`,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete projects'
+      setError(message)
+      toast({ title: 'Failed to delete projects', description: message })
+      await refresh()
+    }
+  }, [refresh])
+
   return {
     projects,
     isLoading,
@@ -103,6 +121,7 @@ export function useProjects() {
     error,
     refresh,
     createProject,
+    deleteProjects,
     setProjects,
   }
 }

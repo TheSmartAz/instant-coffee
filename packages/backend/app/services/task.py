@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional
 
 from sqlalchemy.orm import Session as DbSession
 
 from ..db.models import Plan, PlanStatus, Task, TaskEvent, TaskStatus
+from ..exceptions import new_trace_id
 from .plan import PlanService
 
 
@@ -80,11 +81,12 @@ class TaskService:
             TaskStatus.FAILED.value,
             TaskStatus.SKIPPED.value,
             TaskStatus.ABORTED.value,
+            TaskStatus.TIMEOUT.value,
         ):
             task.completed_at = task.completed_at or now
         self.db.add(task)
         self.db.flush()
-        if status in (TaskStatus.FAILED.value, TaskStatus.ABORTED.value):
+        if status in (TaskStatus.FAILED.value, TaskStatus.ABORTED.value, TaskStatus.TIMEOUT.value):
             self._block_dependents(task, reason=message)
         if status in (TaskStatus.DONE.value, TaskStatus.SKIPPED.value):
             self._unblock_dependents_if_ready(task.plan_id)
@@ -132,6 +134,7 @@ class TaskService:
                 TaskStatus.FAILED.value,
                 TaskStatus.SKIPPED.value,
                 TaskStatus.ABORTED.value,
+                TaskStatus.TIMEOUT.value,
             ):
                 continue
             task.status = TaskStatus.ABORTED.value
@@ -139,6 +142,29 @@ class TaskService:
             self.db.add(task)
         self.db.flush()
         return plan
+
+    def cleanup_timeout_tasks(
+        self,
+        *,
+        timeout_minutes: int = 30,
+        reason: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        cutoff = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+        candidates = (
+            self.db.query(Task)
+            .filter(Task.status.in_([TaskStatus.IN_PROGRESS.value, TaskStatus.RETRYING.value]))
+            .filter(Task.started_at.isnot(None))
+            .filter(Task.started_at < cutoff)
+            .all()
+        )
+        timed_out: List[Dict[str, str]] = []
+        for task in candidates:
+            trace_id = new_trace_id()
+            base_message = reason or f"timeout after {timeout_minutes}m"
+            message = f"{base_message} (trace_id={trace_id})"
+            self.set_status(task.id, TaskStatus.TIMEOUT.value, message=message)
+            timed_out.append({"task_id": task.id, "message": message})
+        return timed_out
 
     def abort_session(self, session_id: str) -> List[str]:
         plans = (
@@ -184,6 +210,7 @@ class TaskService:
                     TaskStatus.FAILED.value,
                     TaskStatus.SKIPPED.value,
                     TaskStatus.ABORTED.value,
+                    TaskStatus.TIMEOUT.value,
                 ):
                     aborted_tasks.append(task.id)
             self.abort_plan(plan.id)
@@ -231,6 +258,7 @@ class TaskService:
                 TaskStatus.SKIPPED.value,
                 TaskStatus.FAILED.value,
                 TaskStatus.ABORTED.value,
+                TaskStatus.TIMEOUT.value,
             ):
                 continue
             depends_on = _parse_depends_on(candidate.depends_on)

@@ -22,6 +22,8 @@ from ..events.models import (
 )
 from ..generators.mobile_html import validate_mobile_html
 from ..services.export import ExportService
+from ..services.page_version import PageVersionService
+from ..services.product_doc import ProductDocService
 from ..services.task import TaskService
 from ..services.version import VersionService
 
@@ -84,10 +86,10 @@ class ExecutionContext:
         for dep_result in self.dependency_results(task):
             context = dep_result.get("context")
             if context:
-                parts.append(f"依赖上下文: {context}")
+                parts.append(f"Dependency context: {context}")
             message = dep_result.get("message")
             if message:
-                parts.append(f"依赖摘要: {message}")
+                parts.append(f"Dependency summary: {message}")
 
         if self.history:
             history_lines = []
@@ -97,7 +99,7 @@ class ExecutionContext:
                 if content:
                     history_lines.append(f"{role}: {content}")
             if history_lines:
-                parts.append("对话历史:\n" + "\n".join(history_lines))
+                parts.append("Conversation history:\n" + "\n".join(history_lines))
 
         return "\n\n".join([part for part in parts if part])
 
@@ -178,6 +180,7 @@ class InterviewTaskExecutor(BaseTaskExecutor):
             event_emitter=emitter,
             agent_id=agent_id,
             task_id=task.id,
+            emit_lifecycle_events=False,
         )
         user_input = task.description or context.user_message or context.plan_goal
         result = await agent.process(user_input or "", context.history)
@@ -216,6 +219,7 @@ class GenerationTaskExecutor(BaseTaskExecutor):
             event_emitter=emitter,
             agent_id=agent_id,
             task_id=task.id,
+            emit_lifecycle_events=False,
         )
 
         steps = agent.progress_steps()
@@ -235,29 +239,54 @@ class GenerationTaskExecutor(BaseTaskExecutor):
                 message=step.message,
             )
 
-        requirements = context.build_requirements(task)
-        result = await agent.generate(
-            requirements=requirements,
-            output_dir=context.output_dir,
-            history=context.history,
-        )
+        payload = _safe_json_loads(task.description)
+        if payload and isinstance(payload, dict) and payload.get("page_spec"):
+            requirements = payload.get("requirements") or context.user_message or context.plan_goal
+            page_spec = payload.get("page_spec")
+            nav = payload.get("nav") or []
+            global_style = payload.get("global_style") or {}
+            all_pages = payload.get("all_pages") or []
+            page_id = payload.get("page_id")
+            product_doc = ProductDocService(context.db).get_by_session_id(context.session_id)
 
-        VersionService(context.db).create_version(
-            context.session_id,
-            result.html,
-            description=task.title or "生成页面",
-        )
+            result = await agent.generate(
+                requirements=requirements,
+                output_dir=context.output_dir,
+                history=context.history,
+                page_id=page_id,
+                page_spec=page_spec,
+                global_style=global_style,
+                nav=nav,
+                product_doc=product_doc,
+                all_pages=all_pages,
+            )
+        else:
+            requirements = context.build_requirements(task)
+            result = await agent.generate(
+                requirements=requirements,
+                output_dir=context.output_dir,
+                history=context.history,
+            )
+
+            VersionService(context.db).create_version(
+                context.session_id,
+                result.html,
+                description=task.title or "Generate page",
+            )
 
         self._emit_agent_end(
             emitter,
             task,
             agent_id,
             status="success",
-            summary="页面生成完成",
+            summary="Page generation complete",
         )
         return {
             "output_file": result.filepath,
             "preview_url": result.preview_url,
+            "page_id": getattr(result, "page_id", None),
+            "fallback_used": getattr(result, "fallback_used", False),
+            "fallback_excerpt": getattr(result, "fallback_excerpt", None),
         }
 
 
@@ -279,6 +308,7 @@ class RefinementTaskExecutor(BaseTaskExecutor):
             event_emitter=emitter,
             agent_id=agent_id,
             task_id=task.id,
+            emit_lifecycle_events=False,
         )
         user_input = task.description or context.user_message
         result = await agent.refine(
@@ -298,7 +328,7 @@ class RefinementTaskExecutor(BaseTaskExecutor):
             task,
             agent_id,
             status="success",
-            summary="页面修改完成",
+            summary="Page refinement complete",
         )
         return {
             "output_file": result.filepath,
@@ -312,19 +342,48 @@ class ExportTaskExecutor(BaseTaskExecutor):
     async def execute(self, task: Task, emitter: EventEmitter, context: ExecutionContext) -> Dict[str, Any]:
         agent_id = self._agent_id(task)
         self._emit_agent_start(emitter, task, agent_id)
+        payload = _safe_json_loads(task.description)
+        page_order = None
+        global_style = None
+        include_product_doc = True
+        if isinstance(payload, dict):
+            page_order = payload.get("pages")
+            global_style = payload.get("global_style")
+            include_product_doc = payload.get("include_product_doc", True)
+
         service = ExportService(context.db)
-        result = service.export_session(
+        result = await service.export_session(
             session_id=context.session_id,
             output_dir=context.output_dir,
+            page_order=page_order,
+            global_style=global_style,
+            include_product_doc=include_product_doc,
         )
+        output_files = []
+        for page in result.manifest.get("pages", []):
+            if page.get("status") == "success" and page.get("path"):
+                output_files.append(str(result.export_dir / page["path"]))
+        for asset in result.manifest.get("assets", []):
+            asset_path = asset.get("path")
+            if asset_path:
+                output_files.append(str(result.export_dir / asset_path))
+        if result.manifest.get("product_doc", {}).get("included"):
+            output_files.append(str(result.export_dir / "product-doc.md"))
+        manifest_path = result.export_dir / "export_manifest.json"
         self._emit_agent_end(
             emitter,
             task,
             agent_id,
             status="success",
-            summary="导出完成",
+            summary="Export complete",
         )
-        return result
+        return {
+            "output_files": output_files,
+            "session_dir": str(result.export_dir),
+            "manifest_file": str(manifest_path),
+            "success": result.success,
+            "errors": result.errors,
+        }
 
 
 class ValidatorTaskExecutor(BaseTaskExecutor):
@@ -333,22 +392,40 @@ class ValidatorTaskExecutor(BaseTaskExecutor):
     async def execute(self, task: Task, emitter: EventEmitter, context: ExecutionContext) -> Dict[str, Any]:
         agent_id = self._agent_id(task)
         self._emit_agent_start(emitter, task, agent_id)
-        version_service = VersionService(context.db)
-        versions = version_service.get_versions(context.session_id, limit=1)
-        if not versions:
-            raise ValueError("No version available for validation")
-        html = versions[0].html
-        errors = validate_mobile_html(html)
-        if errors:
-            raise ValueError("Validation failed: " + ", ".join(errors))
+        payload = _safe_json_loads(task.description)
+        page_id = payload.get("page_id") if isinstance(payload, dict) else None
+        if page_id:
+            page_version_service = PageVersionService(context.db)
+            current = page_version_service.get_current(page_id)
+            if current is None:
+                versions = page_version_service.list_by_page(page_id)
+                current = versions[0] if versions else None
+            if current is None:
+                raise ValueError("No page version available for validation")
+            html = current.html
+        else:
+            version_service = VersionService(context.db)
+            versions = version_service.get_versions(context.session_id, limit=1)
+            if not versions:
+                raise ValueError("No version available for validation")
+            html = versions[0].html
+        result = validate_mobile_html(html)
+        errors = result.get("errors", []) if isinstance(result, dict) else []
+        warnings = result.get("warnings", []) if isinstance(result, dict) else []
+        summary = "Validation passed" if not errors else "Validation completed with issues"
         self._emit_agent_end(
             emitter,
             task,
             agent_id,
             status="success",
-            summary="验证通过",
+            summary=summary,
         )
-        return {"valid": True, "errors": []}
+        return {
+            "valid": not errors,
+            "errors": errors,
+            "warnings": warnings,
+            "page_id": page_id,
+        }
 
 
 class TaskExecutorFactory:

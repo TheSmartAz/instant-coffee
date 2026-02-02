@@ -190,11 +190,20 @@ export function usePlan() {
             summary: event.result?.summary,
           })
           break
+        case 'task_completed':
+          updateTaskStatus(event.task_id, 'done', {
+            progress: 100,
+            summary: event.result?.summary,
+          })
+          break
         case 'task_failed':
-          updateTaskStatus(event.task_id, 'failed', {
+          updateTaskStatus(event.task_id, event.error_type === 'timeout' ? 'timeout' : 'failed', {
             error_message: event.error_message,
             retry_count: event.retry_count,
           })
+          break
+        case 'task_aborted':
+          updateTaskStatus(event.task_id, 'aborted', { progress: 100 })
           break
         case 'task_retrying':
           updateTaskStatus(event.task_id, 'retrying', {
@@ -224,7 +233,7 @@ export function usePlan() {
     if (!plan) return { completed: 0, total: 0, percent: 0 }
     const total = plan.tasks.length
     const completed = plan.tasks.filter((task) =>
-      ['done', 'skipped'].includes(task.status)
+      ['done', 'skipped', 'failed', 'aborted', 'timeout'].includes(task.status)
     ).length
     const percent = total === 0 ? 0 : Math.round((completed / total) * 100)
     return { completed, total, percent }

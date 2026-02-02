@@ -4,12 +4,22 @@ import json
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from threading import Lock
+from typing import Any, Literal, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from ..db.models import Plan, PlanEvent, Task, TaskEvent
+from ..db.models import (
+    Plan,
+    PlanEvent,
+    SessionEvent,
+    SessionEventSource,
+    Task,
+    TaskEvent,
+)
 from ..events.models import BaseEvent, PlanCreatedEvent, PlanUpdatedEvent
+from ..events.types import EXCLUDED_EVENT_TYPES, STRUCTURED_EVENT_TYPES
 from .plan import PlanService
 
 logger = logging.getLogger(__name__)
@@ -34,16 +44,160 @@ def _safe_json_dumps(value: Any) -> Optional[str]:
         return json.dumps(str(value), ensure_ascii=False)
 
 
+def _normalize_payload(payload: Any) -> Any:
+    if payload is None:
+        return {}
+    try:
+        json.dumps(payload, ensure_ascii=False, default=_json_default)
+        return payload
+    except TypeError:
+        return json.loads(json.dumps(payload, ensure_ascii=False, default=_json_default))
+
+
 class EventStoreService:
-    """Persist emitted events into plan/task event tables."""
+    """Persist structured SSE events into session_events (and legacy plan/task tables)."""
+
+    _session_locks: dict[str, Lock] = {}
+    _session_locks_guard = Lock()
 
     def __init__(self, db: DbSession) -> None:
         self.db = db
         self._plan_service = PlanService(db)
 
+    @classmethod
+    def _get_session_lock(cls, session_id: str) -> Lock:
+        with cls._session_locks_guard:
+            lock = cls._session_locks.get(session_id)
+            if lock is None:
+                lock = Lock()
+                cls._session_locks[session_id] = lock
+        return lock
+
+    def should_store_event(self, event_type: str) -> bool:
+        if not event_type:
+            return False
+        if event_type in EXCLUDED_EVENT_TYPES:
+            return False
+        return event_type in STRUCTURED_EVENT_TYPES
+
+    def _infer_source(self, event_type: str, payload: dict) -> SessionEventSource:
+        if event_type in {"plan_created", "plan_updated"}:
+            return SessionEventSource.PLAN
+        if event_type.startswith("task_") or payload.get("task_id"):
+            return SessionEventSource.TASK
+        return SessionEventSource.SESSION
+
+    def get_next_seq(self, session_id: str) -> int:
+        max_seq = (
+            self.db.query(func.max(SessionEvent.seq))
+            .filter(SessionEvent.session_id == session_id)
+            .scalar()
+        )
+        pending = [
+            item.seq
+            for item in self.db.new
+            if isinstance(item, SessionEvent)
+            and item.session_id == session_id
+            and item.seq is not None
+        ]
+        if pending:
+            max_seq = max(max_seq or 0, max(pending))
+        return int(max_seq or 0) + 1
+
+    def store_event(
+        self,
+        session_id: str,
+        type: str,
+        payload: dict,
+        source: Literal["session", "plan", "task"],
+        created_at: Optional[datetime] = None,
+    ) -> Optional[int]:
+        event_type = getattr(type, "value", type)
+        if not session_id or not self.should_store_event(event_type):
+            return None
+
+        source_value = getattr(source, "value", source)
+        try:
+            source_enum = SessionEventSource(source_value)
+        except ValueError:
+            source_enum = SessionEventSource.SESSION
+
+        safe_payload = _normalize_payload(payload)
+        if created_at is None:
+            created_at = datetime.now(timezone.utc)
+
+        with self._get_session_lock(session_id):
+            seq = self.get_next_seq(session_id)
+            session_event = SessionEvent(
+                session_id=session_id,
+                seq=seq,
+                type=event_type,
+                payload=safe_payload,
+                source=source_enum,
+                created_at=created_at,
+            )
+            self.db.add(session_event)
+            self.db.flush([session_event])
+        return seq
+
+    def get_events(
+        self, session_id: str, since_seq: Optional[int] = None, limit: int = 1000
+    ) -> list[SessionEvent]:
+        query = self.db.query(SessionEvent).filter(SessionEvent.session_id == session_id)
+        if since_seq is not None:
+            query = query.filter(SessionEvent.seq > since_seq)
+        return query.order_by(SessionEvent.seq.asc()).limit(limit).all()
+
+    async def store_and_emit(
+        self,
+        session_id: str,
+        type: str,
+        payload: dict,
+        source: Literal["session", "plan", "task"],
+        emitter,
+    ) -> Optional[int]:
+        seq = self.store_event(session_id, type, payload, source)
+        if emitter is not None and hasattr(emitter, "emit"):
+            try:
+                payload_with_type = dict(payload or {})
+                payload_with_type.setdefault("type", type)
+                event = BaseEvent.model_construct(**payload_with_type)
+                if getattr(emitter, "_event_store", None) is self:
+                    original_store = emitter._event_store
+                    emitter._event_store = None
+                    try:
+                        emitter.emit(event)
+                    finally:
+                        emitter._event_store = original_store
+                else:
+                    emitter.emit(event)
+            except Exception:
+                logger.debug("Failed to emit stored event", exc_info=True)
+        return seq
+
     def record_event(self, event: BaseEvent) -> None:
         event_type = getattr(event.type, "value", event.type)
-        payload = event.model_dump()
+        payload = event.model_dump(mode="json")
+        payload.pop("type", None)
+        payload.pop("timestamp", None)
+        payload.pop("session_id", None)
+        session_id = event.session_id
+        if session_id:
+            source = self._infer_source(str(event_type), payload)
+            self.store_event(
+                session_id,
+                str(event_type),
+                payload,
+                source.value,
+                created_at=event.timestamp,
+            )
+
+        self._record_plan_task_event(event, str(event_type), payload)
+
+    def _record_plan_task_event(
+        self, event: BaseEvent, event_type: str, payload: dict
+    ) -> None:
+        """Maintain legacy plan/task event tables for compatibility."""
         timestamp = event.timestamp or datetime.now(timezone.utc)
         if isinstance(event, PlanCreatedEvent):
             plan_payload = payload.get("plan") or {}

@@ -18,6 +18,7 @@ export function ExecutionPage() {
 
   const sse = useSSE({
     url: streamUrl,
+    sessionId,
     autoConnect: Boolean(sessionId),
     onEvent: handleEvent,
     onError: (error) => {

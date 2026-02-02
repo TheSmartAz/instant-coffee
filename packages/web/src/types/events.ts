@@ -2,8 +2,13 @@ export type EventType =
   | 'agent_start'
   | 'agent_progress'
   | 'agent_end'
+  | 'agent_complete'
+  | 'agent_error'
   | 'tool_call'
   | 'tool_result'
+  | 'page_created'
+  | 'page_version_created'
+  | 'page_preview_ready'
   | 'plan_created'
   | 'plan_updated'
   | 'task_started'
@@ -13,13 +18,31 @@ export type EventType =
   | 'task_retrying'
   | 'task_skipped'
   | 'task_blocked'
+  | 'task_completed'
+  | 'task_aborted'
   | 'token_usage'
   | 'error'
   | 'done'
+  | 'interview_question'
+  | 'interview_answer'
+  | 'multipage_decision_made'
+  | 'sitemap_proposed'
+  | 'product_doc_generated'
+  | 'product_doc_updated'
+  | 'product_doc_confirmed'
+  | 'product_doc_outdated'
+  | 'version_created'
+  | 'snapshot_created'
+  | 'history_created'
+
+export type EventSource = 'session' | 'plan' | 'task'
 
 export interface BaseEvent {
   type: EventType
   timestamp: string
+  session_id?: string
+  seq?: number
+  source?: EventSource
 }
 
 export interface AgentStartEvent extends BaseEvent {
@@ -46,6 +69,23 @@ export interface AgentEndEvent extends BaseEvent {
   summary?: string
 }
 
+export interface AgentCompleteEvent extends BaseEvent {
+  type: 'agent_complete'
+  task_id?: string
+  agent_id?: string
+  agent_type?: string
+  status?: 'success' | 'failed'
+  summary?: string
+}
+
+export interface AgentErrorEvent extends BaseEvent {
+  type: 'agent_error'
+  task_id?: string
+  agent_id?: string
+  message?: string
+  details?: string
+}
+
 export interface ToolCallEvent extends BaseEvent {
   type: 'tool_call'
   task_id?: string
@@ -69,6 +109,8 @@ export type TaskStatus =
   | 'in_progress'
   | 'done'
   | 'failed'
+  | 'aborted'
+  | 'timeout'
   | 'blocked'
   | 'skipped'
   | 'retrying'
@@ -126,6 +168,16 @@ export interface TaskDoneEvent extends BaseEvent {
   }
 }
 
+export interface TaskCompletedEvent extends BaseEvent {
+  type: 'task_completed'
+  task_id: string
+  result?: {
+    output_file?: string
+    preview_url?: string
+    summary?: string
+  }
+}
+
 export interface TaskFailedEvent extends BaseEvent {
   type: 'task_failed'
   task_id: string
@@ -135,6 +187,13 @@ export interface TaskFailedEvent extends BaseEvent {
   max_retries: number
   available_actions: Array<'retry' | 'skip' | 'modify' | 'abort'>
   blocked_tasks: string[]
+}
+
+export interface TaskAbortedEvent extends BaseEvent {
+  type: 'task_aborted'
+  task_id: string
+  reason?: string
+  message?: string
 }
 
 export interface TaskRetryingEvent extends BaseEvent {
@@ -156,6 +215,27 @@ export interface TaskBlockedEvent extends BaseEvent {
   task_id: string
   blocked_by?: string[]
   message?: string
+}
+
+export interface PageCreatedEvent extends BaseEvent {
+  type: 'page_created'
+  page_id: string
+  slug: string
+  title: string
+}
+
+export interface PageVersionCreatedEvent extends BaseEvent {
+  type: 'page_version_created'
+  page_id: string
+  slug: string
+  version: number
+}
+
+export interface PagePreviewReadyEvent extends BaseEvent {
+  type: 'page_preview_ready'
+  page_id: string
+  slug: string
+  preview_url?: string | null
 }
 
 export interface ErrorEvent extends BaseEvent {
@@ -188,24 +268,132 @@ export interface DoneEvent extends BaseEvent {
   }
 }
 
+export interface InterviewQuestionEvent extends BaseEvent {
+  type: 'interview_question'
+  batch_id?: string
+  message?: string
+  questions?: unknown[]
+}
+
+export interface InterviewAnswerEvent extends BaseEvent {
+  type: 'interview_answer'
+  batch_id?: string
+  action?: string
+  answers?: unknown[]
+}
+
+export interface VersionCreatedEvent extends BaseEvent {
+  type: 'version_created'
+  version_id?: string
+  version?: number
+  description?: string
+}
+
+export interface SnapshotCreatedEvent extends BaseEvent {
+  type: 'snapshot_created'
+  snapshot_id?: string
+  snapshot_number?: number
+}
+
+export interface HistoryCreatedEvent extends BaseEvent {
+  type: 'history_created'
+  history_id?: string
+  version?: number
+}
+
+export interface MultiPageDecisionEvent extends BaseEvent {
+  type: 'multipage_decision_made'
+  decision: string
+  confidence: number
+  reasons?: string[]
+  suggested_pages?: Array<Record<string, unknown>> | null
+  risk?: string | null
+}
+
+export interface SitemapProposedEvent extends BaseEvent {
+  type: 'sitemap_proposed'
+  pages_count: number
+  sitemap?: Record<string, unknown> | null
+}
+
+export interface ProductDocGeneratedEvent extends BaseEvent {
+  type: 'product_doc_generated'
+  session_id?: string
+  doc_id: string
+  status: string
+}
+
+export interface ProductDocUpdatedEvent extends BaseEvent {
+  type: 'product_doc_updated'
+  session_id?: string
+  doc_id: string
+  change_summary?: string
+}
+
+export interface ProductDocConfirmedEvent extends BaseEvent {
+  type: 'product_doc_confirmed'
+  session_id?: string
+  doc_id: string
+}
+
+export interface ProductDocOutdatedEvent extends BaseEvent {
+  type: 'product_doc_outdated'
+  session_id?: string
+  doc_id: string
+}
+
+export interface SessionEvent {
+  id: number
+  session_id: string
+  seq: number
+  type: string
+  payload: Record<string, unknown> | null
+  source: EventSource
+  created_at: string
+}
+
+export interface SessionEventsResponse {
+  events: SessionEvent[]
+  last_seq: number
+  has_more: boolean
+}
+
 export type ExecutionEvent =
   | AgentStartEvent
   | AgentProgressEvent
   | AgentEndEvent
+  | AgentCompleteEvent
+  | AgentErrorEvent
   | ToolCallEvent
   | ToolResultEvent
+  | PageCreatedEvent
+  | PageVersionCreatedEvent
+  | PagePreviewReadyEvent
   | PlanCreatedEvent
   | PlanUpdatedEvent
   | TaskStartedEvent
   | TaskProgressEvent
   | TaskDoneEvent
+  | TaskCompletedEvent
   | TaskFailedEvent
+  | TaskAbortedEvent
   | TaskRetryingEvent
   | TaskSkippedEvent
   | TaskBlockedEvent
   | TokenUsageEvent
   | ErrorEvent
   | DoneEvent
+  | InterviewQuestionEvent
+  | InterviewAnswerEvent
+  | MultiPageDecisionEvent
+  | SitemapProposedEvent
+  | ProductDocGeneratedEvent
+  | ProductDocUpdatedEvent
+  | ProductDocConfirmedEvent
+  | ProductDocOutdatedEvent
+  | VersionCreatedEvent
+  | SnapshotCreatedEvent
+  | HistoryCreatedEvent
 
 export function isAgentEvent(
   event: ExecutionEvent

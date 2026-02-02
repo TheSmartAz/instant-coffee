@@ -30,5 +30,12 @@ class MessageService:
             .all()
         )
 
+    def clear_messages(self, session_id: str) -> int:
+        return (
+            self.db.query(Message)
+            .filter(Message.session_id == session_id)
+            .delete(synchronize_session=False)
+        )
+
 
 __all__ = ["MessageService"]

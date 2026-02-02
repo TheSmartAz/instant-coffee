@@ -3,8 +3,67 @@ import json
 from fastapi.testclient import TestClient
 
 from app.agents.generation import GenerationAgent, GenerationResult
+from app.agents.product_doc import ProductDocAgent, ProductDocGenerateResult
+from app.agents.sitemap import SitemapResult
 from app.events.models import ToolCallEvent, ToolResultEvent
+from app.schemas.sitemap import GlobalStyle, NavItem, SitemapPage
+from app.services.product_doc import ProductDocService
 import app.db.database as db_module
+
+
+def _generate_now_message(text: str = "hi") -> str:
+    payload = json.dumps({"action": "generate_now", "answers": []})
+    return f"{text} <INTERVIEW_ANSWERS>{payload}</INTERVIEW_ANSWERS>"
+
+
+def _patch_generation_flow(monkeypatch):
+    async def fake_product_doc_generate(
+        self,
+        session_id,
+        user_message,
+        interview_context=None,
+        history=None,
+    ):
+        structured = {
+            "project_name": "Test",
+            "pages": [
+                {
+                    "title": "Home",
+                    "slug": "index",
+                    "purpose": "Landing",
+                    "sections": ["hero"],
+                    "required": True,
+                }
+            ],
+        }
+        service = ProductDocService(self.db, event_emitter=self.event_emitter)
+        resolved_session_id = session_id or self.session_id
+        existing = service.get_by_session_id(resolved_session_id)
+        if existing is None:
+            service.create(resolved_session_id, content="# Doc", structured=structured)
+        else:
+            service.update(existing.id, content="# Doc", structured=structured)
+        return ProductDocGenerateResult(
+            content="# Doc",
+            structured=structured,
+            message="ok",
+            tokens_used=0,
+        )
+
+    async def fake_sitemap_generate(self, product_doc, multi_page=True, explicit_multi_page=False):
+        page = SitemapPage(
+            title="Home",
+            slug="index",
+            purpose="Landing",
+            sections=["hero"],
+            required=True,
+        )
+        nav = [NavItem(slug="index", label="Home", order=0)]
+        style = GlobalStyle(primary_color="#111111", secondary_color="#222222", font_family="Test")
+        return SitemapResult(pages=[page], nav=nav, global_style=style, tokens_used=0)
+
+    monkeypatch.setattr(ProductDocAgent, "generate", fake_product_doc_generate)
+    monkeypatch.setattr("app.agents.sitemap.SitemapAgent.generate", fake_sitemap_generate)
 
 
 def test_chat_stream_emits_tool_events(monkeypatch):
@@ -12,15 +71,17 @@ def test_chat_stream_emits_tool_events(monkeypatch):
     monkeypatch.setenv("DEFAULT_BASE_URL", "http://localhost")
     monkeypatch.setenv("DEFAULT_KEY", "test-key")
     monkeypatch.setattr(db_module, "_database", None)
+    _patch_generation_flow(monkeypatch)
 
     async def fake_generate(
         self,
         *,
-        requirements,
-        output_dir,
-        history,
+        requirements=None,
+        output_dir=None,
+        history=None,
         current_html=None,
         stream=True,
+        **kwargs,
     ):
         if self.event_emitter:
             self.event_emitter.emit(
@@ -53,7 +114,11 @@ def test_chat_stream_emits_tool_events(monkeypatch):
     app = create_app()
 
     with TestClient(app) as client:
-        with client.stream("GET", "/api/chat/stream?message=hi") as response:
+        with client.stream(
+            "GET",
+            "/api/chat/stream",
+            params={"message": _generate_now_message("hi")},
+        ) as response:
             lines = []
             for line in response.iter_lines():
                 if not line:
@@ -79,15 +144,17 @@ def test_chat_stream_multiple_tool_calls_order(monkeypatch):
     monkeypatch.setenv("DEFAULT_BASE_URL", "http://localhost")
     monkeypatch.setenv("DEFAULT_KEY", "test-key")
     monkeypatch.setattr(db_module, "_database", None)
+    _patch_generation_flow(monkeypatch)
 
     async def fake_generate(
         self,
         *,
-        requirements,
-        output_dir,
-        history,
+        requirements=None,
+        output_dir=None,
+        history=None,
         current_html=None,
         stream=True,
+        **kwargs,
     ):
         if self.event_emitter:
             self.event_emitter.emit(
@@ -137,7 +204,11 @@ def test_chat_stream_multiple_tool_calls_order(monkeypatch):
     app = create_app()
 
     with TestClient(app) as client:
-        with client.stream("GET", "/api/chat/stream?message=hi") as response:
+        with client.stream(
+            "GET",
+            "/api/chat/stream",
+            params={"message": _generate_now_message("hi")},
+        ) as response:
             lines = []
             for line in response.iter_lines():
                 if not line:

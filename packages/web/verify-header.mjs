@@ -23,7 +23,7 @@ import { chromium } from 'playwright';
         height: Math.round(rect.height),
         width: Math.round(rect.width),
         hasLogo: header.textContent?.includes('Instant Coffee'),
-        hasNewSession: header.textContent?.includes('新会话')
+        hasNewSession: header.textContent?.includes('New session')
       };
     }
     return { exists: false };

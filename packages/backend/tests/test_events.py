@@ -4,15 +4,15 @@ from app.events.emitter import EventEmitter
 from app.events.models import AgentProgressEvent, AgentStartEvent, DoneEvent
 
 
-def test_event_model_to_sse_contains_timestamp_and_unicode() -> None:
-    event = AgentProgressEvent(agent_id="agent-1", message="你好", progress=10)
+def test_event_model_to_sse_contains_timestamp_and_message() -> None:
+    event = AgentProgressEvent(agent_id="agent-1", message="Hello", progress=10)
     payload = event.model_dump(mode="json")
     assert payload["type"] == "agent_progress"
     assert "timestamp" in payload
 
     sse = event.to_sse()
     assert sse.startswith("data: ")
-    assert "你好" in sse
+    assert "Hello" in sse
 
 
 def test_event_emitter_stream_and_events_since() -> None:

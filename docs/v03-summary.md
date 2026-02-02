@@ -174,7 +174,9 @@
 - Session-specific output directories
 - Token usage serialization on GenerationResult
 - Filesystem write handler with traversal protection and structured results
-- `stream` flag honored for streaming output path
+- `stream` flag supported, non-streaming default for stable HTML extraction
+- HTML completeness validation with fallback retry on extraction failure
+- Raw LLM response logging (truncated) when extraction fails
 
 **Acceptance Criteria Met**:
 - [x] GenerationResult includes html, preview_url, filepath, token_usage
@@ -183,6 +185,8 @@
 - [x] File saved with versioning and preview URL
 - [x] Tool handler validates paths and returns structured response
 - [x] Streaming path can be selected for generation
+- [x] Non-streaming default avoids partial HTML responses
+- [x] Extraction failures log truncated raw responses for debugging
 
 ---
 

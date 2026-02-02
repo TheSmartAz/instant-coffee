@@ -149,6 +149,104 @@ class TaskBlockedEvent(BaseEvent):
     reason: Optional[str] = None
 
 
+class PageCreatedEvent(BaseEvent):
+    type: EventType = EventType.PAGE_CREATED
+    page_id: str
+    slug: str
+    title: str
+
+
+class PageVersionCreatedEvent(BaseEvent):
+    type: EventType = EventType.PAGE_VERSION_CREATED
+    page_id: str
+    slug: str
+    version: int
+
+
+class PagePreviewReadyEvent(BaseEvent):
+    type: EventType = EventType.PAGE_PREVIEW_READY
+    page_id: str
+    slug: str
+    preview_url: Optional[str] = None
+
+
+# Interview events
+class InterviewQuestionEvent(BaseEvent):
+    type: EventType = EventType.INTERVIEW_QUESTION
+    batch_id: Optional[str] = None
+    message: Optional[str] = None
+    questions: Optional[List[Dict[str, Any]]] = None
+
+
+class InterviewAnswerEvent(BaseEvent):
+    type: EventType = EventType.INTERVIEW_ANSWER
+    batch_id: Optional[str] = None
+    action: Optional[str] = None
+    answers: Optional[List[Dict[str, Any]]] = None
+
+
+# Versioning events
+class VersionCreatedEvent(BaseEvent):
+    type: EventType = EventType.VERSION_CREATED
+    version_id: Optional[str] = None
+    version: Optional[int] = None
+    description: Optional[str] = None
+
+
+class SnapshotCreatedEvent(BaseEvent):
+    type: EventType = EventType.SNAPSHOT_CREATED
+    snapshot_id: str
+    snapshot_number: int
+    source: Optional[str] = None
+    label: Optional[str] = None
+
+
+class HistoryCreatedEvent(BaseEvent):
+    type: EventType = EventType.HISTORY_CREATED
+    history_id: int
+    version: int
+    source: Optional[str] = None
+    change_summary: Optional[str] = None
+
+
+# ProductDoc events
+class ProductDocGeneratedEvent(BaseEvent):
+    type: EventType = EventType.PRODUCT_DOC_GENERATED
+    doc_id: str
+    status: str
+
+
+class ProductDocUpdatedEvent(BaseEvent):
+    type: EventType = EventType.PRODUCT_DOC_UPDATED
+    doc_id: str
+    change_summary: Optional[str] = None
+
+
+class ProductDocConfirmedEvent(BaseEvent):
+    type: EventType = EventType.PRODUCT_DOC_CONFIRMED
+    doc_id: str
+
+
+class ProductDocOutdatedEvent(BaseEvent):
+    type: EventType = EventType.PRODUCT_DOC_OUTDATED
+    doc_id: str
+
+
+class MultiPageDecisionEvent(BaseEvent):
+    type: EventType = EventType.MULTIPAGE_DECISION_MADE
+    decision: str
+    confidence: float
+    reasons: List[str] = Field(default_factory=list)
+    suggested_pages: Optional[List[Dict[str, Any]]] = None
+    risk: Optional[str] = None
+
+
+class SitemapProposedEvent(BaseEvent):
+    type: EventType = EventType.SITEMAP_PROPOSED
+    pages_count: int
+    sitemap: Optional[Dict[str, Any]] = None
+
+
 class ErrorEvent(BaseEvent):
     type: EventType = EventType.ERROR
     message: str

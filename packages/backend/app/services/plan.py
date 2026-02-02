@@ -116,7 +116,7 @@ class PlanService:
         statuses = {task.status for task in tasks}
         if TaskStatus.ABORTED.value in statuses:
             plan.status = PlanStatus.ABORTED.value
-        elif TaskStatus.FAILED.value in statuses:
+        elif TaskStatus.FAILED.value in statuses or TaskStatus.TIMEOUT.value in statuses:
             plan.status = PlanStatus.FAILED.value
         elif TaskStatus.IN_PROGRESS.value in statuses or TaskStatus.RETRYING.value in statuses:
             plan.status = PlanStatus.IN_PROGRESS.value

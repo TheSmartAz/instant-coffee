@@ -1,22 +1,97 @@
 import * as React from 'react'
-import type { ExecutionEvent } from '@/types/events'
+import { api } from '@/api/client'
+import type { ExecutionEvent, SessionEvent } from '@/types/events'
 
 type ConnectionState = 'idle' | 'connecting' | 'open' | 'error' | 'closed'
 
+const EXCLUDED_EVENT_TYPES = new Set(['delta', 'thinking', 'ping'])
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === 'object')
+
+
+const normalizePayloadEvent = (
+  payload: Record<string, unknown>
+): ExecutionEvent | null => {
+  const rawType = payload.type
+  if (typeof rawType !== 'string') return null
+  if (EXCLUDED_EVENT_TYPES.has(rawType)) return null
+  const timestamp =
+    typeof payload.timestamp === 'string'
+      ? payload.timestamp
+      : new Date().toISOString()
+  return { ...payload, type: rawType, timestamp } as ExecutionEvent
+}
+
+const normalizeSessionEvent = (event: SessionEvent): ExecutionEvent | null => {
+  if (!event.type || EXCLUDED_EVENT_TYPES.has(event.type)) return null
+  const payload = isRecord(event.payload) ? event.payload : {}
+  const base = {
+    ...payload,
+    type: event.type,
+    timestamp: event.created_at,
+    session_id: event.session_id,
+    seq: event.seq,
+    source: event.source,
+  } as ExecutionEvent
+  return base
+}
+
+const buildEventKey = (event: ExecutionEvent) => {
+  if (event.seq !== undefined && event.seq !== null) {
+    return `seq:${event.seq}`
+  }
+  const timestamp = event.timestamp ?? ''
+  const taskId = (event as { task_id?: string }).task_id ?? ''
+  const agentId = (event as { agent_id?: string }).agent_id ?? ''
+  return `event:${event.type}:${timestamp}:${taskId}:${agentId}`
+}
+
+const sortEvents = (a: ExecutionEvent, b: ExecutionEvent) => {
+  const aSeq = a.seq
+  const bSeq = b.seq
+  if (typeof aSeq === 'number' && typeof bSeq === 'number') {
+    return aSeq - bSeq
+  }
+  if (typeof aSeq === 'number') return -1
+  if (typeof bSeq === 'number') return 1
+  const aTime = Date.parse(a.timestamp ?? '') || 0
+  const bTime = Date.parse(b.timestamp ?? '') || 0
+  return aTime - bTime
+}
+
+const mergeEvents = (historical: ExecutionEvent[], realtime: ExecutionEvent[]) => {
+  const combined = [...historical, ...realtime].sort(sortEvents)
+  const seen = new Set<string>()
+  const result: ExecutionEvent[] = []
+  for (const event of combined) {
+    const key = buildEventKey(event)
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(event)
+  }
+  return result
+}
+
 export interface UseSSEOptions {
   url: string
+  sessionId?: string
   onEvent?: (event: ExecutionEvent) => void
   onError?: (error: Error) => void
   onDone?: () => void
   autoReconnect?: boolean
   reconnectDelay?: number
   autoConnect?: boolean
+  loadHistory?: boolean
+  historyLimit?: number
+  replayHistory?: boolean
 }
 
 export interface UseSSEReturn {
   events: ExecutionEvent[]
   isConnected: boolean
   isLoading: boolean
+  isHistoryLoading: boolean
   error: Error | null
   connectionState: ConnectionState
   connect: () => void
@@ -26,22 +101,44 @@ export interface UseSSEReturn {
 
 export function useSSE({
   url,
+  sessionId,
   onEvent,
   onError,
   onDone,
   autoReconnect = true,
   reconnectDelay = 3000,
   autoConnect = true,
+  loadHistory = true,
+  historyLimit = 1000,
+  replayHistory = true,
 }: UseSSEOptions): UseSSEReturn {
-  const [events, setEvents] = React.useState<ExecutionEvent[]>([])
+  const [historicalEvents, setHistoricalEvents] = React.useState<ExecutionEvent[]>([])
+  const [realtimeEvents, setRealtimeEvents] = React.useState<ExecutionEvent[]>([])
   const [isConnected, setIsConnected] = React.useState(false)
-  const [isLoading, setIsLoading] = React.useState(false)
+  const [isConnecting, setIsConnecting] = React.useState(false)
+  const [isHistoryLoading, setIsHistoryLoading] = React.useState(false)
   const [error, setError] = React.useState<Error | null>(null)
   const [connectionState, setConnectionState] =
     React.useState<ConnectionState>('idle')
 
   const eventSourceRef = React.useRef<EventSource | null>(null)
   const reconnectTimeoutRef = React.useRef<number | null>(null)
+  const seenEventKeysRef = React.useRef<Set<string>>(new Set())
+  const onEventRef = React.useRef<typeof onEvent>(onEvent)
+  const onErrorRef = React.useRef<typeof onError>(onError)
+  const onDoneRef = React.useRef<typeof onDone>(onDone)
+
+  React.useEffect(() => {
+    onEventRef.current = onEvent
+  }, [onEvent])
+
+  React.useEffect(() => {
+    onErrorRef.current = onError
+  }, [onError])
+
+  React.useEffect(() => {
+    onDoneRef.current = onDone
+  }, [onDone])
 
   const clearReconnect = React.useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -57,6 +154,7 @@ export function useSSE({
       eventSourceRef.current = null
     }
     setIsConnected(false)
+    setIsConnecting(false)
     setConnectionState('closed')
   }, [clearReconnect])
 
@@ -66,7 +164,7 @@ export function useSSE({
       eventSourceRef.current.close()
     }
 
-    setIsLoading(true)
+    setIsConnecting(true)
     setError(null)
     setConnectionState('connecting')
 
@@ -75,7 +173,7 @@ export function useSSE({
 
     eventSource.onopen = () => {
       setIsConnected(true)
-      setIsLoading(false)
+      setIsConnecting(false)
       setConnectionState('open')
     }
 
@@ -84,16 +182,22 @@ export function useSSE({
         setIsConnected(false)
         setConnectionState('closed')
         eventSource.close()
-        onDone?.()
+        onDoneRef.current?.()
         return
       }
 
       try {
-        const parsed = JSON.parse(event.data) as ExecutionEvent
-        setEvents((prev) => [...prev, parsed])
-        onEvent?.(parsed)
-        if (parsed.type === 'done') {
-          onDone?.()
+        const parsed = JSON.parse(event.data)
+        if (!isRecord(parsed)) return
+        const normalized = normalizePayloadEvent(parsed)
+        if (!normalized) return
+        const key = buildEventKey(normalized)
+        if (seenEventKeysRef.current.has(key)) return
+        seenEventKeysRef.current.add(key)
+        setRealtimeEvents((prev) => [...prev, normalized])
+        onEventRef.current?.(normalized)
+        if (normalized.type === 'done') {
+          onDoneRef.current?.()
         }
       } catch (parseError) {
         const err =
@@ -101,17 +205,17 @@ export function useSSE({
             ? parseError
             : new Error('Failed to parse SSE event')
         setError(err)
-        onError?.(err)
+        onErrorRef.current?.(err)
       }
     }
 
     eventSource.onerror = () => {
       const err = new Error('SSE connection error')
       setIsConnected(false)
-      setIsLoading(false)
+      setIsConnecting(false)
       setConnectionState('error')
       setError(err)
-      onError?.(err)
+      onErrorRef.current?.(err)
       eventSource.close()
 
       if (autoReconnect) {
@@ -120,11 +224,75 @@ export function useSSE({
         }, reconnectDelay)
       }
     }
-  }, [autoReconnect, clearReconnect, onDone, onError, onEvent, reconnectDelay, url])
+  }, [autoReconnect, clearReconnect, reconnectDelay, url])
 
   const clearEvents = React.useCallback(() => {
-    setEvents([])
+    setHistoricalEvents([])
+    setRealtimeEvents([])
+    seenEventKeysRef.current = new Set()
   }, [])
+
+  React.useEffect(() => {
+    if (!sessionId || !loadHistory) {
+      setHistoricalEvents([])
+      setIsHistoryLoading(false)
+      return
+    }
+    let active = true
+    const fetchHistory = async () => {
+      setIsHistoryLoading(true)
+      try {
+        const accumulated: SessionEvent[] = []
+        let sinceSeq: number | undefined = undefined
+        let hasMore = true
+        let page = 0
+        while (hasMore && page < 5) {
+          const response = await api.events.getSessionEvents(
+            sessionId,
+            sinceSeq,
+            historyLimit
+          )
+          const payload = response as {
+            events?: SessionEvent[]
+            has_more?: boolean
+            last_seq?: number
+          }
+          const batch = payload.events ?? []
+          accumulated.push(...batch)
+          hasMore = Boolean(payload.has_more)
+          sinceSeq = payload.last_seq
+          page += 1
+          if (batch.length === 0) break
+        }
+        if (!active) return
+        const rawEvents = accumulated
+        const normalized = rawEvents
+          .map((event) => normalizeSessionEvent(event))
+          .filter(Boolean) as ExecutionEvent[]
+        normalized.sort(sortEvents)
+        seenEventKeysRef.current = new Set(
+          normalized.map((event) => buildEventKey(event))
+        )
+        setHistoricalEvents(normalized)
+        if (replayHistory && onEventRef.current) {
+          normalized.forEach((event) => onEventRef.current?.(event))
+        }
+      } catch (err) {
+        if (!active) return
+        const errorValue =
+          err instanceof Error ? err : new Error('Failed to load historical events')
+        setError(errorValue)
+        onErrorRef.current?.(errorValue)
+      } finally {
+        if (active) setIsHistoryLoading(false)
+      }
+    }
+
+    fetchHistory()
+    return () => {
+      active = false
+    }
+  }, [historyLimit, loadHistory, replayHistory, sessionId])
 
   React.useEffect(() => {
     if (!autoConnect || !url) return
@@ -134,10 +302,21 @@ export function useSSE({
     }
   }, [autoConnect, connect, disconnect, url])
 
+  React.useEffect(() => {
+    setRealtimeEvents([])
+    seenEventKeysRef.current = new Set()
+  }, [sessionId])
+
+  const events = React.useMemo(
+    () => mergeEvents(historicalEvents, realtimeEvents),
+    [historicalEvents, realtimeEvents]
+  )
+
   return {
     events,
     isConnected,
-    isLoading,
+    isLoading: isConnecting || isHistoryLoading,
+    isHistoryLoading,
     error,
     connectionState,
     connect,

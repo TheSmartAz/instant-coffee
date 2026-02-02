@@ -5,18 +5,14 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useVirtualList } from '@/hooks/useVirtualList'
-
-export interface Message {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  timestamp?: Date
-  isStreaming?: boolean
-}
+import type { InterviewActionPayload, Message } from '@/types'
 
 export interface ChatPanelProps {
   messages: Message[]
-  onSendMessage: (content: string) => void
+  onSendMessage: (content: string, options?: { triggerInterview?: boolean; generateNow?: boolean }) => void
+  onInterviewAction?: (payload: InterviewActionPayload) => void
+  onTabChange?: (tab: 'preview' | 'code' | 'product-doc') => void
+  onDisambiguationSelect?: (option: { id: string; slug: string; title: string }) => void
   isLoading?: boolean
   title?: string
   status?: string
@@ -29,6 +25,9 @@ export interface ChatPanelProps {
 export function ChatPanel({
   messages,
   onSendMessage,
+  onInterviewAction,
+  onTabChange,
+  onDisambiguationSelect,
   isLoading = false,
   title = 'Conversation',
   status,
@@ -38,7 +37,11 @@ export function ChatPanel({
   className,
 }: ChatPanelProps) {
   const bottomRef = React.useRef<HTMLDivElement | null>(null)
-  const showEmptyState = !isLoading && messages.length === 0
+  const visibleMessages = React.useMemo(
+    () => messages.filter((message) => !message.hidden),
+    [messages]
+  )
+  const showEmptyState = !isLoading && visibleMessages.length === 0
   const rootRef = React.useRef<HTMLDivElement | null>(null)
   const [scrollElement, setScrollElement] = React.useState<HTMLDivElement | null>(null)
   const [autoScroll, setAutoScroll] = React.useState(true)
@@ -63,7 +66,7 @@ export function ChatPanel({
     viewportHeight,
     shouldVirtualize,
   } = useVirtualList({
-    count: messages.length,
+    count: visibleMessages.length,
     estimateSize: 120,
     overscan: 8,
     minItems: 80,
@@ -82,9 +85,10 @@ export function ChatPanel({
   React.useLayoutEffect(() => {
     if (!autoScroll || !scrollElement) return
     scrollElement.scrollTo({ top: effectiveTotalHeight, behavior: 'smooth' })
-  }, [autoScroll, scrollElement, effectiveTotalHeight, messages.length])
+  }, [autoScroll, scrollElement, effectiveTotalHeight, visibleMessages.length])
 
-  const visibleMessages = messages.slice(start, end)
+  const displayMessages = visibleMessages.slice(start, end)
+  const isFirstMessage = visibleMessages.length === 0
 
   return (
     <div
@@ -128,10 +132,18 @@ export function ChatPanel({
               Start the conversation by describing what you want to build.
             </div>
           ) : null}
-          <div style={{ paddingTop, paddingBottom }}>
-            {visibleMessages.map((message, index) => (
-              <ChatMessage key={`${message.id}-${start + index}`} {...message} />
-            ))}
+          <div className="px-6 py-6">
+            <div style={{ paddingTop, paddingBottom }} className="space-y-6">
+              {displayMessages.map((message, index) => (
+                <ChatMessage
+                  key={`${message.id}-${start + index}`}
+                  {...message}
+                  onInterviewAction={onInterviewAction}
+                  onTabChange={onTabChange}
+                  onDisambiguationSelect={onDisambiguationSelect}
+                />
+              ))}
+            </div>
           </div>
           <div ref={bottomRef} />
         </div>
@@ -142,7 +154,12 @@ export function ChatPanel({
         </div>
       ) : null}
       <div className="border-t border-border p-4">
-        <ChatInput onSend={onSendMessage} disabled={isLoading} />
+        <ChatInput
+          onSend={onSendMessage}
+          disabled={isLoading}
+          initialInterviewOn={isFirstMessage}
+          showInterviewToggle
+        />
       </div>
     </div>
   )

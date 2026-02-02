@@ -17,7 +17,9 @@ const statusOrder: Record<string, number> = {
   blocked: 3,
   done: 4,
   failed: 5,
-  skipped: 6,
+  timeout: 6,
+  aborted: 7,
+  skipped: 8,
 }
 
 export function TaskCardList({ tasks, events }: TaskCardListProps) {
