@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 from enum import Enum
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
 from ..db.models import Plan, PlanStatus, Task, TaskStatus
@@ -110,10 +111,15 @@ class PlanService:
         plan = self.db.get(Plan, plan_id)
         if plan is None:
             return None
-        tasks = self.db.query(Task).filter(Task.plan_id == plan_id).all()
-        if not tasks:
+        rows = (
+            self.db.query(Task.status, func.count(Task.id))
+            .filter(Task.plan_id == plan_id)
+            .group_by(Task.status)
+            .all()
+        )
+        if not rows:
             return plan
-        statuses = {task.status for task in tasks}
+        statuses = {row[0] for row in rows}
         if TaskStatus.ABORTED.value in statuses:
             plan.status = PlanStatus.ABORTED.value
         elif TaskStatus.FAILED.value in statuses or TaskStatus.TIMEOUT.value in statuses:

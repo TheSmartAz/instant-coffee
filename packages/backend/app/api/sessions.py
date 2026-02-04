@@ -82,19 +82,27 @@ def _get_page_version_by_number(
     )
 
 
-def _session_payload(db: DbSession, record: SessionModel) -> dict:
-    message_count = (
-        db.query(func.count(Message.id))
-        .filter(Message.session_id == record.id)
-        .scalar()
-        or 0
-    )
-    version_count = (
-        db.query(func.count(Version.id))
-        .filter(Version.session_id == record.id)
-        .scalar()
-        or 0
-    )
+def _session_payload(
+    db: DbSession,
+    record: SessionModel,
+    *,
+    message_count: int | None = None,
+    version_count: int | None = None,
+) -> dict:
+    if message_count is None:
+        message_count = (
+            db.query(func.count(Message.id))
+            .filter(Message.session_id == record.id)
+            .scalar()
+            or 0
+        )
+    if version_count is None:
+        version_count = (
+            db.query(func.count(Version.id))
+            .filter(Version.session_id == record.id)
+            .scalar()
+            or 0
+        )
     return {
         "id": record.id,
         "title": record.title,
@@ -114,9 +122,33 @@ def list_sessions(
 ) -> dict:
     service = SessionService(db)
     sessions = service.list_sessions(limit=limit, offset=offset)
+    session_ids = [record.id for record in sessions]
+    message_counts: dict[str, int] = {}
+    version_counts: dict[str, int] = {}
+    if session_ids:
+        message_counts = dict(
+            db.query(Message.session_id, func.count(Message.id))
+            .filter(Message.session_id.in_(session_ids))
+            .group_by(Message.session_id)
+            .all()
+        )
+        version_counts = dict(
+            db.query(Version.session_id, func.count(Version.id))
+            .filter(Version.session_id.in_(session_ids))
+            .group_by(Version.session_id)
+            .all()
+        )
     total = db.query(func.count(SessionModel.id)).scalar() or 0
     return {
-        "sessions": [_session_payload(db, record) for record in sessions],
+        "sessions": [
+            _session_payload(
+                db,
+                record,
+                message_count=message_counts.get(record.id, 0),
+                version_count=version_counts.get(record.id, 0),
+            )
+            for record in sessions
+        ],
         "total": total,
     }
 

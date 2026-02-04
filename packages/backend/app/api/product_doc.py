@@ -91,13 +91,27 @@ def get_product_doc(
 def get_product_doc_history(
     session_id: str,
     include_released: bool = Query(False, alias="include_released"),
+    limit: int | None = Query(None, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: DbSession = Depends(_get_db_session),
 ) -> ProductDocHistoryListResponse:
     service = ProductDocService(db)
     doc = service.get_by_session_id(session_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="ProductDoc not found")
-    history = service.get_history(doc.id, include_released=include_released)
+    total_query = (
+        db.query(func.count(ProductDocHistory.id))
+        .filter(ProductDocHistory.product_doc_id == doc.id)
+    )
+    if not include_released:
+        total_query = total_query.filter(ProductDocHistory.is_released.is_(False))
+    total = total_query.scalar() or 0
+    history = service.get_history(
+        doc.id,
+        include_released=include_released,
+        limit=limit,
+        offset=offset,
+    )
     pinned_count = (
         db.query(func.count(ProductDocHistory.id))
         .filter(ProductDocHistory.product_doc_id == doc.id)
@@ -107,7 +121,7 @@ def get_product_doc_history(
     )
     return ProductDocHistoryListResponse(
         history=[_history_payload(record) for record in history],
-        total=len(history),
+        total=int(total),
         pinned_count=int(pinned_count),
     )
 

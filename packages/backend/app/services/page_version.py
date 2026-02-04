@@ -232,7 +232,7 @@ class PageVersionService:
         )
         keep_ids.update(version.id for version in recent_auto)
 
-        updated_ids: set[int] = set()
+        updated_count = 0
         releasable_query = (
             self.db.query(PageVersion)
             .filter(PageVersion.page_id == page_id)
@@ -240,34 +240,37 @@ class PageVersionService:
         )
         if keep_ids:
             releasable_query = releasable_query.filter(PageVersion.id.notin_(keep_ids))
-        releasable = releasable_query.all()
-        for version in releasable:
-            version.is_released = True
-            version.released_at = version.released_at or now
-            if version.html is not None:
-                version.html = None
-            version.payload_pruned_at = version.payload_pruned_at or now
-            updated_ids.add(version.id)
-            self.db.add(version)
+        release_count = releasable_query.update(
+            {
+                PageVersion.is_released: True,
+                PageVersion.released_at: func.coalesce(PageVersion.released_at, now),
+                PageVersion.payload_pruned_at: func.coalesce(PageVersion.payload_pruned_at, now),
+                PageVersion.html: None,
+            },
+            synchronize_session=False,
+        )
+        if release_count and release_count > 0:
+            updated_count += int(release_count)
 
         released_to_prune = (
             self.db.query(PageVersion)
             .filter(PageVersion.page_id == page_id)
             .filter(PageVersion.is_released.is_(True))
             .filter(PageVersion.payload_pruned_at.is_(None))
-            .all()
         )
-        for version in released_to_prune:
-            if version.html is not None:
-                version.html = None
-            version.payload_pruned_at = now
-            if version.released_at is None:
-                version.released_at = now
-            updated_ids.add(version.id)
-            self.db.add(version)
+        prune_count = released_to_prune.update(
+            {
+                PageVersion.payload_pruned_at: now,
+                PageVersion.released_at: func.coalesce(PageVersion.released_at, now),
+                PageVersion.html: None,
+            },
+            synchronize_session=False,
+        )
+        if prune_count and prune_count > 0:
+            updated_count += int(prune_count)
 
         self.db.flush()
-        return len(updated_ids)
+        return updated_count
 
     def build_preview(
         self,

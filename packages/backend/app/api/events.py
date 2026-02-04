@@ -196,7 +196,7 @@ def get_session_events(
     serialized = [_serialize_event(event) for event in events]
     last_seq = serialized[-1].seq if serialized else (since_seq or 0)
 
-    if not has_more and (since_seq is None or since_seq <= 0):
+    if not has_more and (since_seq is None or since_seq <= 0) and not serialized:
         existing_keys = set()
         for item in serialized:
             if not item.created_at:

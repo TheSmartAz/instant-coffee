@@ -14,6 +14,7 @@ from .models import (
     ProjectSnapshotPage,
     Session,
     SessionEvent,
+    SessionEventSequence,
     VersionSource,
 )
 from ..services.page_version import PageVersionService
@@ -26,6 +27,7 @@ def init_db(database: Database | None = None) -> None:
     Base.metadata.create_all(bind=db_instance.engine)
     migrate_v04_product_doc_pending_pages(db_instance)
     migrate_v05_version_models(db_instance)
+    migrate_v06_indexes(db_instance)
 
 
 def migrate_v04_product_doc_pages(database: Database | None = None) -> None:
@@ -77,6 +79,7 @@ def migrate_v05_version_models(database: Database | None = None) -> None:
             ProjectSnapshotDoc.__table__,
             ProjectSnapshotPage.__table__,
             SessionEvent.__table__,
+            SessionEventSequence.__table__,
         ],
     )
     _migrate_v05_product_doc_version(engine)
@@ -85,6 +88,34 @@ def migrate_v05_version_models(database: Database | None = None) -> None:
     _backfill_v05_product_doc_history(engine)
     _backfill_v05_initial_snapshots(db_instance)
     _apply_v05_retention(db_instance)
+
+
+def _ensure_index(engine, table_name: str, index_name: str, columns: list[str]) -> None:
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return
+    existing = {idx.get("name") for idx in inspector.get_indexes(table_name)}
+    if index_name in existing:
+        return
+    cols = ", ".join(columns)
+    with engine.begin() as connection:
+        connection.execute(
+            text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({cols})")
+        )
+
+
+def migrate_v06_indexes(database: Database | None = None) -> None:
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    _ensure_index(engine, "messages", "idx_messages_session_id", ["session_id"])
+    _ensure_index(engine, "messages", "idx_messages_session_ts", ["session_id", "timestamp"])
+    _ensure_index(engine, "token_usage", "idx_token_usage_session_id", ["session_id"])
+    _ensure_index(engine, "token_usage", "idx_token_usage_session_ts", ["session_id", "timestamp"])
+    _ensure_index(engine, "plans", "idx_plans_session_id", ["session_id"])
+    _ensure_index(engine, "plans", "idx_plans_status", ["status"])
+    _ensure_index(engine, "tasks", "idx_tasks_plan_id", ["plan_id"])
+    _ensure_index(engine, "tasks", "idx_tasks_status", ["status"])
+    _ensure_index(engine, "page_versions", "idx_page_versions_page_created_at", ["page_id", "created_at"])
 
 
 def _normalize_v05_sources(engine) -> None:

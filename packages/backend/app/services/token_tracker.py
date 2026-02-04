@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
 from ..db.models import TokenUsage
@@ -34,39 +35,44 @@ class TokenTrackerService:
         return record
 
     def summarize_session(self, session_id: str) -> dict:
-        records = (
-            self.db.query(TokenUsage)
+        totals_row = (
+            self.db.query(
+                func.coalesce(func.sum(TokenUsage.input_tokens), 0),
+                func.coalesce(func.sum(TokenUsage.output_tokens), 0),
+                func.coalesce(func.sum(TokenUsage.total_tokens), 0),
+                func.coalesce(func.sum(TokenUsage.cost_usd), 0.0),
+            )
             .filter(TokenUsage.session_id == session_id)
-            .all()
+            .one()
         )
         total = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "cost_usd": 0.0,
+            "input_tokens": int(totals_row[0] or 0),
+            "output_tokens": int(totals_row[1] or 0),
+            "total_tokens": int(totals_row[2] or 0),
+            "cost_usd": float(totals_row[3] or 0.0),
         }
-        by_agent: dict[str, dict] = {}
-        for record in records:
-            total["input_tokens"] += record.input_tokens
-            total["output_tokens"] += record.output_tokens
-            total["total_tokens"] += record.total_tokens
-            total["cost_usd"] += record.cost_usd
 
-            agent = record.agent_type or "unknown"
-            agent_usage = by_agent.get(
-                agent,
-                {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "total_tokens": 0,
-                    "cost_usd": 0.0,
-                },
+        by_agent: dict[str, dict] = {}
+        rows = (
+            self.db.query(
+                TokenUsage.agent_type,
+                func.coalesce(func.sum(TokenUsage.input_tokens), 0),
+                func.coalesce(func.sum(TokenUsage.output_tokens), 0),
+                func.coalesce(func.sum(TokenUsage.total_tokens), 0),
+                func.coalesce(func.sum(TokenUsage.cost_usd), 0.0),
             )
-            agent_usage["input_tokens"] += record.input_tokens
-            agent_usage["output_tokens"] += record.output_tokens
-            agent_usage["total_tokens"] += record.total_tokens
-            agent_usage["cost_usd"] += record.cost_usd
-            by_agent[agent] = agent_usage
+            .filter(TokenUsage.session_id == session_id)
+            .group_by(TokenUsage.agent_type)
+            .all()
+        )
+        for agent_type, input_tokens, output_tokens, total_tokens, cost_usd in rows:
+            agent = agent_type or "unknown"
+            by_agent[agent] = {
+                "input_tokens": int(input_tokens or 0),
+                "output_tokens": int(output_tokens or 0),
+                "total_tokens": int(total_tokens or 0),
+                "cost_usd": float(cost_usd or 0.0),
+            }
 
         return {"total": total, "by_agent": by_agent}
 

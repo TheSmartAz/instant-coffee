@@ -7,13 +7,14 @@ from enum import Enum
 from threading import Lock
 from typing import Any, Literal, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, inspect
 from sqlalchemy.orm import Session as DbSession
 
 from ..db.models import (
     Plan,
     PlanEvent,
     SessionEvent,
+    SessionEventSequence,
     SessionEventSource,
     Task,
     TaskEvent,
@@ -59,6 +60,9 @@ class EventStoreService:
 
     _session_locks: dict[str, Lock] = {}
     _session_locks_guard = Lock()
+    _seq_cache: dict[str, int] = {}
+    _sequence_table_checked = False
+    _has_sequence_table = False
 
     def __init__(self, db: DbSession) -> None:
         self.db = db
@@ -87,12 +91,52 @@ class EventStoreService:
             return SessionEventSource.TASK
         return SessionEventSource.SESSION
 
+    @classmethod
+    def _check_sequence_table(cls, db: DbSession) -> None:
+        if cls._sequence_table_checked:
+            return
+        try:
+            inspector = inspect(db.get_bind())
+            cls._has_sequence_table = (
+                "session_event_sequences" in inspector.get_table_names()
+            )
+        except Exception:
+            cls._has_sequence_table = False
+        cls._sequence_table_checked = True
+
+    def _next_seq_from_table(self, session_id: str) -> int:
+        seq_row = self.db.get(SessionEventSequence, session_id)
+        if seq_row is None:
+            max_seq = (
+                self.db.query(func.max(SessionEvent.seq))
+                .filter(SessionEvent.session_id == session_id)
+                .scalar()
+            )
+            next_seq = int(max_seq or 0) + 1
+            seq_row = SessionEventSequence(
+                session_id=session_id,
+                next_seq=next_seq + 1,
+            )
+            self.db.add(seq_row)
+            self.db.flush([seq_row])
+            return next_seq
+        next_seq = int(seq_row.next_seq or 1)
+        seq_row.next_seq = next_seq + 1
+        self.db.add(seq_row)
+        self.db.flush([seq_row])
+        return next_seq
+
     def get_next_seq(self, session_id: str) -> int:
-        max_seq = (
-            self.db.query(func.max(SessionEvent.seq))
-            .filter(SessionEvent.session_id == session_id)
-            .scalar()
-        )
+        self._check_sequence_table(self.db)
+        if self.__class__._has_sequence_table:
+            return self._next_seq_from_table(session_id)
+        max_seq = self.__class__._seq_cache.get(session_id)
+        if max_seq is None:
+            max_seq = (
+                self.db.query(func.max(SessionEvent.seq))
+                .filter(SessionEvent.session_id == session_id)
+                .scalar()
+            )
         pending = [
             item.seq
             for item in self.db.new
@@ -102,7 +146,9 @@ class EventStoreService:
         ]
         if pending:
             max_seq = max(max_seq or 0, max(pending))
-        return int(max_seq or 0) + 1
+        next_seq = int(max_seq or 0) + 1
+        self.__class__._seq_cache[session_id] = next_seq
+        return next_seq
 
     def store_event(
         self,

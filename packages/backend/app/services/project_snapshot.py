@@ -136,7 +136,7 @@ class ProjectSnapshotService:
                 product_doc.id,
                 content=product_doc.content,
                 structured=product_doc.structured,
-                source=VersionSource.AUTO,
+                source=VersionSource.ROLLBACK,
                 change_summary=f"Rollback to snapshot {snapshot.snapshot_number}",
             )
 
@@ -151,7 +151,7 @@ class ProjectSnapshotService:
                 page_version = self._create_page_version(
                     page_id=page.id,
                     html=snap_page.rendered_html or "",
-                    source=VersionSource.AUTO,
+                    source=VersionSource.ROLLBACK,
                 )
                 page.current_version_id = page_version.id
                 page.updated_at = now

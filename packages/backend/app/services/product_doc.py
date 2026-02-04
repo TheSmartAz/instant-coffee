@@ -170,6 +170,9 @@ class ProductDocService:
         self,
         product_doc_id: str,
         include_released: bool = False,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[ProductDocHistory]:
         query = (
             self.db.query(ProductDocHistory)
@@ -177,7 +180,10 @@ class ProductDocService:
         )
         if not include_released:
             query = query.filter(ProductDocHistory.is_released.is_(False))
-        return query.order_by(ProductDocHistory.version.desc()).all()
+        query = query.order_by(ProductDocHistory.version.desc()).offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return query.all()
 
     def get_history_version(self, history_id: int) -> Optional[ProductDocHistory]:
         return self.db.get(ProductDocHistory, history_id)

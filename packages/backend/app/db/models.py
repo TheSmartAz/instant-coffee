@@ -67,6 +67,11 @@ class Message(Base):
 
     session = relationship("Session", back_populates="messages")
 
+    __table_args__ = (
+        Index("idx_messages_session_id", "session_id"),
+        Index("idx_messages_session_ts", "session_id", "timestamp"),
+    )
+
 
 class Version(Base):
     __tablename__ = "versions"
@@ -97,6 +102,11 @@ class TokenUsage(Base):
     cost_usd = Column(Float, nullable=False)
 
     session = relationship("Session", back_populates="token_usage")
+
+    __table_args__ = (
+        Index("idx_token_usage_session_id", "session_id"),
+        Index("idx_token_usage_session_ts", "session_id", "timestamp"),
+    )
 
 
 class PlanStatus(str, enum.Enum):
@@ -133,6 +143,11 @@ class Plan(Base):
     tasks = relationship("Task", back_populates="plan", cascade="all, delete-orphan")
     events = relationship("PlanEvent", back_populates="plan", cascade="all, delete-orphan")
 
+    __table_args__ = (
+        Index("idx_plans_session_id", "session_id"),
+        Index("idx_plans_status", "status"),
+    )
+
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -155,6 +170,11 @@ class Task(Base):
 
     plan = relationship("Plan", back_populates="tasks")
     events = relationship("TaskEvent", back_populates="task", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_tasks_plan_id", "plan_id"),
+        Index("idx_tasks_status", "status"),
+    )
 
 
 class PlanEvent(Base):
@@ -431,6 +451,7 @@ class PageVersion(Base):
     __table_args__ = (
         UniqueConstraint("page_id", "version", name="uq_page_versions_page_version"),
         Index("idx_page_versions_page_id", "page_id"),
+        Index("idx_page_versions_page_created_at", "page_id", "created_at"),
     )
 
 
@@ -451,6 +472,14 @@ class SessionEvent(Base):
     session = relationship("Session", back_populates="session_events")
 
     __table_args__ = (Index("idx_session_event_seq", "session_id", "seq"),)
+
+
+class SessionEventSequence(Base):
+    __tablename__ = "session_event_sequences"
+
+    session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True)
+    next_seq = Column(Integer, nullable=False, default=1)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 __all__ = [
@@ -475,4 +504,5 @@ __all__ = [
     "Page",
     "PageVersion",
     "SessionEvent",
+    "SessionEventSequence",
 ]

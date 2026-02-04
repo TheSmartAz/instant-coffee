@@ -86,13 +86,15 @@ class TaskService:
             task.completed_at = task.completed_at or now
         self.db.add(task)
         self.db.flush()
-        if status in (TaskStatus.FAILED.value, TaskStatus.ABORTED.value, TaskStatus.TIMEOUT.value):
-            self._block_dependents(task, reason=message)
-        if status in (TaskStatus.DONE.value, TaskStatus.SKIPPED.value):
-            self._unblock_dependents_if_ready(task.plan_id)
-        if previous_status != status and previous_status == TaskStatus.BLOCKED.value:
-            self._unblock_dependents_if_ready(task.plan_id)
-        self._plan_service.recompute_status(task.plan_id)
+        status_changed = previous_status != status
+        if status_changed:
+            if status in (TaskStatus.FAILED.value, TaskStatus.ABORTED.value, TaskStatus.TIMEOUT.value):
+                self._block_dependents(task, reason=message)
+            if status in (TaskStatus.DONE.value, TaskStatus.SKIPPED.value):
+                self._unblock_dependents_if_ready(task.plan_id)
+            if previous_status == TaskStatus.BLOCKED.value:
+                self._unblock_dependents_if_ready(task.plan_id)
+            self._plan_service.recompute_status(task.plan_id)
         return task
 
     def retry_task(self, task_id: str, *, max_retries: int = 3) -> Task:

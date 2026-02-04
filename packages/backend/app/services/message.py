@@ -20,11 +20,25 @@ class MessageService:
         self.db.flush()
         return record
 
-    def get_messages(self, session_id: str, *, limit: int = 50, offset: int = 0) -> List[Message]:
+    def get_messages(
+        self,
+        session_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        latest: bool = True,
+    ) -> List[Message]:
+        query = self.db.query(Message).filter(Message.session_id == session_id)
+        if latest:
+            messages = (
+                query.order_by(Message.timestamp.desc())
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return list(reversed(messages))
         return (
-            self.db.query(Message)
-            .filter(Message.session_id == session_id)
-            .order_by(Message.timestamp.asc())
+            query.order_by(Message.timestamp.asc())
             .offset(offset)
             .limit(limit)
             .all()
