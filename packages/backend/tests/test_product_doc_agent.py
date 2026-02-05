@@ -31,7 +31,14 @@ def test_generate_parsing_and_index_insert():
 ---MESSAGE---
 OK
 """
-    parsed = agent._parse_generate_response(content, user_message="Test", interview_context=None)
+    parsed = agent._parse_generate_response(
+        content,
+        user_message="Test",
+        interview_context=None,
+        product_type="landing",
+        complexity="simple",
+        doc_tier="checklist",
+    )
     structured = agent._ensure_index_page(parsed.structured, user_message="Test")
     slugs = [page.get("slug") for page in structured.get("pages", [])]
     assert "index" in slugs
@@ -51,7 +58,14 @@ Updated sections
 ---MESSAGE---
 Done
 """
-    parsed = agent._parse_update_response(content, current_structured={}, user_message="update")
+    parsed = agent._parse_update_response(
+        content,
+        current_structured={},
+        user_message="update",
+        product_type="landing",
+        complexity="simple",
+        doc_tier="checklist",
+    )
     assert parsed.affected_pages == ["index", "about"]
 
 
@@ -132,6 +146,27 @@ def test_generate_persists_product_doc_and_emits_event(tmp_path, monkeypatch):
     events = emitter.get_events()
     assert any(getattr(event, "type", None).value == "product_doc_generated" for event in events)
 
+
+def test_extended_mermaid_is_generated():
+    agent = _make_agent(None, "session-1")
+    payload = {
+        "product_type": "ecommerce",
+        "complexity": "complex",
+        "doc_tier": "extended",
+        "goal": "Test mermaid",
+        "pages": [
+            {"title": "Home", "slug": "index", "role": "landing"},
+            {"title": "Checkout", "slug": "checkout", "role": "checkout"},
+        ],
+        "data_flow": [
+            {"from_page": "index", "event": "start_checkout", "to_page": "checkout"},
+        ],
+    }
+    validated, errors = agent._validate_structured(payload)
+    assert not errors
+    assert "mermaid_page_flow" in validated
+    assert validated.get("mermaid_page_flow")
+    assert validated.get("mermaid_page_flow", "").startswith("graph")
 
 def test_update_persists_change_summary_and_emits_event(tmp_path, monkeypatch):
     db_path = tmp_path / "product_doc_update.db"

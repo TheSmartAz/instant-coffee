@@ -14,6 +14,7 @@ from ..events.models import (
     ToolResultEvent,
     TokenUsageEvent,
 )
+from ..llm.model_pool import FallbackTrigger, ModelRole, get_model_pool_manager
 from ..llm.openai_client import LLMResponse, OpenAIClient
 from ..services.token_tracker import TokenTrackerService
 
@@ -50,6 +51,9 @@ class BaseAgent:
         task_id=None,
         token_tracker: TokenTrackerService | None = None,
         emit_lifecycle_events: bool = True,
+        model_role: str | ModelRole | None = None,
+        product_type: str | None = None,
+        model_pool=None,
     ) -> None:
         self.db = db
         self.session_id = session_id
@@ -67,11 +71,94 @@ class BaseAgent:
             self.token_tracker = None
         self._llm_client: OpenAIClient | None = None
         self._warned_responses_fallback = False
+        self.model_role = model_role or self._infer_model_role()
+        self.product_type = product_type
+        self.model_pool = model_pool or get_model_pool_manager(self.settings)
 
     def _get_llm_client(self) -> OpenAIClient:
         if self._llm_client is None:
             self._llm_client = OpenAIClient(settings=self.settings, token_tracker=self.token_tracker)
         return self._llm_client
+
+    def _infer_model_role(self) -> str:
+        agent_type = getattr(self, "agent_type", "agent")
+        normalized = str(agent_type).strip().lower()
+        if normalized in {"classifier", "complexity"}:
+            return ModelRole.CLASSIFIER.value
+        if normalized in {"validator"}:
+            return ModelRole.VALIDATOR.value
+        return ModelRole.WRITER.value
+
+    def _resolve_model_role(self, override: str | ModelRole | None) -> str:
+        if override is None:
+            return str(self.model_role or "").strip().lower()
+        if isinstance(override, ModelRole):
+            return override.value
+        return str(override).strip().lower()
+
+    def _resolve_product_type(self, override: Optional[str]) -> Optional[str]:
+        if override:
+            return override
+        if self.product_type:
+            return self.product_type
+        if not self.db or not self.session_id:
+            return None
+        try:
+            from ..db.models import Session as SessionModel
+
+            session = self.db.get(SessionModel, self.session_id)
+            if session is None:
+                return None
+            return session.product_type
+        except Exception:
+            return None
+
+    def _resolve_preferred_model(self, role: str) -> Optional[str]:
+        if not self.db or not self.session_id:
+            return None
+        try:
+            from ..db.models import Session as SessionModel
+
+            session = self.db.get(SessionModel, self.session_id)
+            if session is None:
+                return None
+            field_map = {
+                "classifier": "model_classifier",
+                "writer": "model_writer",
+                "expander": "model_expander",
+                "validator": "model_validator",
+                "style_refiner": "model_style_refiner",
+            }
+            field = field_map.get(role)
+            if field and hasattr(session, field):
+                return getattr(session, field)
+        except Exception:
+            return None
+        return None
+
+    def _record_model_selection(self, role: str, model_id: str) -> None:
+        if not self.db or not self.session_id or not model_id:
+            return
+        try:
+            from ..db.models import Session as SessionModel
+
+            session = self.db.get(SessionModel, self.session_id)
+            if session is None:
+                return
+            field_map = {
+                "classifier": "model_classifier",
+                "writer": "model_writer",
+                "expander": "model_expander",
+                "validator": "model_validator",
+                "style_refiner": "model_style_refiner",
+            }
+            field = field_map.get(role)
+            if not field:
+                return
+            setattr(session, field, model_id)
+            self.db.add(session)
+        except Exception:
+            return
 
     def _use_chat_completions(self, client: OpenAIClient | None = None) -> bool:
         mode = getattr(self.settings, "openai_api_mode", "responses") or "responses"
@@ -101,84 +188,190 @@ class BaseAgent:
         stream: bool = False,
         emit_progress: bool = True,
         context: Optional[str] = None,
+        model_role: str | ModelRole | None = None,
+        product_type: Optional[str] = None,
+        fallback_checker: Optional[Callable[[LLMResponse], Optional[FallbackTrigger]]] = None,
         **kwargs: Any,
     ) -> LLMResponse:
         resolved_agent_type = agent_type or getattr(self, "agent_type", "agent")
         self._emit_agent_start(context=context, agent_type=resolved_agent_type)
-        client = self._get_llm_client()
 
         try:
-            if stream:
-                full_response = ""
-                last_progress = 0
-                stream_iter = (
-                    client.chat_completion_stream
-                    if self._use_chat_completions(client)
-                    else client.responses_stream
-                )
-                async for chunk in stream_iter(
-                    messages=messages,
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    **kwargs,
-                ):
-                    if not chunk:
-                        continue
-                    full_response += chunk
-                    if emit_progress:
-                        progress = min(90, 10 + len(full_response) // 200)
-                        if progress > last_progress:
-                            last_progress = progress
-                            self._emit_agent_progress(
-                                message=chunk[-200:],
-                                progress=progress,
-                                agent_type=resolved_agent_type,
-                            )
-                response = LLMResponse(content=full_response)
-            else:
-                if self._use_chat_completions(client):
-                    response = await client.chat_completion(
-                        messages=messages,
-                        model=model,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        tools=tools,
-                        **kwargs,
-                    )
-                else:
-                    response = await client.responses_create(
-                        messages=messages,
-                        model=model,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        tools=tools,
-                        **kwargs,
-                    )
-
-            if response.token_usage and self.token_tracker is not None:
-                self.token_tracker.record_usage(
-                    session_id=self.session_id,
-                    agent_type=resolved_agent_type,
-                    model=model or self.settings.model,
-                    input_tokens=response.token_usage.input_tokens,
-                    output_tokens=response.token_usage.output_tokens,
-                    cost_usd=response.token_usage.cost_usd,
-                )
-                self._emit_token_usage(
-                    input_tokens=response.token_usage.input_tokens,
-                    output_tokens=response.token_usage.output_tokens,
-                    total_tokens=response.token_usage.total_tokens,
-                    cost_usd=response.token_usage.cost_usd,
-                    agent_type=resolved_agent_type,
-                )
-
+            response = await self._call_llm_with_routing(
+                messages=messages,
+                resolved_agent_type=resolved_agent_type,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                stream=stream,
+                emit_progress=emit_progress,
+                model_role=model_role,
+                product_type=product_type,
+                fallback_checker=fallback_checker,
+                **kwargs,
+            )
             summary = response.content[:200] if response.content else None
             self._emit_agent_end(status="success", summary=summary, agent_type=resolved_agent_type)
             return response
         except Exception as exc:
             self._emit_agent_end(status="failed", summary=str(exc), agent_type=resolved_agent_type)
             raise
+
+    async def _call_llm_with_routing(
+        self,
+        *,
+        messages: list[dict],
+        resolved_agent_type: str,
+        model: Optional[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        tools: Optional[list[Any]],
+        stream: bool,
+        emit_progress: bool,
+        model_role: str | ModelRole | None,
+        product_type: Optional[str],
+        fallback_checker: Optional[Callable[[LLMResponse], Optional[FallbackTrigger]]],
+        **kwargs: Any,
+    ) -> LLMResponse:
+        resolved_model = model or self.settings.model
+        if model is not None or stream or not self.model_pool:
+            return await self._call_llm_once(
+                messages=messages,
+                resolved_agent_type=resolved_agent_type,
+                model=resolved_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                stream=stream,
+                emit_progress=emit_progress,
+                **kwargs,
+            )
+
+        role = self._resolve_model_role(model_role)
+        if not role:
+            return await self._call_llm_once(
+                messages=messages,
+                resolved_agent_type=resolved_agent_type,
+                model=resolved_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                stream=stream,
+                emit_progress=emit_progress,
+                **kwargs,
+            )
+
+        preferred_model = self._resolve_preferred_model(role)
+        resolved_product_type = self._resolve_product_type(product_type)
+        checker = self._wrap_fallback_checker(fallback_checker)
+
+        async def _invoke(model_id: str, client: OpenAIClient) -> LLMResponse:
+            return await self._call_llm_once(
+                messages=messages,
+                resolved_agent_type=resolved_agent_type,
+                model=model_id,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                stream=stream,
+                emit_progress=emit_progress,
+                client=client,
+                **kwargs,
+            )
+
+        result = await self.model_pool.run_with_fallback(
+            role=role,
+            product_type=resolved_product_type,
+            preferred_model=preferred_model,
+            call=_invoke,
+            response_checker=checker,
+        )
+        self._record_model_selection(role, result.model_id)
+        return result.result
+
+    async def _call_llm_once(
+        self,
+        messages: list[dict],
+        *,
+        resolved_agent_type: str,
+        model: str,
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        tools: Optional[list[Any]],
+        stream: bool,
+        emit_progress: bool,
+        client: OpenAIClient | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        resolved_client = client or self._get_llm_client()
+
+        if stream:
+            full_response = ""
+            last_progress = 0
+            stream_iter = (
+                resolved_client.chat_completion_stream
+                if self._use_chat_completions(resolved_client)
+                else resolved_client.responses_stream
+            )
+            async for chunk in stream_iter(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            ):
+                if not chunk:
+                    continue
+                full_response += chunk
+                if emit_progress:
+                    progress = min(90, 10 + len(full_response) // 200)
+                    if progress > last_progress:
+                        last_progress = progress
+                        self._emit_agent_progress(
+                            message=chunk[-200:],
+                            progress=progress,
+                            agent_type=resolved_agent_type,
+                        )
+            response = LLMResponse(content=full_response)
+        else:
+            if self._use_chat_completions(resolved_client):
+                response = await resolved_client.chat_completion(
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=tools,
+                    **kwargs,
+                )
+            else:
+                response = await resolved_client.responses_create(
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=tools,
+                    **kwargs,
+                )
+
+        if response.token_usage and self.token_tracker is not None:
+            self.token_tracker.record_usage(
+                session_id=self.session_id,
+                agent_type=resolved_agent_type,
+                model=model,
+                input_tokens=response.token_usage.input_tokens,
+                output_tokens=response.token_usage.output_tokens,
+                cost_usd=response.token_usage.cost_usd,
+            )
+            self._emit_token_usage(
+                input_tokens=response.token_usage.input_tokens,
+                output_tokens=response.token_usage.output_tokens,
+                total_tokens=response.token_usage.total_tokens,
+                cost_usd=response.token_usage.cost_usd,
+                agent_type=resolved_agent_type,
+            )
+
+        return response
 
     async def _call_llm_with_tools(
         self,
@@ -191,58 +384,181 @@ class BaseAgent:
         temperature: Optional[float] = None,
         max_iterations: int = 10,
         context: Optional[str] = None,
+        model_role: str | ModelRole | None = None,
+        product_type: Optional[str] = None,
+        fallback_checker: Optional[Callable[[LLMResponse], Optional[FallbackTrigger]]] = None,
         **kwargs: Any,
     ) -> LLMResponse:
         resolved_agent_type = agent_type or getattr(self, "agent_type", "agent")
         self._emit_agent_start(context=context, agent_type=resolved_agent_type)
-        wrapped_handlers = {
-            name: self._wrap_tool_handler(name, handler)
-            for name, handler in tool_handlers.items()
-        }
-        client = self._get_llm_client()
         try:
-            if self._use_chat_completions(client):
-                response = await client.chat_with_tools(
-                    messages=messages,
-                    tools=tools,
-                    tool_handlers=wrapped_handlers,
-                    model=model,
-                    temperature=temperature,
-                    max_iterations=max_iterations,
-                    **kwargs,
-                )
-            else:
-                response = await client.responses_with_tools(
-                    messages=messages,
-                    tools=tools,
-                    tool_handlers=wrapped_handlers,
-                    model=model,
-                    temperature=temperature,
-                    max_iterations=max_iterations,
-                    **kwargs,
-                )
-            if response.token_usage and self.token_tracker is not None:
-                self.token_tracker.record_usage(
-                    session_id=self.session_id,
-                    agent_type=resolved_agent_type,
-                    model=model or self.settings.model,
-                    input_tokens=response.token_usage.input_tokens,
-                    output_tokens=response.token_usage.output_tokens,
-                    cost_usd=response.token_usage.cost_usd,
-                )
-                self._emit_token_usage(
-                    input_tokens=response.token_usage.input_tokens,
-                    output_tokens=response.token_usage.output_tokens,
-                    total_tokens=response.token_usage.total_tokens,
-                    cost_usd=response.token_usage.cost_usd,
-                    agent_type=resolved_agent_type,
-                )
+            response = await self._call_llm_with_tools_routing(
+                messages=messages,
+                tools=tools,
+                tool_handlers=tool_handlers,
+                resolved_agent_type=resolved_agent_type,
+                model=model,
+                temperature=temperature,
+                max_iterations=max_iterations,
+                model_role=model_role,
+                product_type=product_type,
+                fallback_checker=fallback_checker,
+                **kwargs,
+            )
             summary = response.content[:200] if response.content else None
             self._emit_agent_end(status="success", summary=summary, agent_type=resolved_agent_type)
             return response
         except Exception as exc:
             self._emit_agent_end(status="failed", summary=str(exc), agent_type=resolved_agent_type)
             raise
+
+    async def _call_llm_with_tools_routing(
+        self,
+        *,
+        messages: list[dict],
+        tools: list[Any],
+        tool_handlers: dict[str, Callable[..., Any]],
+        resolved_agent_type: str,
+        model: Optional[str],
+        temperature: Optional[float],
+        max_iterations: int,
+        model_role: str | ModelRole | None,
+        product_type: Optional[str],
+        fallback_checker: Optional[Callable[[LLMResponse], Optional[FallbackTrigger]]],
+        **kwargs: Any,
+    ) -> LLMResponse:
+        resolved_model = model or self.settings.model
+        if model is not None or not self.model_pool:
+            return await self._call_llm_with_tools_once(
+                messages=messages,
+                tools=tools,
+                tool_handlers=tool_handlers,
+                resolved_agent_type=resolved_agent_type,
+                model=resolved_model,
+                temperature=temperature,
+                max_iterations=max_iterations,
+                **kwargs,
+            )
+
+        role = self._resolve_model_role(model_role)
+        if not role:
+            return await self._call_llm_with_tools_once(
+                messages=messages,
+                tools=tools,
+                tool_handlers=tool_handlers,
+                resolved_agent_type=resolved_agent_type,
+                model=resolved_model,
+                temperature=temperature,
+                max_iterations=max_iterations,
+                **kwargs,
+            )
+
+        preferred_model = self._resolve_preferred_model(role)
+        resolved_product_type = self._resolve_product_type(product_type)
+        checker = self._wrap_fallback_checker(fallback_checker)
+
+        async def _invoke(model_id: str, client: OpenAIClient) -> LLMResponse:
+            return await self._call_llm_with_tools_once(
+                messages=messages,
+                tools=tools,
+                tool_handlers=tool_handlers,
+                resolved_agent_type=resolved_agent_type,
+                model=model_id,
+                temperature=temperature,
+                max_iterations=max_iterations,
+                client=client,
+                **kwargs,
+            )
+
+        result = await self.model_pool.run_with_fallback(
+            role=role,
+            product_type=resolved_product_type,
+            preferred_model=preferred_model,
+            call=_invoke,
+            response_checker=checker,
+        )
+        self._record_model_selection(role, result.model_id)
+        return result.result
+
+    async def _call_llm_with_tools_once(
+        self,
+        messages: list[dict],
+        tools: list[Any],
+        tool_handlers: dict[str, Callable[..., Any]],
+        *,
+        resolved_agent_type: str,
+        model: str,
+        temperature: Optional[float],
+        max_iterations: int,
+        client: OpenAIClient | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        wrapped_handlers = {
+            name: self._wrap_tool_handler(name, handler)
+            for name, handler in tool_handlers.items()
+        }
+        resolved_client = client or self._get_llm_client()
+        if self._use_chat_completions(resolved_client):
+            response = await resolved_client.chat_with_tools(
+                messages=messages,
+                tools=tools,
+                tool_handlers=wrapped_handlers,
+                model=model,
+                temperature=temperature,
+                max_iterations=max_iterations,
+                **kwargs,
+            )
+        else:
+            response = await resolved_client.responses_with_tools(
+                messages=messages,
+                tools=tools,
+                tool_handlers=wrapped_handlers,
+                model=model,
+                temperature=temperature,
+                max_iterations=max_iterations,
+                **kwargs,
+            )
+        if response.token_usage and self.token_tracker is not None:
+            self.token_tracker.record_usage(
+                session_id=self.session_id,
+                agent_type=resolved_agent_type,
+                model=model,
+                input_tokens=response.token_usage.input_tokens,
+                output_tokens=response.token_usage.output_tokens,
+                cost_usd=response.token_usage.cost_usd,
+            )
+            self._emit_token_usage(
+                input_tokens=response.token_usage.input_tokens,
+                output_tokens=response.token_usage.output_tokens,
+                total_tokens=response.token_usage.total_tokens,
+                cost_usd=response.token_usage.cost_usd,
+                agent_type=resolved_agent_type,
+            )
+        return response
+
+    def _wrap_fallback_checker(
+        self,
+        checker: Optional[Callable[[LLMResponse], Optional[FallbackTrigger]]],
+    ) -> Optional[Callable[[LLMResponse], Optional[FallbackTrigger]]]:
+        if checker is None:
+            return None
+
+        def wrapped(response: LLMResponse) -> Optional[FallbackTrigger]:
+            trigger = checker(response)
+            if trigger is None:
+                return None
+            if isinstance(trigger, FallbackTrigger):
+                return trigger
+            if trigger is True:
+                return FallbackTrigger.INVALID_STRUCTURE
+            if isinstance(trigger, str):
+                normalized = trigger.strip().lower()
+                for item in FallbackTrigger:
+                    if item.value == normalized:
+                        return item
+            return None
+
+        return wrapped
 
     def _wrap_tool_handler(self, tool_name: str, handler: Callable[..., Any]) -> Callable[..., Any]:
         async def wrapped(*args: Any, **kwargs: Any) -> Any:

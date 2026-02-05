@@ -78,6 +78,7 @@ def get_product_doc(
         session_id=record.session_id,
         content=record.content,
         structured=record.structured or {},
+        version=record.version,
         status=_status_value(record.status),
         created_at=record.created_at,
         updated_at=record.updated_at,

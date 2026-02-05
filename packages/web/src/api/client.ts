@@ -1,3 +1,5 @@
+import type { ChatRequestPayload, ChatResponse } from '@/types'
+
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 export type RequestError = Error & {
@@ -76,6 +78,11 @@ export const api = {
       request<{ deleted: number }>(`/api/sessions/${id}/messages`, {
         method: 'DELETE',
       }),
+    abort: (id: string) =>
+      request<{ success: boolean; plan_ids: string[]; completed_tasks: string[]; aborted_tasks: string[] }>(
+        `/api/session/${id}/abort`,
+        { method: 'POST' }
+      ),
     revert: async (id: string, versionId: string | number) => {
       try {
         return await request<unknown>(
@@ -95,26 +102,20 @@ export const api = {
     },
   },
   chat: {
-    send: (
-      sessionId: string,
-      message: string,
-      options?: { interview?: boolean; generateNow?: boolean }
-    ) =>
-      request<unknown>('/api/chat', {
+    send: (payload: ChatRequestPayload) =>
+      request<ChatResponse>('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({
-          session_id: sessionId,
-          message,
-          interview: options?.interview,
-          generate_now: options?.generateNow,
-        }),
+        body: JSON.stringify(payload),
       }),
     streamUrl: (
-      sessionId: string,
+      sessionId: string | undefined,
       message?: string,
       options?: { interview?: boolean; generateNow?: boolean }
     ) => {
-      const params = new URLSearchParams({ session_id: sessionId })
+      const params = new URLSearchParams()
+      if (sessionId) {
+        params.set('session_id', sessionId)
+      }
       if (message) params.set('message', message)
       if (options?.interview !== undefined) {
         params.set('interview', options.interview ? 'true' : 'false')

@@ -1,7 +1,7 @@
 import * as React from 'react'
 import type { ExecutionEvent } from '@/types/events'
 import type { Plan, Task, TaskStatus } from '@/types/plan'
-import type { SessionTokenSummary, TokenUsage } from '@/types'
+import type { SessionTokenSummary } from '@/types'
 
 interface ProgressState {
   completed: number

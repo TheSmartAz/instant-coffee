@@ -4,11 +4,14 @@ import json
 import logging
 from datetime import datetime, timezone
 from enum import Enum
+from contextlib import contextmanager
 from threading import Lock
-from typing import Any, Literal, Optional
+import time
+from typing import Any, Iterator, Literal, Optional
 
 from sqlalchemy import func, inspect
 from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.exc import OperationalError
 
 from ..db.models import (
     Plan,
@@ -21,6 +24,8 @@ from ..db.models import (
 )
 from ..events.models import BaseEvent, PlanCreatedEvent, PlanUpdatedEvent
 from ..events.types import EXCLUDED_EVENT_TYPES, STRUCTURED_EVENT_TYPES
+from ..config import get_settings
+from ..db.database import get_database
 from .plan import PlanService
 
 logger = logging.getLogger(__name__)
@@ -63,10 +68,19 @@ class EventStoreService:
     _seq_cache: dict[str, int] = {}
     _sequence_table_checked = False
     _has_sequence_table = False
+    _sqlite_retry_delays = (0.05, 0.1, 0.2, 0.4)
 
     def __init__(self, db: DbSession) -> None:
         self.db = db
-        self._plan_service = PlanService(db)
+        self._seq_cache = self.__class__._seq_cache
+        settings = get_settings()
+        database_url = str(settings.database_url or "")
+        is_sqlite = database_url.startswith("sqlite")
+        is_memory = ":memory:" in database_url or "mode=memory" in database_url
+        # Use a dedicated writer session unless we're on in-memory SQLite (separate
+        # connections would create isolated databases).
+        self._use_separate_session = not (is_sqlite and is_memory)
+        self._database = get_database() if self._use_separate_session else None
 
     @classmethod
     def _get_session_lock(cls, session_id: str) -> Lock:
@@ -104,11 +118,11 @@ class EventStoreService:
             cls._has_sequence_table = False
         cls._sequence_table_checked = True
 
-    def _next_seq_from_table(self, session_id: str) -> int:
-        seq_row = self.db.get(SessionEventSequence, session_id)
+    def _next_seq_from_table(self, session_id: str, db: DbSession) -> int:
+        seq_row = db.get(SessionEventSequence, session_id)
         if seq_row is None:
             max_seq = (
-                self.db.query(func.max(SessionEvent.seq))
+                db.query(func.max(SessionEvent.seq))
                 .filter(SessionEvent.session_id == session_id)
                 .scalar()
             )
@@ -117,29 +131,30 @@ class EventStoreService:
                 session_id=session_id,
                 next_seq=next_seq + 1,
             )
-            self.db.add(seq_row)
-            self.db.flush([seq_row])
+            db.add(seq_row)
+            db.flush([seq_row])
             return next_seq
         next_seq = int(seq_row.next_seq or 1)
         seq_row.next_seq = next_seq + 1
-        self.db.add(seq_row)
-        self.db.flush([seq_row])
+        db.add(seq_row)
+        db.flush([seq_row])
         return next_seq
 
-    def get_next_seq(self, session_id: str) -> int:
-        self._check_sequence_table(self.db)
+    def get_next_seq(self, session_id: str, db: Optional[DbSession] = None) -> int:
+        resolved_db = db or self.db
+        self._check_sequence_table(resolved_db)
         if self.__class__._has_sequence_table:
-            return self._next_seq_from_table(session_id)
-        max_seq = self.__class__._seq_cache.get(session_id)
+            return self._next_seq_from_table(session_id, resolved_db)
+        max_seq = self._seq_cache.get(session_id)
         if max_seq is None:
             max_seq = (
-                self.db.query(func.max(SessionEvent.seq))
+                resolved_db.query(func.max(SessionEvent.seq))
                 .filter(SessionEvent.session_id == session_id)
                 .scalar()
             )
         pending = [
             item.seq
-            for item in self.db.new
+            for item in resolved_db.new
             if isinstance(item, SessionEvent)
             and item.session_id == session_id
             and item.seq is not None
@@ -147,8 +162,29 @@ class EventStoreService:
         if pending:
             max_seq = max(max_seq or 0, max(pending))
         next_seq = int(max_seq or 0) + 1
-        self.__class__._seq_cache[session_id] = next_seq
+        self._seq_cache[session_id] = next_seq
         return next_seq
+
+    def _is_sqlite_locked(self, exc: Exception) -> bool:
+        if not isinstance(exc, OperationalError):
+            return False
+        message = str(exc).lower()
+        return "database is locked" in message or "database is busy" in message
+
+    @contextmanager
+    def _writer_session(self) -> Iterator[DbSession]:
+        if not self._use_separate_session or self._database is None:
+            yield self.db
+            return
+        session = self._database.session()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def store_event(
         self,
@@ -157,6 +193,8 @@ class EventStoreService:
         payload: dict,
         source: Literal["session", "plan", "task"],
         created_at: Optional[datetime] = None,
+        *,
+        db: Optional[DbSession] = None,
     ) -> Optional[int]:
         event_type = getattr(type, "value", type)
         if not session_id or not self.should_store_event(event_type):
@@ -172,8 +210,9 @@ class EventStoreService:
         if created_at is None:
             created_at = datetime.now(timezone.utc)
 
+        resolved_db = db or self.db
         with self._get_session_lock(session_id):
-            seq = self.get_next_seq(session_id)
+            seq = self.get_next_seq(session_id, db=resolved_db)
             session_event = SessionEvent(
                 session_id=session_id,
                 seq=seq,
@@ -182,9 +221,9 @@ class EventStoreService:
                 source=source_enum,
                 created_at=created_at,
             )
-            self.db.add(session_event)
-            self.db.flush([session_event])
-        return seq
+            resolved_db.add(session_event)
+            resolved_db.flush([session_event])
+            return seq
 
     def get_events(
         self, session_id: str, since_seq: Optional[int] = None, limit: int = 1000
@@ -228,26 +267,42 @@ class EventStoreService:
         payload.pop("timestamp", None)
         payload.pop("session_id", None)
         session_id = event.session_id
-        if session_id:
-            source = self._infer_source(str(event_type), payload)
-            self.store_event(
-                session_id,
-                str(event_type),
-                payload,
-                source.value,
-                created_at=event.timestamp,
-            )
-
-        self._record_plan_task_event(event, str(event_type), payload)
+        delays = (0.0,) + self._sqlite_retry_delays
+        for attempt, delay in enumerate(delays, start=1):
+            try:
+                if delay:
+                    time.sleep(delay)
+                with self._writer_session() as db:
+                    if session_id:
+                        source = self._infer_source(str(event_type), payload)
+                        self.store_event(
+                            session_id,
+                            str(event_type),
+                            payload,
+                            source.value,
+                            created_at=event.timestamp,
+                            db=db,
+                        )
+                    self._record_plan_task_event(event, str(event_type), payload, db=db)
+                return
+            except OperationalError as exc:
+                if self._is_sqlite_locked(exc):
+                    if attempt < len(delays):
+                        logger.warning("Event store busy, retrying (attempt %s)", attempt)
+                        continue
+                    logger.warning("Event store busy, dropping event after retries")
+                    return
+                raise
 
     def _record_plan_task_event(
-        self, event: BaseEvent, event_type: str, payload: dict
+        self, event: BaseEvent, event_type: str, payload: dict, *, db: Optional[DbSession] = None
     ) -> None:
         """Maintain legacy plan/task event tables for compatibility."""
+        resolved_db = db or self.db
         timestamp = event.timestamp or datetime.now(timezone.utc)
         if isinstance(event, PlanCreatedEvent):
             plan_payload = payload.get("plan") or {}
-            plan = self._plan_service.upsert_plan_from_payload(
+            plan = PlanService(resolved_db).upsert_plan_from_payload(
                 plan_payload, session_id=event.session_id
             )
             if plan is None:
@@ -259,14 +314,14 @@ class EventStoreService:
                 payload=_safe_json_dumps(payload),
                 timestamp=timestamp,
             )
-            self.db.add(plan_event)
+            resolved_db.add(plan_event)
             return
 
         if isinstance(event, PlanUpdatedEvent):
             plan_id = payload.get("plan_id")
             if not plan_id:
                 return
-            if self.db.get(Plan, plan_id) is None:
+            if resolved_db.get(Plan, plan_id) is None:
                 return
             plan_event = PlanEvent(
                 plan_id=plan_id,
@@ -275,13 +330,13 @@ class EventStoreService:
                 payload=_safe_json_dumps(payload),
                 timestamp=timestamp,
             )
-            self.db.add(plan_event)
+            resolved_db.add(plan_event)
             return
 
         task_id = payload.get("task_id")
         if not task_id:
             return
-        task = self.db.get(Task, task_id)
+        task = resolved_db.get(Task, task_id)
         if task is None:
             logger.debug("Skipping event for unknown task_id=%s", task_id)
             return
@@ -299,7 +354,7 @@ class EventStoreService:
             payload=_safe_json_dumps(payload),
             timestamp=timestamp,
         )
-        self.db.add(task_event)
+        resolved_db.add(task_event)
 
 
 __all__ = ["EventStoreService"]

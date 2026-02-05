@@ -1,7 +1,7 @@
+import { File } from 'lucide-react'
 import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { docco } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import type { FileContent } from '../../types'
-import { cn } from '../../lib/utils'
 
 // Register languages
 import html from 'react-syntax-highlighter/dist/esm/languages/hljs/xml'
@@ -29,6 +29,11 @@ const LANGUAGE_NAMES: Record<string, string> = {
   markdown: 'Markdown',
   plaintext: 'Plain Text',
 }
+
+const SKELETON_LINE_WIDTHS = [
+  88, 72, 96, 83, 90, 77, 94, 81, 86, 73,
+  92, 79, 95, 80, 87, 76, 93, 78, 91, 74,
+]
 
 export function FileViewer({ file, isLoading }: FileViewerProps) {
   if (isLoading) {
@@ -105,7 +110,7 @@ function FileViewerSkeleton() {
             key={i}
             className="h-4 bg-muted animate-pulse rounded"
             style={{
-              width: `${60 + Math.random() * 40}%`,
+              width: `${SKELETON_LINE_WIDTHS[i % SKELETON_LINE_WIDTHS.length]}%`,
               animationDelay: `${i * 0.05}s`,
             }}
           />
@@ -120,6 +125,3 @@ function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`
 }
-
-// Import File icon for empty state
-import { File } from 'lucide-react'

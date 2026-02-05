@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from ..events.models import MultiPageDecisionEvent
+from ..utils.product_doc import extract_pages_from_markdown
 
 
 @dataclass
@@ -33,7 +34,9 @@ class AutoMultiPageDecider:
         if not isinstance(structured, dict):
             structured = {}
 
-        score, reasons = calculate_confidence(structured)
+        content = getattr(product_doc, "content", "") if product_doc is not None else ""
+        content_pages = extract_pages_from_markdown(content or "")
+        score, reasons = calculate_confidence(structured, content=content, content_pages=content_pages)
         decision = "single_page"
         risk = None
         suggested_pages = None
@@ -44,8 +47,12 @@ class AutoMultiPageDecider:
             decision = "suggest_multi_page"
             suggested_pages = _extract_suggested_pages(structured)
             if not suggested_pages:
-                suggested_pages = _default_suggested_pages()
-                risk = "No pages defined in ProductDoc; using default suggestions."
+                if content_pages:
+                    suggested_pages = content_pages
+                    risk = "Using pages derived from ProductDoc content."
+                else:
+                    suggested_pages = _default_suggested_pages()
+                    risk = "No pages defined in ProductDoc; using default suggestions."
 
         if score < 0.45:
             reasons.append("Scope appears focused; single page likely sufficient.")
@@ -72,7 +79,12 @@ class AutoMultiPageDecider:
         return result
 
 
-def calculate_confidence(structured: dict) -> tuple[float, List[str]]:
+def calculate_confidence(
+    structured: dict,
+    *,
+    content: str | None = None,
+    content_pages: Optional[List[dict]] = None,
+) -> tuple[float, List[str]]:
     score = 0.0
     reasons: List[str] = []
 
@@ -81,13 +93,18 @@ def calculate_confidence(structured: dict) -> tuple[float, List[str]]:
         page_count = len(pages)
     else:
         page_count = 0
+    content_page_count = len(content_pages or [])
+    effective_page_count = max(page_count, content_page_count)
 
-    if page_count >= 3:
+    if effective_page_count >= 3:
         score += 0.4
-        reasons.append(f"ProductDoc includes {page_count} pages.")
-    elif page_count >= 2:
+        reasons.append(f"ProductDoc includes {effective_page_count} pages.")
+    elif effective_page_count >= 2:
         score += 0.25
         reasons.append("ProductDoc includes multiple pages.")
+
+    if content_page_count > page_count and content_page_count:
+        reasons.append(f"ProductDoc content lists {content_page_count} pages.")
 
     features = structured.get("features") or []
     must_features = [f for f in features if isinstance(f, dict) and f.get("priority") == "must"]
@@ -99,6 +116,8 @@ def calculate_confidence(structured: dict) -> tuple[float, List[str]]:
         reasons.append("Multiple must-have features suggest more than one page.")
 
     description = structured.get("description") or ""
+    if not description and content:
+        description = content
     if not isinstance(description, str):
         description = ""
     description = description.lower()
@@ -109,6 +128,20 @@ def calculate_confidence(structured: dict) -> tuple[float, List[str]]:
         "about",
         "contact",
         "blog",
+        "settings",
+        "favorites",
+        "player",
+        "details",
+        "\u9996\u9875",
+        "\u5173\u4e8e",
+        "\u8054\u7cfb",
+        "\u670d\u52a1",
+        "\u4ea7\u54c1",
+        "\u535a\u5ba2",
+        "\u8bbe\u7f6e",
+        "\u6536\u85cf",
+        "\u8be6\u60c5",
+        "\u64ad\u653e",
     ]
     if any(keyword in description for keyword in multi_page_keywords):
         score += 0.2

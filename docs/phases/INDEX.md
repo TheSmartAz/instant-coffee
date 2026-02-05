@@ -2,13 +2,122 @@
 
 ## Overview
 
-This document provides an overview of all development phases organized by category (Frontend, Backend, Database). The project is organized into **spec versions** with v01 for CLI features and v02 for Web features.
+This document provides an overview of all development phases organized by category (Frontend, Backend, Database). The project is organized into **spec versions**.
 
-**Latest Version**: v0.4 - Multi-Page Generation + Product Doc + Workbench
+**Latest Version**: v0.6 - Skills 编排 + Orchestrator 路由 + 多模型路由 + 数据传递 + 风格参考 + 移动端约束
 
 ---
 
-## Version 0.4: Multi-Page Generation + Product Doc + Workbench
+## Version 0.6: Skills 编排 + Orchestrator 路由 + 多模型路由 + 数据传递 + 风格参考 + 移动端约束
+
+**Last Updated**: 2026-02-03 (B7 Aesthetic Scoring planned; O1 complete)
+
+### Database Phases (v06)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| D1 | Session Metadata Extension (✅ Complete) | P0 | Low | ✅ | - | - |
+
+### Backend Phases (v06)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| B1 | Skills Registry + Profiles + Guardrails (✅ Complete) | P0 | Medium | ✅ | - | B2, B3, B4 |
+| B2 | Orchestrator Routing + Style/Guardrail Injection (✅ Complete) | P0 | High | ⚠️ | B1 | B5, B6, B7 |
+| B3 | Style Reference Service (✅ Complete) | P0 | High | ⚠️ | B1 | B7 |
+| B4 | Product Doc Tiers (✅ Complete) | P0 | Medium | ⚠️ | B1 | B2 |
+| B5 | Data Protocol Generation (✅ Complete) | P0 | High | ⚠️ | B1, B2 | O1 |
+| B6 | Multi-model Routing (✅ Complete) | P0 | High | ⚠️ | B2, B3 | - |
+| B7 | Aesthetic Scoring (⏳ Planned) | P0 | Medium | ⚠️ | B3, B6 | - |
+| B8 | API: Chat Image Upload (✅ Complete) | P0 | Low | ✅ | - | - |
+
+### Frontend Phases (v06)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| F1 | Data Tab UI (✅ Complete) | P0 | Medium | ✅ | - | - |
+| F2 | Image Upload & @Page Support (✅ Complete) | P0 | High | ✅ | - | F4 |
+| F3 | Preview Message Bridge (✅ Complete) | P0 | Low | ✅ | - | - |
+| F4 | Page Mention Component (✅ Complete) | P0 | Medium | ⚠️ | F2 | - |
+
+### Output/Generated Phases (v06)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| O1 | Data Store Scripts (✅ Complete) | P0 | Medium | ⚠️ | B5 | - |
+
+### v06 Dependency Graph
+
+```
+Wave 1 - Start Immediately (no dependencies):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+D1 (Session Metadata Extension)
+F1 (Data Tab UI ✅)
+F2 (Image Upload & @Page Support ✅)
+F3 (Preview Message Bridge ✅)
+B8 (API: Chat Image Upload)
+
+Wave 2 - After Wave 1:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B1 (Skills Registry + Profiles + Guardrails ✅)
+F4 (Page Mention Component ✅)
+
+Wave 3 - After B1:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B4 (Product Doc Tiers ✅)
+B3 (Style Reference Service ✅)
+
+Wave 4 - After B1, B4:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B2 (Orchestrator Routing + Style/Guardrail Injection ✅)
+
+Wave 5 - After B2, B3:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B5 (Data Protocol Generation ✅)
+B6 (Multi-model Routing ✅)
+
+Wave 6 - After B3, B6:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B7 (Aesthetic Scoring ⏳)
+
+Wave 7 - After B5:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+O1 (Data Store Scripts ✅)
+```
+
+### v06 Migration Phases Mapping
+
+| Migration | Phases | Description |
+|-----------|--------|-------------|
+| M1 | B1, B2, B4 | Skill Registry + Orchestrator Routing |
+| M2 | B4 | Document Tiers & Structured Output |
+| M3 | F2, F4, B3, B8 | Style Reference + @Page |
+| M4 | F1, F3, B5, O1 | Data Protocol & Data Tab |
+| M5 | B6, B7 | Multi-model Routing + Aesthetic Scoring |
+
+### Parallel Development Guide (v06)
+
+You can run **3 Claude Code instances in parallel**:
+
+1. **Frontend Agent**: F1 → F2 → F3 → F4
+2. **Backend Agent**: B8 → B1 → B4 → B3 → B2 → B5 → B6 → B7
+3. **Database Agent**: D1
+
+**Critical Path (v06)**: B1 → B4 → B2 → B5 → O1
+
+**Independent Work (v06)**: F1, F2, F3, F4, D1, B8
+
+---
+
+## Version 0.5: (Placeholder)
+
+| Version | Spec | Status | Key Features |
+|---------|------|--------|--------------|
+| v0.5 | spec-05.md | ✅ Complete | Version management, Responses API |
+
+---
+
+## Version 0.4: Multi-Page Generation + Product Doc + Workbench (Complete ✅)
 
 ### Database Phases (v04)
 
@@ -43,97 +152,7 @@ This document provides an overview of all development phases organized by catego
 | F6 | Chat & Event Integration (✅ Complete) | P0 | Medium | ⚠️ | B9 | F7 |
 | F7 | ProjectPage Layout Update (✅ Complete) | P0 | Medium | ⚠️ | F4, F5, F6 | - |
 
-### v04 Dependency Graph
-
-```
-Wave 1 - Start Immediately (no dependencies):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-D1 (ProductDoc & Page Schema)
-
-Wave 2 - After D1:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B1 (ProductDoc Service)
-B2 (Page & PageVersion Service)
-B4 (Sitemap Agent & AutoMultiPageDecider)
-
-Wave 3 - After B1:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B3 (ProductDoc Agent) (✅)
-B8 (Files API) (✅)
-F1 (ProductDocPanel)
-
-Wave 4 - After B2:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B6 (GenerationAgent Update) (✅)
-F2 (PreviewPanel Multi-Page)
-
-Wave 5 - After B3, B4:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B5 (Orchestrator Update) (✅)
-
-Wave 6 - After B5, B6:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B7 (RefinementAgent Update) (✅)
-B9 (Chat API Update) (✅)
-
-Wave 7 - After B8:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-F3 (CodePanel)
-
-Wave 8 - After F1, F2, F3:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-F4 (WorkbenchPanel)
-
-Wave 9 - After F4, B9 (✅):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-F5 (VersionPanel Update) (✅)
-F6 (Chat & Event Integration) (✅)
-
-Wave 10 - After F5, F6 (✅):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-F7 (ProjectPage Layout Update) (✅)
-
-Parallel Track - After B2, B8:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-B10 (Export Service Update) (✅)
-```
-
-### Critical Path (v0.4)
-
-```
-D1 → B1 → B3 → B5 → B9 → F6 → F7
-          ↓
-D1 → B2 → B6 → B7
-          ↓
-D1 → B4 ─┘
-
-Longest Path: D1 → B1 → B3 → B5 → B9 → F6 → F7
-```
-
-### Parallel Development Guide
-
-You can run **3+ Claude Code instances in parallel**:
-
-1. **Database Agent**: D1 first
-2. **Backend Agent 1 (ProductDoc)**: B1 → B3 → B5 (part) → B9
-3. **Backend Agent 2 (Pages)**: B2 → B6 → B7 → B10
-4. **Backend Agent 3 (Sitemap/Files)**: B4 → B8
-5. **Frontend Agent**: F1, F2, F3 (wait for backend) → F4 → F5, F6 → F7
-
-### Wave-by-Wave Execution Plan
-
-| Wave | Database | Backend | Frontend |
-|------|----------|---------|----------|
-| 1 | D1 (✅) | - | - |
-| 2 | - | B1 (✅), B2 (✅), B4 (✅) | - |
-| 3 | - | B3 (✅), B8 (✅) | F1 (✅) |
-| 4 | - | B6 (✅) | F2 (✅) |
-| 5 | - | B5 (✅) | - |
-| 6 | - | B7 (✅), B9 (✅) | - |
-| 7 | - | B10 (✅) | F3 (✅) |
-| 8 | - | - | F4 (✅) |
-| 9 | - | - | F5 (✅), F6 (✅) |
-| 10 | - | - | F7 (✅) |
+**v0.4 Status: Complete ✅**
 
 ---
 
@@ -232,28 +251,31 @@ docs/
 ├── phases/
 │   ├── INDEX.md (this file)
 │   │
-│   ├── v04 - Multi-Page + ProductDoc + Workbench
+│   ├── e2e/
+│   │   └── v06-e2e-test-plan.md
+│   │
+│   ├── v06 - Skills 编排 + Orchestrator 路由 + 多模型路由 + 数据传递 + 风格参考
 │   │   ├── database/
-│   │   │   └── v04-phase-d1-product-doc-page-schema.md
+│   │   │   └── v06-phase-d1-session-metadata.md
 │   │   ├── backend/
-│   │   │   ├── v04-phase-b1-product-doc-service.md
-│   │   │   ├── v04-phase-b2-page-service.md
-│   │   │   ├── v04-phase-b3-product-doc-agent.md
-│   │   │   ├── v04-phase-b4-sitemap-agent.md
-│   │   │   ├── v04-phase-b5-orchestrator-update.md
-│   │   │   ├── v04-phase-b6-generation-agent-update.md
-│   │   │   ├── v04-phase-b7-refinement-agent-update.md
-│   │   │   ├── v04-phase-b8-files-api.md
-│   │   │   ├── v04-phase-b9-chat-api-update.md
-│   │   │   └── v04-phase-b10-export-service-update.md
-│   │   └── frontend/
-│   │       ├── v04-phase-f1-product-doc-panel.md
-│   │       ├── v04-phase-f2-preview-panel-multipage.md
-│   │       ├── v04-phase-f3-code-panel.md
-│   │       ├── v04-phase-f4-workbench-panel.md
-│   │       ├── v04-phase-f5-version-panel-update.md
-│   │       ├── v04-phase-f6-chat-event-integration.md
-│   │       └── v04-phase-f7-project-page-update.md
+│   │   │   ├── v06-phase-b1-skills-registry.md
+│   │   │   ├── v06-phase-b2-orchestrator-routing.md
+│   │   │   ├── v06-phase-b3-style-reference.md
+│   │   │   ├── v06-phase-b4-product-doc-tiers.md
+│   │   │   ├── v06-phase-b5-data-protocol.md
+│   │   │   ├── v06-phase-b6-multi-model-routing.md
+│   │   │   ├── v06-phase-b7-aesthetic-scoring.md
+│   │   │   └── v06-phase-b8-chat-image-api.md
+│   │   ├── frontend/
+│   │   │   ├── v06-phase-f1-data-tab.md
+│   │   │   ├── v06-phase-f2-image-upload-page.md
+│   │   │   ├── v06-phase-f3-preview-bridge.md
+│   │   │   └── v06-phase-f4-page-mention.md
+│   │   └── output/
+│   │       └── v06-phase-o1-data-store-scripts.md
+│   │
+│   ├── v04 - Multi-Page + ProductDoc + Workbench (Complete ✅)
+│   │   └── ...
 │   │
 │   ├── v03 - Agent LLM Calling + Tools (Complete ✅)
 │   │   └── ...
@@ -267,36 +289,33 @@ docs/
 
 ---
 
-## Quick Start Commands for v0.4
+## Quick Start Commands for v0.6
 
 ```bash
 # Database Developer
-cat docs/phases/database/v04-phase-d1-product-doc-page-schema.md
+cat docs/phases/database/v06-phase-d1-session-metadata.md
 
-# Backend Developer 1 (ProductDoc)
-cat docs/phases/backend/v04-phase-b1-product-doc-service.md
-cat docs/phases/backend/v04-phase-b3-product-doc-agent.md
-cat docs/phases/backend/v04-phase-b9-chat-api-update.md
-
-# Backend Developer 2 (Pages)
-cat docs/phases/backend/v04-phase-b2-page-service.md
-cat docs/phases/backend/v04-phase-b6-generation-agent-update.md
-cat docs/phases/backend/v04-phase-b7-refinement-agent-update.md
-cat docs/phases/backend/v04-phase-b10-export-service-update.md
-
-# Backend Developer 3 (Sitemap/Files)
-cat docs/phases/backend/v04-phase-b4-sitemap-agent.md
-cat docs/phases/backend/v04-phase-b5-orchestrator-update.md
-cat docs/phases/backend/v04-phase-b8-files-api.md
+# Backend Developer
+cat docs/phases/backend/v06-phase-b1-skills-registry.md
+cat docs/phases/backend/v06-phase-b2-orchestrator-routing.md
+cat docs/phases/backend/v06-phase-b3-style-reference.md
+cat docs/phases/backend/v06-phase-b4-product-doc-tiers.md
+cat docs/phases/backend/v06-phase-b5-data-protocol.md
+cat docs/phases/backend/v06-phase-b6-multi-model-routing.md
+cat docs/phases/backend/v06-phase-b7-aesthetic-scoring.md
+cat docs/phases/backend/v06-phase-b8-chat-image-api.md
 
 # Frontend Developer
-cat docs/phases/frontend/v04-phase-f1-product-doc-panel.md
-cat docs/phases/frontend/v04-phase-f2-preview-panel-multipage.md
-cat docs/phases/frontend/v04-phase-f3-code-panel.md
-cat docs/phases/frontend/v04-phase-f4-workbench-panel.md
-cat docs/phases/frontend/v04-phase-f5-version-panel-update.md
-cat docs/phases/frontend/v04-phase-f6-chat-event-integration.md
-cat docs/phases/frontend/v04-phase-f7-project-page-update.md
+cat docs/phases/frontend/v06-phase-f1-data-tab.md
+cat docs/phases/frontend/v06-phase-f2-image-upload-page.md
+cat docs/phases/frontend/v06-phase-f3-preview-bridge.md
+cat docs/phases/frontend/v06-phase-f4-page-mention.md
+
+# Output/Generated Scripts
+cat docs/phases/output/v06-phase-o1-data-store-scripts.md
+
+# E2E Test Plan
+cat docs/phases/e2e/v06-e2e-test-plan.md
 ```
 
 ---
@@ -309,11 +328,12 @@ cat docs/phases/frontend/v04-phase-f7-project-page-update.md
 | v0.2 | spec-02.md | ✅ Complete | Web Frontend, Planner, Executor |
 | v0.3 | spec-03.md | ✅ Complete | LLM Calling, Tools, Real Agents |
 | v0.4 | spec-04.md | ✅ Complete | Multi-Page, Product Doc, Workbench |
+| v0.5 | spec-05.md | ✅ Complete | Version management, Responses API |
+| v0.6 | spec-06.md | 🚧 In Progress | Skills, Orchestrator, Multi-model, Data Protocol, Style Ref |
 
 ---
 
-**Document Version**: v3.1
-**Last Updated**: 2026-02-02
-**Total Phases (v04)**: 18 (1 Database, 10 Backend, 7 Frontend)
-**Current Spec**: v0.4 - Multi-Page Generation + Product Doc + Workbench
-**v04 Progress**: 18/18 complete (✅ All phases done)
+**Document Version**: v4.0
+**Last Updated**: 2026-02-03
+**Total Phases (v06)**: 14 (1 Database, 8 Backend, 4 Frontend, 1 Output)
+**Current Spec**: v0.6 - Skills 编排 + Orchestrator 路由 + 多模型路由 + 数据传递 + 风格参考

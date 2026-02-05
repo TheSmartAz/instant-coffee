@@ -27,7 +27,7 @@ const statusLabels: Record<ProductDocStatus, string> = {
 const statusClasses: Record<ProductDocStatus, string> = {
   draft: 'bg-orange-600 text-white ring-1 ring-orange-400/60 dark:bg-orange-500 dark:text-white dark:ring-orange-300/40',
   confirmed: 'bg-emerald-700 text-white ring-1 ring-emerald-500/60 dark:bg-emerald-600 dark:text-white dark:ring-emerald-400/40',
-  outdated: 'bg-orange-200 text-orange-900 ring-1 ring-orange-300 dark:bg-orange-400/20 dark:text-orange-200 dark:ring-orange-300/40',
+  outdated: 'bg-black text-white ring-1 ring-black/60',
 }
 
 function StatusBadge({ status }: { status: ProductDocStatus }) {

@@ -289,7 +289,7 @@ sonner, switch, tabs, textarea, toast, toaster, tooltip.
 | OpenAI Key | `OPENAI_API_KEY` | - |
 | OpenAI Base | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
 | OpenAI 超时 | `OPENAI_TIMEOUT_SECONDS` | `60.0` |
-| OpenAI 最大重试 | `OPENAI_MAX_RETRIES` | `3` |
+| OpenAI 最大重试 | `OPENAI_MAX_RETRIES` | `2` |
 | OpenAI 基础退避 | `OPENAI_BASE_DELAY` | `1.0` |
 | Anthropic Key | `ANTHROPIC_API_KEY` | - |
 | Anthropic Base | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` |
@@ -301,6 +301,8 @@ sonner, switch, tabs, textarea, toast, toaster, tooltip.
 | 最大 Token | `MAX_TOKENS` | `8000` |
 | 自动保存 | `AUTO_SAVE` | `true` |
 | 最大并发 | `MAX_CONCURRENCY` | `3` |
+| Interview 超时 | `INTERVIEW_TIMEOUT_SECONDS` | `60.0` |
+| Product Doc 超时 | `PRODUCT_DOC_TIMEOUT_SECONDS` | `120.0` |
 
 ### 前端运行时配置
 - `VITE_API_URL`（默认 `http://localhost:8000`）

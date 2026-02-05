@@ -8,8 +8,10 @@ from typing import Any, List, Optional
 from .base import BaseAgent
 from .prompts import get_sitemap_prompt
 from ..events.models import SitemapProposedEvent
+from ..llm.model_pool import ModelRole
 from ..schemas.sitemap import GlobalStyle, NavItem, SitemapPage, SitemapResult as SitemapSchema
 from ..utils.style import build_global_style, normalize_hex_color
+from ..utils.product_doc import extract_pages_from_markdown
 
 
 @dataclass
@@ -34,7 +36,15 @@ class SitemapAgent(BaseAgent):
     agent_type = "sitemap"
 
     def __init__(self, db, session_id: str, settings, event_emitter=None, agent_id=None, task_id=None) -> None:
-        super().__init__(db, session_id, settings, event_emitter=event_emitter, agent_id=agent_id, task_id=task_id)
+        super().__init__(
+            db,
+            session_id,
+            settings,
+            event_emitter=event_emitter,
+            agent_id=agent_id,
+            task_id=task_id,
+            model_role=ModelRole.EXPANDER,
+        )
         self.system_prompt = get_sitemap_prompt()
 
     async def generate(
@@ -44,13 +54,13 @@ class SitemapAgent(BaseAgent):
         explicit_multi_page: bool = False,
     ) -> SitemapResult:
         structured = _coerce_structured(product_doc)
+        structured = _merge_structured_pages(structured, product_doc)
         design_direction = _extract_design_direction(structured)
 
         messages = self._build_messages(structured=structured, multi_page=multi_page)
         response = await self._call_llm(
             messages=messages,
             agent_type=self.agent_type,
-            model=self.settings.model,
             temperature=self.settings.temperature,
             context="sitemap",
         )
@@ -254,6 +264,24 @@ def _coerce_structured(product_doc: Any) -> dict:
     if not isinstance(structured, dict):
         return {}
     return structured
+
+
+def _merge_structured_pages(structured: dict, product_doc: Any) -> dict:
+    if not isinstance(structured, dict):
+        structured = {}
+
+    existing_pages = structured.get("pages")
+    if isinstance(existing_pages, list) and len(existing_pages) > 1:
+        return structured
+
+    content = getattr(product_doc, "content", "") if product_doc is not None else ""
+    derived_pages = extract_pages_from_markdown(content or "")
+    if not derived_pages:
+        return structured
+
+    merged = dict(structured)
+    merged["pages"] = derived_pages
+    return merged
 
 
 def _extract_design_direction(structured: dict) -> dict:

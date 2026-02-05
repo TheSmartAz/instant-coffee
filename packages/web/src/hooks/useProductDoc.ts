@@ -7,6 +7,7 @@ type ApiProductDoc = {
   session_id?: string
   content?: string
   structured?: unknown
+  version?: number
   status?: string
   created_at?: string
   updated_at?: string
@@ -39,6 +40,7 @@ const normalizeProductDoc = (data: unknown): ProductDoc | null => {
       pages: [],
       constraints: [],
     },
+    version: doc.version ?? 1,
     status: (doc.status ?? 'draft') as ProductDocStatus,
     createdAt: toDate(doc.created_at),
     updatedAt: toDate(doc.updated_at),

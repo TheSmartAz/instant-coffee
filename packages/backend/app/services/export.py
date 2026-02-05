@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from ..config import get_settings
 from ..db.models import Page, ProductDocStatus, Session as SessionModel
+from ..services.data_protocol import DataProtocolGenerator
 from ..services.filesystem import FilesystemService
 from ..services.page import PageService
 from ..services.page_version import PageVersionService
@@ -21,6 +22,9 @@ from ..utils.html import ensure_css_link, rewrite_internal_links_for_export, str
 from ..utils.style import build_site_css, normalize_global_style
 
 logger = logging.getLogger(__name__)
+
+_FLOW_PRODUCT_TYPES = {"ecommerce", "booking", "dashboard"}
+_STATIC_PRODUCT_TYPES = {"landing", "card", "invitation"}
 
 
 @dataclass
@@ -119,6 +123,7 @@ class ExportService:
             resolved_global_style=resolved_global_style,
             design_direction=design_direction,
         )
+        assets.extend(self._write_data_protocol_assets(export_dir, session, product_doc))
 
         product_doc_included = self._write_product_doc(
             export_dir=export_dir,
@@ -251,6 +256,7 @@ class ExportService:
             resolved_global_style=resolved_global_style,
             design_direction=design_direction,
         )
+        assets.extend(self._write_data_protocol_assets(export_dir, session, product_doc))
 
         product_doc_included = self._write_product_doc(
             export_dir=export_dir,
@@ -307,6 +313,42 @@ class ExportService:
             }
         ]
 
+    def _write_data_protocol_assets(
+        self,
+        export_dir: Path,
+        session: SessionModel,
+        product_doc,
+    ) -> List[dict]:
+        product_type = self._resolve_product_type(product_doc, session)
+        if product_type not in _FLOW_PRODUCT_TYPES and product_type not in _STATIC_PRODUCT_TYPES:
+            return []
+        generator = DataProtocolGenerator(
+            output_dir=str(export_dir.parent),
+            session_id=session.id,
+            db=self.db,
+        )
+        contract = generator.generate_state_contract(product_type, skill_id=session.skill_id)
+        include_client = product_type in _FLOW_PRODUCT_TYPES
+        assets = generator.write_shared_assets(product_type, contract, include_client=include_client)
+        output = [
+            {
+                "path": "shared/state-contract.json",
+                "size": assets.contract_path.stat().st_size,
+            },
+            {
+                "path": "shared/data-store.js",
+                "size": assets.data_store_path.stat().st_size,
+            },
+        ]
+        if assets.data_client_path is not None:
+            output.append(
+                {
+                    "path": "shared/data-client.js",
+                    "size": assets.data_client_path.stat().st_size,
+                }
+            )
+        return output
+
     def _write_product_doc(
         self,
         *,
@@ -351,6 +393,15 @@ class ExportService:
             if page not in ordered:
                 ordered.append(page)
         return ordered
+
+    def _resolve_product_type(self, product_doc, session: SessionModel) -> str:
+        if product_doc is not None and isinstance(getattr(product_doc, "structured", None), dict):
+            value = product_doc.structured.get("product_type") or product_doc.structured.get("productType")
+            if value:
+                return str(value).strip().lower()
+        if session and session.product_type:
+            return str(session.product_type).strip().lower()
+        return "unknown"
 
     def _resolve_style_inputs(self, product_doc, global_style: Optional[dict]) -> tuple[dict, dict]:
         structured = {}

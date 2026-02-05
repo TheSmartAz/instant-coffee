@@ -1,6 +1,6 @@
 import * as React from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Settings, Activity, Trash2 } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ArrowLeft, Settings, Activity, Trash2, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
@@ -26,14 +26,21 @@ import { usePages } from '@/hooks/usePages'
 import { useProductDoc } from '@/hooks/useProductDoc'
 import { toast } from '@/hooks/use-toast'
 
+const LAST_PROJECT_KEY = 'instant-coffee:last-project-id'
+
 export function ProjectPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const [isVersionPanelCollapsed, setIsVersionPanelCollapsed] = React.useState(false)
   const [isRefreshing, setIsRefreshing] = React.useState(false)
   const [isExporting, setIsExporting] = React.useState(false)
+  const [isAborting, setIsAborting] = React.useState(false)
   const [activeTab, setActiveTab] = React.useState<'chat' | 'events'>('chat')
   const [workbenchTab, setWorkbenchTab] = React.useState<WorkbenchTab>('preview')
   const [appMode, setAppMode] = React.useState(false)
+  const [pagePreviewVersion, setPagePreviewVersion] = React.useState<number | null>(
+    null
+  )
   const sessionId = id && id !== 'new' ? id : undefined
   const { session, messages, versions, isLoading, error, refresh, setMessages } =
     useSession(sessionId)
@@ -59,20 +66,10 @@ export function ProjectPage() {
         setWorkbenchTab('preview')
       }
     },
-    onPagePreviewReady: (pageId, payload) => {
+    onPagePreviewReady: (pageId) => {
       // Load preview when ready
       if (pageId === selectedPageId) {
-        if (appMode) {
-          void loadPagePreview(pageId, { bustCache: true })
-          return
-        }
-        if (payload.previewUrl) {
-          setPreviewUrl(payload.previewUrl)
-          setPreviewHtml(null)
-        } else if (payload.html) {
-          setPreviewHtml(payload.html)
-          setPreviewUrl(null)
-        }
+        void loadPagePreview(pageId, { bustCache: true })
       }
     },
   })
@@ -81,7 +78,7 @@ export function ProjectPage() {
   const hasRequestedPagesRef = React.useRef(false)
 
   // ProductDoc state management - auto-switch on events
-  useProductDoc(sessionId, {
+  const { productDoc } = useProductDoc(sessionId, {
     onProductDocGenerated: () => {
       setWorkbenchTab('product-doc')
     },
@@ -104,6 +101,7 @@ export function ProjectPage() {
     async (pageId: string, options?: { bustCache?: boolean }) => {
       try {
         const preview = await api.pages.getPreview(pageId)
+        setPagePreviewVersion(preview.version ?? null)
         if (appMode) {
           setPreviewHtml(preview.html ?? null)
           setPreviewUrl(null)
@@ -117,6 +115,7 @@ export function ProjectPage() {
         if (status === 404) {
           setPreviewHtml(null)
           setPreviewUrl(null)
+          setPagePreviewVersion(null)
           return
         }
         console.error('Failed to load page preview:', err)
@@ -132,6 +131,10 @@ export function ProjectPage() {
     sessionId,
     messages,
     setMessages,
+    onSessionCreated: (newSessionId) => {
+      if (id && id !== 'new') return
+      navigate(`/project/${newSessionId}`, { replace: true })
+    },
     onPreview: (payload) => {
       if (payload.html) {
         setPreviewHtml(payload.html)
@@ -194,6 +197,16 @@ export function ProjectPage() {
     clearEvents()
   }, [sessionId, clearEvents])
 
+  // Remember the last visited project for the "Back" button in Settings
+  React.useEffect(() => {
+    if (!sessionId) return
+    try {
+      localStorage.setItem(LAST_PROJECT_KEY, sessionId)
+    } catch {
+      // ignore storage failures
+    }
+  }, [sessionId])
+
   React.useEffect(() => {
     if (!sessionId) {
       setHasLoadedPages(false)
@@ -246,6 +259,10 @@ export function ProjectPage() {
       setPreviewUrl(null)
     }
   }, [hasPages, previewUrl])
+
+  React.useEffect(() => {
+    setPagePreviewVersion(null)
+  }, [selectedPageId])
 
   React.useEffect(() => {
     if (!selectedPageId) return
@@ -328,6 +345,7 @@ export function ProjectPage() {
   }
 
   const canClearChat = Boolean(sessionId) && (messages.length > 0 || chat.isStreaming)
+  const canAbort = Boolean(sessionId) && !isAborting
 
   const handleClearChat = async () => {
     if (!sessionId) return
@@ -336,6 +354,21 @@ export function ProjectPage() {
       toast({ title: 'Chat cleared' })
     } catch {
       // Error toast handled in hook
+    }
+  }
+
+  const handleAbort = async () => {
+    if (!sessionId) return
+    setIsAborting(true)
+    try {
+      await api.sessions.abort(sessionId)
+      chat.stopStream()
+      toast({ title: 'Execution aborted' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Abort failed'
+      toast({ title: 'Abort failed', description: message })
+    } finally {
+      setIsAborting(false)
     }
   }
 
@@ -368,7 +401,11 @@ export function ProjectPage() {
   const handleBuildFromDoc = React.useCallback(() => {
     if (!sessionId) return
     void chat.sendMessage('Start building', { generateNow: true })
-  }, [chat.sendMessage, sessionId])
+  }, [chat, sessionId])
+
+  const activeSessionVersion =
+    versions.find((version) => version.isCurrent)?.number ?? session?.currentVersion ?? null
+  const previewVersionLabel = hasPages ? pagePreviewVersion : activeSessionVersion
 
   return (
     <div className="flex h-screen flex-col animate-in fade-in">
@@ -424,32 +461,60 @@ export function ProjectPage() {
                     {activeTab === 'chat' ? chatStatus : eventStatus}
                   </span>
                   {activeTab === 'chat' ? (
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          disabled={!canClearChat}
-                          aria-label="Clear chat"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Clear chat?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            This will delete all chat messages for the current session. ProductDoc / Pages / Versions will be kept.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={handleClearChat}>
-                            Clear chat
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
+                    <div className="flex items-center gap-1">
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={!canAbort}
+                            aria-label="Abort current execution"
+                          >
+                            <Square className="h-4 w-4" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Abort current execution?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This will stop the current run for this session. You can start a new run afterwards.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleAbort}>
+                              Abort run
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={!canClearChat}
+                            aria-label="Clear chat"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Clear chat?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This will delete all chat messages for the current session. ProductDoc / Pages / Versions will be kept.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleClearChat}>
+                              Clear chat
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
                   ) : null}
                 </div>
               </div>
@@ -477,6 +542,7 @@ export function ProjectPage() {
                   showHeader={false}
                   showBorder={false}
                   className="h-full"
+                  pages={pages}
                 />
               </TabsContent>
               <TabsContent value="events" className="mt-0 flex-1 min-h-0">
@@ -501,6 +567,8 @@ export function ProjectPage() {
               onAppModeChange={setAppMode}
               onBuildFromDoc={handleBuildFromDoc}
               buildDisabled={chat.isStreaming}
+              previewVersion={previewVersionLabel}
+              productDocVersion={productDoc?.version ?? null}
               pages={pages}
               selectedPageId={selectedPageId}
               onSelectPage={handleSelectPage}

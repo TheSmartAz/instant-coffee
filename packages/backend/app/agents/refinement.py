@@ -9,6 +9,7 @@ from typing import Iterable, Optional, Sequence
 
 from .base import BaseAgent
 from .prompts import get_refinement_prompt
+from ..llm.model_pool import ModelRole
 from ..db.models import Page, ProductDoc
 from ..llm.tool_handlers import (
     DEFAULT_ALLOWED_EXTENSIONS,
@@ -17,6 +18,7 @@ from ..llm.tool_handlers import (
 )
 from ..llm.tools import ToolResult, get_filesystem_tools
 from ..schemas.sitemap import GlobalStyle
+from ..services.data_protocol import DataProtocolGenerator
 from ..services.filesystem import FilesystemService
 from ..services.page_version import PageVersionService
 from ..utils.html import (
@@ -99,6 +101,7 @@ class RefinementAgent(BaseAgent):
             agent_id=agent_id,
             task_id=task_id,
             emit_lifecycle_events=emit_lifecycle_events,
+            model_role=ModelRole.WRITER,
         )
         self.system_prompt_template = get_refinement_prompt()
         self.system_prompt = self.system_prompt_template
@@ -147,7 +150,6 @@ class RefinementAgent(BaseAgent):
             response = await self._call_llm(
                 messages=messages,
                 agent_type=self.agent_type,
-                model=self.settings.model,
                 temperature=self.settings.temperature,
                 stream=True,
                 context="refinement",
@@ -176,6 +178,12 @@ class RefinementAgent(BaseAgent):
         html, link_warnings = normalize_internal_links(html, all_pages=all_page_slugs)
         if link_warnings:
             logger.warning("RefinementAgent detected broken internal links: %s", ", ".join(link_warnings))
+        html = self._apply_data_protocol(
+            html,
+            product_doc=product_doc,
+            output_dir=output_dir,
+            page_slug=page.slug,
+        )
 
         preview_url = None
         filepath = None
@@ -599,7 +607,6 @@ class RefinementAgent(BaseAgent):
                     messages=messages,
                     tools=tools,
                     tool_handlers=tool_handlers,
-                    model=self.settings.model,
                     temperature=self.settings.temperature,
                     context="refinement",
                 )
@@ -607,7 +614,6 @@ class RefinementAgent(BaseAgent):
                 response = await self._call_llm(
                     messages=messages,
                     agent_type=self.agent_type,
-                    model=self.settings.model,
                     temperature=self.settings.temperature,
                     stream=True,
                     context="refinement",
@@ -619,6 +625,13 @@ class RefinementAgent(BaseAgent):
         except Exception:
             logger.exception("RefinementAgent failed to use LLM, falling back to template")
             html = self._fallback_html(user_input=instructions, current_html=current_html)
+
+        html = self._apply_data_protocol(
+            html,
+            product_doc=None,
+            output_dir=output_dir,
+            page_slug="index",
+        )
 
         if output_dir:
             path, preview_url = self._save_html(html=html, output_dir=output_dir)
@@ -706,6 +719,27 @@ class RefinementAgent(BaseAgent):
         self._write_version_copy(path, html)
         preview_url = path.absolute().as_uri()
         return str(path.absolute()), preview_url
+
+    def _apply_data_protocol(
+        self,
+        html: str,
+        *,
+        product_doc: ProductDoc | dict | None,
+        output_dir: Optional[str],
+        page_slug: str,
+    ) -> str:
+        if not output_dir:
+            return html
+        try:
+            generator = DataProtocolGenerator(
+                output_dir=output_dir,
+                session_id=self.session_id,
+                db=self.db,
+            )
+            return generator.prepare_html(html, product_doc=product_doc, page_slug=page_slug)
+        except Exception:
+            logger.exception("RefinementAgent failed to apply data protocol injection")
+            return html
 
     def _write_version_copy(self, path: Path, html: str) -> Path:
         timestamp = self._timestamp()

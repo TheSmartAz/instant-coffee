@@ -8,6 +8,8 @@ from .page import (
 )
 from .files import FileContentResponse, FileTreeNode, FileTreeResponse
 from .chat import ChatRequest, ChatResponse
+from .session_metadata import ModelUsage, RoutingMetadata
+from .validation import AestheticScore, AutoChecks, DimensionScores
 
 __all__ = [
     "ChatRequest",
@@ -21,4 +23,9 @@ __all__ = [
     "FileContentResponse",
     "FileTreeNode",
     "FileTreeResponse",
+    "RoutingMetadata",
+    "ModelUsage",
+    "AestheticScore",
+    "AutoChecks",
+    "DimensionScores",
 ]

@@ -9,6 +9,7 @@ export type EventType =
   | 'page_created'
   | 'page_version_created'
   | 'page_preview_ready'
+  | 'aesthetic_score'
   | 'plan_created'
   | 'plan_updated'
   | 'task_started'
@@ -238,6 +239,14 @@ export interface PagePreviewReadyEvent extends BaseEvent {
   preview_url?: string | null
 }
 
+export interface AestheticScoreEvent extends BaseEvent {
+  type: 'aesthetic_score'
+  page_id: string
+  slug?: string
+  score: Record<string, unknown>
+  attempts?: Array<Record<string, unknown>>
+}
+
 export interface ErrorEvent extends BaseEvent {
   type: 'error'
   message: string
@@ -369,6 +378,7 @@ export type ExecutionEvent =
   | PageCreatedEvent
   | PageVersionCreatedEvent
   | PagePreviewReadyEvent
+  | AestheticScoreEvent
   | PlanCreatedEvent
   | PlanUpdatedEvent
   | TaskStartedEvent

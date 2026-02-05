@@ -1,4 +1,6 @@
 import * as React from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -19,11 +21,23 @@ import { toast } from '@/hooks/use-toast'
 
 type SettingsSection = 'account' | 'model' | 'preferences'
 
+const LAST_PROJECT_KEY = 'instant-coffee:last-project-id'
+
 export function SettingsPage() {
+  const navigate = useNavigate()
   const [activeSection, setActiveSection] = React.useState<SettingsSection>('account')
   const { settings, isLoading, error, updateSettings, modelOptions } = useSettings()
   const [draft, setDraft] = React.useState(settings)
   const [isSaving, setIsSaving] = React.useState(false)
+
+  // Get the last visited project ID
+  const lastProjectId = React.useMemo(() => {
+    try {
+      return localStorage.getItem(LAST_PROJECT_KEY)
+    } catch {
+      return null
+    }
+  }, [])
 
   const availableModels = React.useMemo(() => {
     if (modelOptions.length > 0) return modelOptions
@@ -46,7 +60,16 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl gap-6 px-6 py-10 animate-in fade-in">
+    <div className="flex min-h-screen flex-col animate-in fade-in">
+      <header className="flex items-center gap-3 border-b border-border px-6 py-4">
+        {lastProjectId ? (
+          <Button variant="ghost" size="icon" onClick={() => navigate(`/project/${lastProjectId}`)}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        ) : null}
+        <h1 className="text-lg font-semibold">Settings</h1>
+      </header>
+      <div className="mx-auto flex w-full max-w-5xl gap-6 px-6 py-10 flex-1">
       <nav className="w-48 space-y-2">
         {(['account', 'model', 'preferences'] as SettingsSection[]).map((section) => (
           <button
@@ -242,6 +265,7 @@ export function SettingsPage() {
           </Card>
         ) : null}
       </div>
+    </div>
     </div>
   )
 }

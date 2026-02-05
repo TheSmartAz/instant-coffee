@@ -32,6 +32,16 @@ class Session(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     current_version = Column(Integer, default=0)
+    product_type = Column(String(50))
+    complexity = Column(String(20))
+    skill_id = Column(String(100))
+    doc_tier = Column(String(20))
+    style_reference_mode = Column(String(50))
+    model_classifier = Column(String(100))
+    model_writer = Column(String(100))
+    model_expander = Column(String(100))
+    model_validator = Column(String(100))
+    model_style_refiner = Column(String(100))
 
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
     versions = relationship("Version", back_populates="session", cascade="all, delete-orphan")
@@ -85,7 +95,10 @@ class Version(Base):
 
     session = relationship("Session", back_populates="versions")
 
-    __table_args__ = (UniqueConstraint("session_id", "version", name="uq_versions_session"),)
+    __table_args__ = (
+        UniqueConstraint("session_id", "version", name="uq_versions_session"),
+        Index("idx_versions_session_id", "session_id"),
+    )
 
 
 class TokenUsage(Base):

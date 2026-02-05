@@ -11,13 +11,15 @@ from sqlalchemy.orm import Session as DbSession
 from ..agents.generation import GenerationAgent
 from ..agents.interview import InterviewAgent
 from ..agents.refinement import RefinementAgent
+from ..agents.validator import AestheticValidator
 from ..config import Settings
-from ..db.models import Task
+from ..db.models import Page, Session as SessionModel, Task
 from ..events.emitter import EventEmitter
 from ..events.models import (
     AgentEndEvent,
     AgentProgressEvent,
     AgentStartEvent,
+    AestheticScoreEvent,
     TaskProgressEvent,
 )
 from ..generators.mobile_html import validate_mobile_html
@@ -246,19 +248,31 @@ class GenerationTaskExecutor(BaseTaskExecutor):
             nav = payload.get("nav") or []
             global_style = payload.get("global_style") or {}
             all_pages = payload.get("all_pages") or []
+            guardrails = payload.get("guardrails") if isinstance(payload, dict) else None
             page_id = payload.get("page_id")
+            current_html = None
+            if page_id:
+                page_version_service = PageVersionService(context.db)
+                current = page_version_service.get_current(page_id)
+                if current is None:
+                    versions = page_version_service.list_by_page(page_id)
+                    current = versions[0] if versions else None
+                if current is not None:
+                    current_html = current.html
             product_doc = ProductDocService(context.db).get_by_session_id(context.session_id)
 
             result = await agent.generate(
                 requirements=requirements,
                 output_dir=context.output_dir,
                 history=context.history,
+                current_html=current_html,
                 page_id=page_id,
                 page_spec=page_spec,
                 global_style=global_style,
                 nav=nav,
                 product_doc=product_doc,
                 all_pages=all_pages,
+                guardrails=guardrails,
             )
         else:
             requirements = context.build_requirements(task)
@@ -393,6 +407,7 @@ class ValidatorTaskExecutor(BaseTaskExecutor):
         agent_id = self._agent_id(task)
         self._emit_agent_start(emitter, task, agent_id)
         payload = _safe_json_loads(task.description)
+        guardrails = payload.get("guardrails") if isinstance(payload, dict) else None
         page_id = payload.get("page_id") if isinstance(payload, dict) else None
         if page_id:
             page_version_service = PageVersionService(context.db)
@@ -409,9 +424,60 @@ class ValidatorTaskExecutor(BaseTaskExecutor):
             if not versions:
                 raise ValueError("No version available for validation")
             html = versions[0].html
-        result = validate_mobile_html(html)
+        result = validate_mobile_html(html, guardrails=guardrails)
         errors = result.get("errors", []) if isinstance(result, dict) else []
         warnings = result.get("warnings", []) if isinstance(result, dict) else []
+
+        aesthetic_score = None
+        aesthetic_attempts_payload = None
+        refined = False
+        session = context.db.get(SessionModel, context.session_id)
+        product_type = session.product_type if session else None
+        if not product_type:
+            product_doc = ProductDocService(context.db).get_by_session_id(context.session_id)
+            structured = getattr(product_doc, "structured", None)
+            if isinstance(structured, dict):
+                product_type = structured.get("product_type") or structured.get("productType")
+
+        if page_id and product_type:
+            validator = AestheticValidator(context.db, context.session_id, context.settings, event_emitter=emitter)
+            try:
+                final_html, final_score, attempts = await validator.validate_and_refine(
+                    html,
+                    product_type=product_type,
+                )
+                if final_score is not None:
+                    aesthetic_score = final_score
+                    aesthetic_attempts_payload = [
+                        {
+                            "version": attempt.version,
+                            "total": attempt.score.total,
+                            "issues": attempt.score.issues,
+                            "passes_threshold": attempt.score.passes_threshold,
+                            "timestamp": attempt.timestamp.isoformat().replace("+00:00", "Z"),
+                        }
+                        for attempt in attempts
+                    ]
+                    page = context.db.get(Page, page_id)
+                    emitter.emit(
+                        AestheticScoreEvent(
+                            page_id=page_id,
+                            slug=page.slug if page else None,
+                            score=final_score.model_dump(mode="json"),
+                            attempts=aesthetic_attempts_payload,
+                        )
+                    )
+                if final_html and final_html != html:
+                    PageVersionService(context.db, event_emitter=emitter).create(
+                        page_id,
+                        final_html,
+                        description="Aesthetic refinement",
+                    )
+                    refined = True
+                    html = final_html
+            except Exception:
+                logger.exception("Aesthetic validation failed; continuing with original HTML")
+
         summary = "Validation passed" if not errors else "Validation completed with issues"
         self._emit_agent_end(
             emitter,
@@ -425,6 +491,9 @@ class ValidatorTaskExecutor(BaseTaskExecutor):
             "errors": errors,
             "warnings": warnings,
             "page_id": page_id,
+            "aesthetic_score": aesthetic_score.model_dump(mode="json") if aesthetic_score else None,
+            "aesthetic_refined": refined,
+            "aesthetic_attempts": aesthetic_attempts_payload,
         }
 
 

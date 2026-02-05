@@ -256,7 +256,7 @@ def build_site_css(global_style: Optional[dict], design_direction: Optional[dict
         "/* Navigation */\n"
         ".site-nav {\n"
         "  position: sticky;\n"
-        "  top: 0;\n"
+        "  bottom: 0;\n"
         "  background: var(--primary-color);\n"
         "  padding: 12px 16px;\n"
         "  z-index: 100;\n"

@@ -170,6 +170,14 @@ class PagePreviewReadyEvent(BaseEvent):
     preview_url: Optional[str] = None
 
 
+class AestheticScoreEvent(BaseEvent):
+    type: EventType = EventType.AESTHETIC_SCORE
+    page_id: str
+    slug: Optional[str] = None
+    score: Dict[str, Any]
+    attempts: Optional[List[Dict[str, Any]]] = None
+
+
 # Interview events
 class InterviewQuestionEvent(BaseEvent):
     type: EventType = EventType.INTERVIEW_QUESTION

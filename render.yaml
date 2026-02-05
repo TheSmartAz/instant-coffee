@@ -13,9 +13,7 @@ services:
           property: connectionString
       - key: OUTPUT_DIR
         value: /tmp/instant-coffee-output
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
+      - key: DMXAPI_API_KEY
         sync: false
   - type: web
     name: instant-coffee-web

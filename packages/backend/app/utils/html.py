@@ -7,7 +7,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 _HEAD_CLOSE_RE = re.compile(r"</head>", re.IGNORECASE)
 _HEAD_OPEN_RE = re.compile(r"<head[^>]*>", re.IGNORECASE)
 _HTML_OPEN_RE = re.compile(r"<html[^>]*>", re.IGNORECASE)
-_BODY_OPEN_RE = re.compile(r"<body[^>]*>", re.IGNORECASE)
+_BODY_CLOSE_RE = re.compile(r"</body>", re.IGNORECASE)
 _NAV_RE = re.compile(r"class=[\"']site-nav[\"']", re.IGNORECASE)
 _NAV_BLOCK_RE = re.compile(r"<nav\b[^>]*class=[\"']site-nav[\"'][^>]*>.*?</nav>", re.IGNORECASE | re.DOTALL)
 _HREF_RE = re.compile(r"href=(?P<quote>[\"'])(?P<value>[^\"']*)(?P=quote)", re.IGNORECASE)
@@ -34,8 +34,11 @@ _HIDE_SCROLLBAR_STYLE = (
 )
 
 
-def inline_css(html: str, css: Optional[str]) -> str:
-    """Inline CSS into HTML by injecting a <style> tag."""
+def inline_css(html: str, css: Optional[str], *, position: str = "append") -> str:
+    """Inline CSS into HTML by injecting a <style> tag.
+
+    position: "append" (default) inserts before </head>; "prepend" inserts after <head>.
+    """
     if css is None or not str(css).strip():
         return html
 
@@ -43,15 +46,27 @@ def inline_css(html: str, css: Optional[str]) -> str:
     if not html:
         return style_block
 
-    head_close_match = _HEAD_CLOSE_RE.search(html)
-    if head_close_match:
-        insert_at = head_close_match.start()
-        return f"{html[:insert_at]}{style_block}{html[insert_at:]}"
+    position = (position or "append").lower()
+    if position not in {"append", "prepend"}:
+        position = "append"
 
+    head_close_match = _HEAD_CLOSE_RE.search(html)
     head_open_match = _HEAD_OPEN_RE.search(html)
-    if head_open_match:
-        insert_at = head_open_match.end()
-        return f"{html[:insert_at]}{style_block}{html[insert_at:]}"
+
+    if position == "prepend":
+        if head_open_match:
+            insert_at = head_open_match.end()
+            return f"{html[:insert_at]}{style_block}{html[insert_at:]}"
+        if head_close_match:
+            insert_at = head_close_match.start()
+            return f"{html[:insert_at]}{style_block}{html[insert_at:]}"
+    else:
+        if head_close_match:
+            insert_at = head_close_match.start()
+            return f"{html[:insert_at]}{style_block}{html[insert_at:]}"
+        if head_open_match:
+            insert_at = head_open_match.end()
+            return f"{html[:insert_at]}{style_block}{html[insert_at:]}"
 
     html_open_match = _HTML_OPEN_RE.search(html)
     if html_open_match:
@@ -96,6 +111,9 @@ def build_nav_html(
     resolved_items = _coerce_nav_items(nav_items)
     resolved_items = _ensure_all_pages(resolved_items, all_pages)
 
+    if len(resolved_items) <= 1:
+        return ""
+
     links: List[str] = []
     for item in resolved_items:
         slug = item["slug"]
@@ -119,14 +137,10 @@ def build_nav_html(
 
 def ensure_nav_html(html: str, nav_html: str) -> str:
     if not nav_html:
-        return html
+        return _remove_nav_html(html)
     if _NAV_RE.search(html or ""):
-        return html
-    match = _BODY_OPEN_RE.search(html or "")
-    if match:
-        insert_at = match.end()
-        return f"{html[:insert_at]}{nav_html}{html[insert_at:]}"
-    return f"{nav_html}{html}"
+        return replace_nav_html(html, nav_html)
+    return _insert_nav_at_end(html, nav_html)
 
 
 def extract_nav_html(html: str) -> str:
@@ -138,12 +152,31 @@ def extract_nav_html(html: str) -> str:
 
 def replace_nav_html(html: str, nav_html: str) -> str:
     if not nav_html:
+        return _remove_nav_html(html)
+    if not html:
+        return nav_html
+    cleaned = _NAV_BLOCK_RE.sub("", html)
+    return _insert_nav_at_end(cleaned, nav_html)
+
+
+def _remove_nav_html(html: str) -> str:
+    if not html:
+        return html
+    if not _NAV_BLOCK_RE.search(html):
+        return html
+    return _NAV_BLOCK_RE.sub("", html)
+
+
+def _insert_nav_at_end(html: str, nav_html: str) -> str:
+    if not nav_html:
         return html
     if not html:
         return nav_html
-    if _NAV_BLOCK_RE.search(html):
-        return _NAV_BLOCK_RE.sub(nav_html, html, count=1)
-    return ensure_nav_html(html, nav_html)
+    match = _BODY_CLOSE_RE.search(html)
+    if match:
+        insert_at = match.start()
+        return f"{html[:insert_at]}{nav_html}{html[insert_at:]}"
+    return f"{html}{nav_html}"
 
 
 def ensure_css_link(html: str, href: str) -> str:

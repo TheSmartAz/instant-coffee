@@ -14,7 +14,14 @@ import {
   normalizeInterviewAnswers,
   normalizeInterviewQuestions,
 } from '@/lib/interviewUtils'
+import {
+  clearPendingMessage,
+  fromStoredMessage,
+  loadPendingMessage,
+} from '@/lib/pendingMessageStorage'
 import type { SessionEvent } from '@/types/events'
+
+const PENDING_MESSAGE_TTL_MS = 10 * 60 * 1000
 
 type ApiSession = {
   id: string
@@ -260,6 +267,50 @@ const applyStoredInterview = (
   return next
 }
 
+const applyPendingMessage = (
+  sessionId: string | undefined,
+  messages: Message[]
+) => {
+  if (!sessionId) return messages
+  const pending = loadPendingMessage(sessionId)
+  if (!pending?.assistant) return messages
+  const restored = fromStoredMessage(pending.assistant)
+  if (messages.some((message) => message.id === restored.id)) {
+    return messages
+  }
+  if (
+    restored.interview?.id &&
+    messages.some((message) => message.interview?.id === restored.interview?.id)
+  ) {
+    clearPendingMessage(sessionId)
+    return messages
+  }
+  const savedAt = pending.savedAt ? new Date(pending.savedAt) : null
+  if (savedAt && Date.now() - savedAt.getTime() > PENDING_MESSAGE_TTL_MS) {
+    clearPendingMessage(sessionId)
+    return messages
+  }
+  if (
+    savedAt &&
+    messages.some(
+      (message) =>
+        message.role === 'assistant' &&
+        message.timestamp &&
+        message.timestamp >= savedAt
+    )
+  ) {
+    clearPendingMessage(sessionId)
+    return messages
+  }
+  return [
+    ...messages,
+    {
+      ...restored,
+      isStreaming: restored.isStreaming ?? true,
+    },
+  ]
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object')
 
@@ -469,13 +520,23 @@ const mapVersion = (
 
 export function useSession(sessionId?: string) {
   const [session, setSession] = React.useState<SessionDetail | null>(null)
-  const [messages, setMessages] = React.useState<Message[]>([])
+  const [messages, setMessagesState] = React.useState<Message[]>([])
   const [versions, setVersions] = React.useState<Version[]>([])
   const [isLoading, setIsLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const lastMessageUpdateRef = React.useRef(0)
+
+  const setMessages = React.useCallback(
+    (value: React.SetStateAction<Message[]>) => {
+      lastMessageUpdateRef.current = Date.now()
+      setMessagesState(value)
+    },
+    []
+  )
 
   const refresh = React.useCallback(async () => {
     if (!sessionId) return
+    const loadStartedAt = Date.now()
     setIsLoading(true)
     setError(null)
     try {
@@ -506,7 +567,11 @@ export function useSession(sessionId?: string) {
         // Ignore event recovery failures, keep base messages.
       }
       nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
-      setMessages(nextMessages)
+      nextMessages = applyPendingMessage(sessionId, nextMessages)
+      if (lastMessageUpdateRef.current <= loadStartedAt) {
+        setMessagesState(nextMessages)
+        lastMessageUpdateRef.current = Date.now()
+      }
 
       const versionsPayload = versionsResponse as {
         versions?: ApiVersion[]
@@ -531,6 +596,7 @@ export function useSession(sessionId?: string) {
     let active = true
     if (!sessionId) return
     const load = async () => {
+      const loadStartedAt = Date.now()
       setIsLoading(true)
       try {
         const [sessionResponse, messagesResponse, versionsResponse] =
@@ -561,7 +627,11 @@ export function useSession(sessionId?: string) {
           // Ignore event recovery failures, keep base messages.
         }
         nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
-        setMessages(nextMessages)
+        nextMessages = applyPendingMessage(sessionId, nextMessages)
+        if (lastMessageUpdateRef.current <= loadStartedAt) {
+          setMessagesState(nextMessages)
+          lastMessageUpdateRef.current = Date.now()
+        }
 
         const versionsPayload = versionsResponse as {
           versions?: ApiVersion[]

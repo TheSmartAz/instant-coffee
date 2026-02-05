@@ -91,6 +91,7 @@ export function EventList({
   const [autoScroll, setAutoScroll] = React.useState(true)
   const [scrollElement, setScrollElement] = React.useState<HTMLDivElement | null>(null)
   const [timeFilter, setTimeFilter] = React.useState<EventTimeFilter>('all')
+  const [now, setNow] = React.useState(0)
 
   // Internal state for display mode (uncontrolled)
   const [internalDisplayMode, setInternalDisplayMode] = React.useState<EventDisplayMode>('phase')
@@ -116,10 +117,18 @@ export function EventList({
     setScrollElement(viewport)
   }, [])
 
+  React.useEffect(() => {
+    if (timeFilter === 'all') {
+      setNow(0)
+      return
+    }
+    setNow(Date.now())
+  }, [timeFilter, events.length])
+
   const filteredEvents = React.useMemo(() => {
     const byMode = filterEventsByMode(events, displayMode)
     if (timeFilter === 'all') return byMode
-    const now = Date.now()
+    if (!now) return byMode
     const cutoff =
       timeFilter === '15m'
         ? now - 15 * 60 * 1000
@@ -131,7 +140,7 @@ export function EventList({
       if (Number.isNaN(timestamp)) return true
       return timestamp >= cutoff
     })
-  }, [events, displayMode, timeFilter])
+  }, [events, displayMode, timeFilter, now])
 
   const {
     start,

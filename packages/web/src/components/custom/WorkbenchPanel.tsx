@@ -13,6 +13,8 @@ export interface WorkbenchPanelProps {
   onAppModeChange?: (next: boolean) => void
   onBuildFromDoc?: () => void
   buildDisabled?: boolean
+  previewVersion?: number | null
+  productDocVersion?: number | null
 
   // Tab management
   activeTab: WorkbenchTab
@@ -49,6 +51,8 @@ export function WorkbenchPanel({
   onAppModeChange,
   onBuildFromDoc,
   buildDisabled,
+  previewVersion,
+  productDocVersion,
   activeTab,
   onTabChange,
   pages,
@@ -66,6 +70,9 @@ export function WorkbenchPanel({
     onTabChange(tab)
   }
 
+  const previewVersionLabel = previewVersion ? `v${previewVersion}` : null
+  const productDocVersionLabel = productDocVersion ? `v${productDocVersion}` : null
+
   return (
     <div className="workbench-panel flex h-full flex-col overflow-hidden">
       {/* Tab Bar */}
@@ -73,6 +80,12 @@ export function WorkbenchPanel({
         {TABS.map((tab) => {
           const Icon = tab.icon
           const isActive = activeTab === tab.id
+          const versionLabel =
+            tab.id === 'preview'
+              ? previewVersionLabel
+              : tab.id === 'product-doc'
+                ? productDocVersionLabel
+                : null
 
           return (
             <button
@@ -90,6 +103,11 @@ export function WorkbenchPanel({
             >
               <Icon className="h-4 w-4" />
               {tab.label}
+              {versionLabel ? (
+                <span className="rounded-full bg-background px-2 py-0.5 text-[10px] font-semibold text-muted-foreground ring-1 ring-border">
+                  {versionLabel}
+                </span>
+              ) : null}
             </button>
           )
         })}

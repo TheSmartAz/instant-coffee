@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence
 
 from pydantic import ValidationError
 
@@ -15,8 +15,18 @@ from .prompts import (
     get_product_doc_generate_prompt,
     get_product_doc_update_prompt,
 )
-from ..schemas.product_doc import ProductDocStructured
+from ..db.models import Session as SessionModel
+from ..schemas.product_doc import (
+    ProductDocChecklist,
+    ProductDocExtended,
+    ProductDocStandard,
+    ProductDocStructured,
+)
 from ..services.product_doc import ProductDocService
+from ..services.skills import SkillsRegistry
+from ..llm.model_pool import FallbackTrigger, ModelRole
+from ..utils.product_doc import extract_pages_from_markdown
+from ..utils.guardrails import guardrails_to_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +96,7 @@ class ProductDocAgent(BaseAgent):
             event_emitter=event_emitter,
             agent_id=agent_id,
             task_id=task_id,
+            model_role=ModelRole.WRITER,
         )
         self.generate_prompt = get_product_doc_generate_prompt()
         self.update_prompt = get_product_doc_update_prompt()
@@ -96,22 +107,33 @@ class ProductDocAgent(BaseAgent):
         user_message: str,
         interview_context: dict | None = None,
         history: Sequence[dict] | None = None,
+        style_tokens: dict | None = None,
+        guardrails: dict | None = None,
     ) -> ProductDocGenerateResult:
         resolved_session_id = session_id or self.session_id
         history = history or []
+        product_type, complexity, doc_tier = self._resolve_routing_metadata(
+            interview_context=interview_context,
+            current_structured=None,
+        )
 
         messages = self._build_generate_messages(
             user_message=user_message,
             interview_context=interview_context,
             history=history,
+            product_type=product_type,
+            complexity=complexity,
+            doc_tier=doc_tier,
+            style_tokens=style_tokens,
+            guardrails=guardrails,
         )
         response = await self._call_llm(
             messages=messages,
             agent_type=self.agent_type,
-            model=self.settings.model,
             temperature=self.settings.temperature,
             max_tokens=self.settings.max_tokens,
             context="product-doc-generate",
+            fallback_checker=self._build_fallback_checker(product_type),
         )
         tokens_used = response.token_usage.total_tokens if response.token_usage else 0
 
@@ -119,6 +141,9 @@ class ProductDocAgent(BaseAgent):
             response.content or "",
             user_message=user_message,
             interview_context=interview_context,
+            product_type=product_type,
+            complexity=complexity,
+            doc_tier=doc_tier,
         )
 
         structured = self._ensure_index_page(parsed.structured, user_message=user_message)
@@ -147,6 +172,8 @@ class ProductDocAgent(BaseAgent):
         current_doc: Any,
         user_message: str,
         history: Sequence[dict] | None = None,
+        style_tokens: dict | None = None,
+        guardrails: dict | None = None,
     ) -> ProductDocUpdateResult:
         resolved_session_id = session_id or self.session_id
         history = history or []
@@ -155,20 +182,29 @@ class ProductDocAgent(BaseAgent):
         current_structured = getattr(current_doc, "structured", None)
         if not isinstance(current_structured, dict):
             current_structured = {}
+        product_type, complexity, doc_tier = self._resolve_routing_metadata(
+            interview_context=None,
+            current_structured=current_structured,
+        )
 
         messages = self._build_update_messages(
             current_content=current_content,
             current_structured=current_structured,
             user_message=user_message,
             history=history,
+            product_type=product_type,
+            complexity=complexity,
+            doc_tier=doc_tier,
+            style_tokens=style_tokens,
+            guardrails=guardrails,
         )
         response = await self._call_llm(
             messages=messages,
             agent_type=self.agent_type,
-            model=self.settings.model,
             temperature=self.settings.temperature,
             max_tokens=self.settings.max_tokens,
             context="product-doc-update",
+            fallback_checker=self._build_fallback_checker(product_type),
         )
         tokens_used = response.token_usage.total_tokens if response.token_usage else 0
 
@@ -176,6 +212,9 @@ class ProductDocAgent(BaseAgent):
             response.content or "",
             current_structured=current_structured,
             user_message=user_message,
+            product_type=product_type,
+            complexity=complexity,
+            doc_tier=doc_tier,
         )
 
         structured = parsed.structured or current_structured
@@ -228,8 +267,17 @@ class ProductDocAgent(BaseAgent):
         user_message: str,
         interview_context: dict | None,
         history: Sequence[dict],
+        product_type: str,
+        complexity: str,
+        doc_tier: str,
+        style_tokens: dict | None,
+        guardrails: dict | None,
     ) -> List[dict]:
-        messages: List[dict] = [{"role": "system", "content": self.generate_prompt}]
+        system_prompt = get_product_doc_generate_prompt(doc_tier=doc_tier)
+        messages: List[dict] = [{"role": "system", "content": system_prompt}]
+        guardrails_text = guardrails_to_prompt(guardrails)
+        if guardrails_text:
+            messages.append({"role": "system", "content": guardrails_text})
         for item in history:
             role = item.get("role", "user")
             content = item.get("content", "")
@@ -255,7 +303,13 @@ class ProductDocAgent(BaseAgent):
         prompt = PRODUCT_DOC_GENERATE_USER.format(
             user_message=user_message.strip() or "No additional requirements provided.",
             interview_context_section=interview_section,
+            product_type=product_type,
+            complexity=complexity,
+            doc_tier=doc_tier,
         ).strip()
+        if style_tokens:
+            style_section = json.dumps(style_tokens, ensure_ascii=False, indent=2)
+            prompt = f"{prompt}\n\nStyle Reference Tokens:\n{style_section}"
 
         language_note = self._language_note(user_message, interview_section)
         if language_note:
@@ -270,8 +324,17 @@ class ProductDocAgent(BaseAgent):
         current_structured: dict,
         user_message: str,
         history: Sequence[dict],
+        product_type: str,
+        complexity: str,
+        doc_tier: str,
+        style_tokens: dict | None,
+        guardrails: dict | None,
     ) -> List[dict]:
-        messages: List[dict] = [{"role": "system", "content": self.update_prompt}]
+        system_prompt = get_product_doc_update_prompt(doc_tier=doc_tier)
+        messages: List[dict] = [{"role": "system", "content": system_prompt}]
+        guardrails_text = guardrails_to_prompt(guardrails)
+        if guardrails_text:
+            messages.append({"role": "system", "content": guardrails_text})
         for item in history:
             role = item.get("role", "user")
             content = item.get("content", "")
@@ -290,12 +353,201 @@ class ProductDocAgent(BaseAgent):
             current_content=current_content or "(empty)",
             current_json=json.dumps(current_structured or {}, ensure_ascii=False, indent=2),
             user_message=user_message.strip() or "No change request provided.",
+            product_type=product_type,
+            complexity=complexity,
+            doc_tier=doc_tier,
         ).strip()
+        if style_tokens:
+            style_section = json.dumps(style_tokens, ensure_ascii=False, indent=2)
+            prompt = f"{prompt}\n\nStyle Reference Tokens:\n{style_section}"
         language_note = self._language_note(user_message, None)
         if language_note:
             prompt = f"{prompt}\n\n{language_note}"
         messages.append({"role": "user", "content": prompt})
         return messages
+
+    def _resolve_routing_metadata(
+        self,
+        *,
+        interview_context: dict | None,
+        current_structured: dict | None,
+    ) -> tuple[str, str, str]:
+        product_type = None
+        complexity = None
+        doc_tier_override = None
+
+        if isinstance(interview_context, dict):
+            product_type = interview_context.get("product_type") or interview_context.get("productType")
+            complexity = interview_context.get("complexity")
+            doc_tier_override = interview_context.get("doc_tier") or interview_context.get("docTier")
+
+        if isinstance(current_structured, dict):
+            product_type = product_type or current_structured.get("product_type") or current_structured.get(
+                "productType"
+            )
+            complexity = complexity or current_structured.get("complexity")
+            if doc_tier_override is None:
+                doc_tier_override = current_structured.get("doc_tier") or current_structured.get("docTier")
+
+        if self.db is not None:
+            session = self.db.get(SessionModel, self.session_id)
+            if session is not None:
+                product_type = product_type or session.product_type
+                complexity = complexity or session.complexity
+                if doc_tier_override is None:
+                    doc_tier_override = session.doc_tier
+
+        normalized_product = ProductDocService.normalize_product_type(product_type) or "unknown"
+        normalized_complexity = ProductDocService.normalize_complexity(complexity) or "unknown"
+        doc_tier = ProductDocService.select_doc_tier(
+            normalized_product,
+            normalized_complexity,
+            doc_tier_override,
+        )
+        return normalized_product, normalized_complexity, doc_tier
+
+    def _apply_routing_metadata(
+        self,
+        structured: dict,
+        *,
+        product_type: str,
+        complexity: str,
+        doc_tier: str,
+    ) -> dict:
+        if not isinstance(structured, dict):
+            structured = {}
+        if not structured.get("product_type") or structured.get("product_type") == "unknown":
+            structured["product_type"] = product_type
+        if not structured.get("complexity") or structured.get("complexity") == "unknown":
+            structured["complexity"] = complexity
+        structured["doc_tier"] = doc_tier
+        return structured
+
+    def _ensure_structured_fields(self, structured: dict) -> dict:
+        if not isinstance(structured, dict):
+            structured = {}
+        structured.setdefault("product_type", "unknown")
+        structured.setdefault("complexity", "unknown")
+        structured.setdefault("doc_tier", "standard")
+        structured.setdefault("goal", structured.get("goal") or "")
+        structured.setdefault("pages", [])
+        structured.setdefault("data_flow", [])
+        structured.setdefault("component_inventory", [])
+        product_type = ProductDocService.normalize_product_type(structured.get("product_type")) or "unknown"
+        if not structured.get("component_inventory"):
+            fallback = structured.get("components") or []
+            if not fallback and isinstance(structured.get("features"), list):
+                fallback = [
+                    item.get("name")
+                    for item in structured.get("features", [])
+                    if isinstance(item, dict) and item.get("name")
+                ]
+            if not fallback:
+                fallback = self._resolve_skill_components(product_type)
+            structured["component_inventory"] = self._coerce_string_list(fallback)
+
+        structured["product_type"] = product_type
+        structured["complexity"] = (
+            ProductDocService.normalize_complexity(structured.get("complexity")) or structured["complexity"]
+        )
+        structured["doc_tier"] = (
+            ProductDocService.normalize_doc_tier(structured.get("doc_tier")) or structured["doc_tier"]
+        )
+        structured["state_contract"] = self._normalize_state_contract(
+            structured.get("state_contract"),
+            product_type=product_type,
+        )
+        if "style_reference" not in structured:
+            structured["style_reference"] = None
+        return structured
+
+    def _resolve_skill_components(self, product_type: str) -> List[str]:
+        try:
+            registry = SkillsRegistry()
+        except Exception:
+            logger.exception("Failed to initialize SkillsRegistry")
+            return []
+
+        skill_id = None
+        if self.db is not None:
+            session = self.db.get(SessionModel, self.session_id)
+            if session is not None:
+                skill_id = session.skill_id
+        manifest = registry.get(skill_id) if skill_id else registry.select_best(product_type)
+        if manifest and manifest.components:
+            return [str(item) for item in manifest.components if str(item).strip()]
+        return []
+
+    def _ensure_mermaid(self, structured: dict) -> dict:
+        if not isinstance(structured, dict):
+            return structured
+        if str(structured.get("doc_tier") or "").lower() != "extended":
+            return structured
+        pages = structured.get("pages") if isinstance(structured.get("pages"), list) else []
+        data_flow = structured.get("data_flow") if isinstance(structured.get("data_flow"), list) else []
+        if not structured.get("mermaid_page_flow"):
+            structured["mermaid_page_flow"] = self._build_mermaid_page_flow(pages)
+        if not structured.get("mermaid_data_flow"):
+            structured["mermaid_data_flow"] = self._build_mermaid_data_flow(data_flow, pages)
+        return structured
+
+    def _build_mermaid_page_flow(self, pages: List[dict]) -> Optional[str]:
+        if not pages:
+            return None
+        lines = ["graph TD"]
+        ids = {}
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            slug = str(page.get("slug") or "").strip()
+            title = str(page.get("title") or slug or "Page").strip()
+            if not slug:
+                continue
+            node_id = self._mermaid_id(slug)
+            ids[slug] = node_id
+            label = title.replace('"', "'")
+            lines.append(f'  {node_id}["{label}"]')
+        slugs = [slug for slug in ids.keys()]
+        for idx in range(len(slugs) - 1):
+            lines.append(f"  {ids[slugs[idx]]} --> {ids[slugs[idx + 1]]}")
+        return "\n".join(lines) if len(lines) > 1 else None
+
+    def _build_mermaid_data_flow(self, data_flow: List[dict], pages: List[dict]) -> Optional[str]:
+        if not data_flow:
+            return None
+        lines = ["graph LR"]
+        ids = {}
+        for page in pages or []:
+            if not isinstance(page, dict):
+                continue
+            slug = str(page.get("slug") or "").strip()
+            if not slug:
+                continue
+            ids[slug] = self._mermaid_id(slug)
+        for flow in data_flow:
+            if not isinstance(flow, dict):
+                continue
+            from_page = str(flow.get("from_page") or "").strip()
+            to_page = str(flow.get("to_page") or "").strip()
+            event = str(flow.get("event") or "").strip()
+            if not from_page or not to_page:
+                continue
+            from_id = ids.get(from_page) or self._mermaid_id(from_page)
+            to_id = ids.get(to_page) or self._mermaid_id(to_page)
+            label = event.replace('"', "'")
+            if label:
+                lines.append(f'  {from_id} -->|{label}| {to_id}')
+            else:
+                lines.append(f"  {from_id} --> {to_id}")
+        return "\n".join(lines) if len(lines) > 1 else None
+
+    def _mermaid_id(self, value: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", value.strip())
+        if not cleaned:
+            cleaned = "node"
+        if cleaned[0].isdigit():
+            cleaned = f"n_{cleaned}"
+        return cleaned
 
     def _parse_generate_response(
         self,
@@ -303,6 +555,9 @@ class ProductDocAgent(BaseAgent):
         *,
         user_message: str,
         interview_context: dict | None,
+        product_type: str,
+        complexity: str,
+        doc_tier: str,
     ) -> _ParsedOutput:
         parsed = _ParsedOutput()
         sections = self._extract_sections(content)
@@ -325,6 +580,12 @@ class ProductDocAgent(BaseAgent):
 
         if structured_raw:
             structured = self._normalize_structured(structured_raw)
+            structured = self._apply_routing_metadata(
+                structured,
+                product_type=product_type,
+                complexity=complexity,
+                doc_tier=doc_tier,
+            )
             validated, errors = self._validate_structured(structured)
             parsed.structured = validated
             parsed.errors.extend(errors)
@@ -333,6 +594,10 @@ class ProductDocAgent(BaseAgent):
 
         if not parsed.content:
             parsed.content = self._build_markdown(parsed.structured, user_message)
+
+        parsed.structured = self._merge_pages_from_markdown(parsed.structured, parsed.content)
+        parsed.structured = self._ensure_structured_fields(parsed.structured)
+        parsed.structured = self._ensure_mermaid(parsed.structured)
 
         if not parsed.message:
             parsed.message = self._default_message("generate", user_message)
@@ -345,6 +610,9 @@ class ProductDocAgent(BaseAgent):
         *,
         current_structured: dict,
         user_message: str,
+        product_type: str,
+        complexity: str,
+        doc_tier: str,
     ) -> _ParsedOutput:
         parsed = _ParsedOutput()
         sections = self._extract_sections(content)
@@ -371,6 +639,12 @@ class ProductDocAgent(BaseAgent):
 
         if structured_raw:
             structured = self._normalize_structured(structured_raw)
+            structured = self._apply_routing_metadata(
+                structured,
+                product_type=product_type,
+                complexity=complexity,
+                doc_tier=doc_tier,
+            )
             validated, errors = self._validate_structured(structured)
             parsed.structured = validated
             parsed.errors.extend(errors)
@@ -379,6 +653,10 @@ class ProductDocAgent(BaseAgent):
 
         if not parsed.content:
             parsed.content = self._build_markdown(parsed.structured or current_structured, user_message)
+
+        parsed.structured = self._merge_pages_from_markdown(parsed.structured, parsed.content)
+        parsed.structured = self._ensure_structured_fields(parsed.structured)
+        parsed.structured = self._ensure_mermaid(parsed.structured)
 
         if not parsed.change_summary:
             parsed.change_summary = self._default_change_summary(user_message)
@@ -390,6 +668,25 @@ class ProductDocAgent(BaseAgent):
             parsed.message = self._default_message("update", user_message)
 
         return parsed
+
+    def _build_fallback_checker(self, product_type: str) -> Callable[[Any], Optional[FallbackTrigger]]:
+        normalized = ProductDocService.normalize_product_type(product_type) or ""
+        flow_types = {"ecommerce", "booking", "dashboard"}
+
+        def checker(response: Any) -> Optional[FallbackTrigger]:
+            if normalized not in flow_types:
+                return None
+            content = getattr(response, "content", "") or ""
+            sections = self._extract_sections(content)
+            json_section = sections.get("JSON") or content
+            structured_raw, _ = self._parse_json_section(json_section)
+            if structured_raw is None or not isinstance(structured_raw, dict):
+                return FallbackTrigger.INVALID_STRUCTURE
+            if "state_contract" not in structured_raw and "stateContract" not in structured_raw:
+                return FallbackTrigger.MISSING_FIELD
+            return None
+
+        return checker
 
     def _extract_sections(self, content: str) -> dict:
         if not content:
@@ -450,16 +747,30 @@ class ProductDocAgent(BaseAgent):
 
         normalized = dict(raw)
         key_map = {
+            "productType": "product_type",
+            "docTier": "doc_tier",
             "projectName": "project_name",
             "targetAudience": "target_audience",
             "designDirection": "design_direction",
+            "dataFlow": "data_flow",
+            "stateContract": "state_contract",
+            "styleReference": "style_reference",
+            "componentInventory": "component_inventory",
+            "corePoints": "core_points",
+            "userStories": "user_stories",
+            "dataFlowExplanation": "data_flow_explanation",
+            "mermaidPageFlow": "mermaid_page_flow",
+            "mermaidDataFlow": "mermaid_data_flow",
+            "detailedSpecs": "detailed_specs",
         }
         for src, dest in key_map.items():
             if src in normalized and dest not in normalized:
                 normalized[dest] = normalized.pop(src)
 
+        if "goal" not in normalized and "goals" in normalized:
+            normalized["goal"] = normalized.get("goals")
         if "goals" not in normalized and "goal" in normalized:
-            normalized["goals"] = normalized.pop("goal")
+            normalized["goals"] = normalized.get("goal")
         if "features" not in normalized and "feature" in normalized:
             normalized["features"] = normalized.pop("feature")
 
@@ -477,14 +788,44 @@ class ProductDocAgent(BaseAgent):
                 design[dest] = design.pop(src)
         normalized["design_direction"] = design
 
+        normalized["product_type"] = ProductDocService.normalize_product_type(normalized.get("product_type")) or ""
+        normalized["complexity"] = ProductDocService.normalize_complexity(normalized.get("complexity")) or ""
+        normalized["doc_tier"] = ProductDocService.normalize_doc_tier(normalized.get("doc_tier")) or ""
+        if isinstance(normalized.get("goal"), list):
+            normalized["goal"] = (
+                normalized.get("goal")[0] if normalized.get("goal") else ""
+            )
+        if not normalized.get("goal"):
+            goals = self._coerce_string_list(normalized.get("goals"))
+            if goals:
+                normalized["goal"] = goals[0]
+            elif isinstance(normalized.get("description"), str):
+                normalized["goal"] = normalized.get("description")
+
         normalized["goals"] = self._coerce_string_list(normalized.get("goals"))
         normalized["constraints"] = self._coerce_string_list(normalized.get("constraints"))
+        normalized["core_points"] = self._coerce_string_list(normalized.get("core_points"))
+        normalized["users"] = self._coerce_string_list(normalized.get("users"))
+        normalized["user_stories"] = self._coerce_string_list(normalized.get("user_stories"))
+        normalized["components"] = self._coerce_string_list(normalized.get("components"))
+        normalized["component_inventory"] = self._coerce_string_list(normalized.get("component_inventory"))
+        normalized["detailed_specs"] = self._coerce_string_list(normalized.get("detailed_specs"))
+        normalized["appendices"] = self._coerce_string_list(normalized.get("appendices"))
 
         features = normalized.get("features")
         normalized["features"] = self._normalize_features(features)
 
         pages = normalized.get("pages")
         normalized["pages"] = self._normalize_pages(pages)
+
+        data_flow = normalized.get("data_flow")
+        normalized["data_flow"] = self._normalize_data_flow(data_flow)
+
+        normalized["state_contract"] = self._normalize_state_contract(
+            normalized.get("state_contract"),
+            product_type=normalized.get("product_type") or "",
+        )
+        normalized["style_reference"] = self._normalize_style_reference(normalized.get("style_reference"))
 
         return normalized
 
@@ -540,6 +881,7 @@ class ProductDocAgent(BaseAgent):
                     continue
                 title = str(item.get("title") or item.get("name") or "").strip()
                 slug = str(item.get("slug") or "").strip()
+                role = str(item.get("role") or item.get("page_role") or "").strip()
                 purpose = str(item.get("purpose") or item.get("description") or "").strip()
                 sections = item.get("sections")
                 if isinstance(sections, str):
@@ -549,13 +891,18 @@ class ProductDocAgent(BaseAgent):
                 required = bool(item.get("required"))
                 if not slug and title:
                     slug = self._slugify(title)
+                if not slug:
+                    slug = self._fallback_slug_from_title(title)
                 if slug:
                     slug = self._truncate_slug(slug)
                 if not slug:
                     continue
+                if not role:
+                    role = self._derive_page_role(slug, title, purpose)
                 page_payload = {
                     "title": title or slug or "Page",
                     "slug": slug,
+                    "role": role or "general",
                     "purpose": purpose,
                     "sections": [str(section).strip() for section in sections if str(section).strip()],
                     "required": required,
@@ -563,19 +910,177 @@ class ProductDocAgent(BaseAgent):
                 normalized.append(page_payload)
         return normalized
 
+    def _normalize_data_flow(self, data_flow: Any) -> List[dict]:
+        if not data_flow:
+            return []
+        if isinstance(data_flow, dict):
+            data_flow = [data_flow]
+        normalized: List[dict] = []
+        if isinstance(data_flow, list):
+            for item in data_flow:
+                if not isinstance(item, dict):
+                    continue
+                from_page = str(item.get("from_page") or item.get("from") or item.get("source") or "").strip()
+                event = str(item.get("event") or item.get("action") or "").strip()
+                to_page = str(item.get("to_page") or item.get("to") or item.get("target") or "").strip()
+                if not from_page or not to_page:
+                    continue
+                normalized.append(
+                    {
+                        "from_page": from_page,
+                        "event": event,
+                        "to_page": to_page,
+                    }
+                )
+        return normalized
+
+    def _normalize_state_contract(self, value: Any, *, product_type: str) -> Optional[dict]:
+        normalized_type = ProductDocService.normalize_product_type(product_type) or "unknown"
+        if normalized_type in {"ecommerce", "booking", "dashboard"}:
+            if isinstance(value, dict):
+                default_events = [
+                    "add_to_cart",
+                    "update_qty",
+                    "remove_item",
+                    "checkout_draft",
+                    "submit_booking",
+                    "submit_form",
+                    "clear_cart",
+                ]
+                events = value.get("events")
+                if isinstance(events, list):
+                    normalized_events = [str(item) for item in events if str(item).strip()]
+                else:
+                    normalized_events = []
+                if not normalized_events:
+                    normalized_events = list(default_events)
+                return {
+                    "shared_state_key": value.get("shared_state_key") or "instant-coffee:state",
+                    "records_key": value.get("records_key") or "instant-coffee:records",
+                    "events_key": value.get("events_key") or "instant-coffee:events",
+                    "schema": value.get("schema") if isinstance(value.get("schema"), dict) else {},
+                    "events": normalized_events,
+                }
+            return {
+                "shared_state_key": "instant-coffee:state",
+                "records_key": "instant-coffee:records",
+                "events_key": "instant-coffee:events",
+                "schema": {},
+                "events": [
+                    "add_to_cart",
+                    "update_qty",
+                    "remove_item",
+                    "checkout_draft",
+                    "submit_booking",
+                    "submit_form",
+                    "clear_cart",
+                ],
+            }
+        return None
+
+    def _normalize_style_reference(self, value: Any) -> Optional[dict]:
+        if not value:
+            return None
+        if not isinstance(value, dict):
+            return None
+        scope = value.get("scope")
+        if not isinstance(scope, dict):
+            scope = {}
+        images = value.get("images")
+        if isinstance(images, str):
+            images = [images]
+        if not isinstance(images, list):
+            images = []
+        images = [str(item) for item in images if str(item).strip()]
+        mode = str(value.get("mode") or "full_mimic").strip()
+        return {"mode": mode, "scope": scope, "images": images}
+
+    def _fallback_slug_from_title(self, title: str) -> str:
+        if not title:
+            return ""
+        lower = title.lower()
+        if "\u9996\u9875" in title or "\u4e3b\u9875" in title or "home" in lower:
+            return "index"
+        if "\u5173\u4e8e" in title or "about" in lower:
+            return "about"
+        if "\u8054\u7cfb" in title or "contact" in lower:
+            return "contact"
+        if "\u670d\u52a1" in title or "service" in lower:
+            return "services"
+        if "\u4ea7\u54c1" in title or "product" in lower:
+            return "products"
+        if "\u4ef7\u683c" in title or "pricing" in lower or "price" in lower:
+            return "pricing"
+        if "\u535a\u5ba2" in title or "blog" in lower:
+            return "blog"
+        if "\u56e2\u961f" in title or "team" in lower:
+            return "team"
+        if "\u529f\u80fd" in title or "feature" in lower:
+            return "features"
+        return ""
+
+    def _derive_page_role(self, slug: str, title: str, purpose: str) -> str:
+        candidate = f"{slug} {title} {purpose}".lower()
+        if "checkout" in candidate or "payment" in candidate or "cart" in candidate:
+            return "checkout"
+        if "catalog" in candidate or "product" in candidate or "shop" in candidate:
+            return "catalog"
+        if "profile" in candidate or "account" in candidate or "settings" in candidate:
+            return "profile"
+        if "booking" in candidate or "schedule" in candidate:
+            return "booking"
+        if "dashboard" in candidate or "admin" in candidate or "analytics" in candidate:
+            return "dashboard"
+        if slug == "index" or "landing" in candidate or "home" in candidate:
+            return "landing"
+        return "general"
+
+    def _merge_pages_from_markdown(self, structured: dict, content: str) -> dict:
+        if not content:
+            return structured
+        derived_pages = extract_pages_from_markdown(content)
+        if not derived_pages:
+            return structured
+
+        normalized_pages = self._normalize_pages(derived_pages)
+        if not normalized_pages:
+            return structured
+
+        if not isinstance(structured, dict):
+            structured = {}
+        existing_pages = structured.get("pages")
+        if isinstance(existing_pages, list) and len(existing_pages) > 1:
+            return structured
+
+        merged = dict(structured)
+        merged["pages"] = normalized_pages
+        return merged
+
     def _validate_structured(self, structured: dict) -> tuple[dict, List[str]]:
         errors: List[str] = []
+        model_cls = ProductDocStructured
+        doc_tier = str(structured.get("doc_tier") or "").lower()
+        if doc_tier == "checklist":
+            model_cls = ProductDocChecklist
+        elif doc_tier == "standard":
+            model_cls = ProductDocStandard
+        elif doc_tier == "extended":
+            model_cls = ProductDocExtended
         try:
-            model = ProductDocStructured.model_validate(structured)
+            model = model_cls.model_validate(structured)
         except ValidationError as exc:
             errors.append(str(exc))
             cleaned = self._sanitize_structured(structured)
             try:
-                model = ProductDocStructured.model_validate(cleaned)
+                model = model_cls.model_validate(cleaned)
             except ValidationError as exc2:
                 errors.append(str(exc2))
                 return {}, errors
-        return model.model_dump(exclude_none=True, exclude_unset=True), errors
+        payload = model.model_dump(exclude_none=True, exclude_unset=True)
+        payload = self._ensure_structured_fields(payload)
+        if doc_tier == "extended":
+            payload = self._ensure_mermaid(payload)
+        return payload, errors
 
     def _sanitize_structured(self, structured: dict) -> dict:
         if not isinstance(structured, dict):
@@ -608,6 +1113,7 @@ class ProductDocAgent(BaseAgent):
                 {
                     "title": item.get("title"),
                     "slug": item.get("slug"),
+                    "role": item.get("role"),
                     "purpose": item.get("purpose"),
                     "sections": item.get("sections"),
                     "required": item.get("required"),
@@ -615,6 +1121,33 @@ class ProductDocAgent(BaseAgent):
                 for item in pages
                 if isinstance(item, dict)
             ]
+        data_flow = sanitized.get("data_flow")
+        if isinstance(data_flow, list):
+            sanitized["data_flow"] = [
+                {
+                    "from_page": item.get("from_page"),
+                    "event": item.get("event"),
+                    "to_page": item.get("to_page"),
+                }
+                for item in data_flow
+                if isinstance(item, dict)
+            ]
+        state_contract = sanitized.get("state_contract")
+        if isinstance(state_contract, dict):
+            sanitized["state_contract"] = {
+                "shared_state_key": state_contract.get("shared_state_key"),
+                "records_key": state_contract.get("records_key"),
+                "events_key": state_contract.get("events_key"),
+                "schema": state_contract.get("schema"),
+                "events": state_contract.get("events"),
+            }
+        style_reference = sanitized.get("style_reference")
+        if isinstance(style_reference, dict):
+            sanitized["style_reference"] = {
+                "mode": style_reference.get("mode"),
+                "scope": style_reference.get("scope"),
+                "images": style_reference.get("images"),
+            }
         return sanitized
 
     def _parse_affected_pages(self, text: Optional[str]) -> List[str]:
@@ -680,6 +1213,23 @@ class ProductDocAgent(BaseAgent):
         if not isinstance(current_structured, dict) or not isinstance(updated_structured, dict):
             return False
         keys = {
+            "product_type",
+            "complexity",
+            "doc_tier",
+            "goal",
+            "core_points",
+            "users",
+            "user_stories",
+            "components",
+            "component_inventory",
+            "data_flow",
+            "state_contract",
+            "style_reference",
+            "data_flow_explanation",
+            "detailed_specs",
+            "appendices",
+            "mermaid_page_flow",
+            "mermaid_data_flow",
             "project_name",
             "description",
             "target_audience",
@@ -707,6 +1257,7 @@ class ProductDocAgent(BaseAgent):
             result[slug] = {
                 "title": item.get("title"),
                 "slug": slug,
+                "role": item.get("role"),
                 "purpose": item.get("purpose"),
                 "sections": item.get("sections"),
                 "required": item.get("required"),
@@ -728,6 +1279,7 @@ class ProductDocAgent(BaseAgent):
             index_page = {
                 "title": "Home",
                 "slug": "index",
+                "role": "landing",
                 "purpose": "Primary landing page",
                 "sections": ["hero", "features", "cta"],
                 "required": True,
@@ -737,6 +1289,8 @@ class ProductDocAgent(BaseAgent):
             for page in pages:
                 if isinstance(page, dict) and str(page.get("slug") or "").strip().lower() == "index":
                     page["required"] = True
+                    if not page.get("role"):
+                        page["role"] = "landing"
 
         structured["pages"] = pages
         return structured
@@ -745,10 +1299,20 @@ class ProductDocAgent(BaseAgent):
         name = (structured.get("project_name") or "Untitled project") if isinstance(structured, dict) else "Untitled"
         description = structured.get("description") if isinstance(structured, dict) else None
         audience = structured.get("target_audience") if isinstance(structured, dict) else None
+        goal = structured.get("goal") if isinstance(structured, dict) else None
+        product_type = structured.get("product_type") if isinstance(structured, dict) else None
+        complexity = structured.get("complexity") if isinstance(structured, dict) else None
+        doc_tier = structured.get("doc_tier") if isinstance(structured, dict) else None
         goals = structured.get("goals") if isinstance(structured, dict) else []
         features = structured.get("features") if isinstance(structured, dict) else []
         design = structured.get("design_direction") if isinstance(structured, dict) else {}
         pages = structured.get("pages") if isinstance(structured, dict) else []
+        data_flow = structured.get("data_flow") if isinstance(structured, dict) else []
+        state_contract = structured.get("state_contract") if isinstance(structured, dict) else None
+        component_inventory = structured.get("component_inventory") if isinstance(structured, dict) else []
+        core_points = structured.get("core_points") if isinstance(structured, dict) else []
+        users = structured.get("users") if isinstance(structured, dict) else []
+        user_stories = structured.get("user_stories") if isinstance(structured, dict) else []
         constraints = structured.get("constraints") if isinstance(structured, dict) else []
 
         lines = ["# Product Document", "", f"## Project", f"- Name: {name}"]
@@ -756,6 +1320,16 @@ class ProductDocAgent(BaseAgent):
             lines.append(f"- Description: {description}")
         if audience:
             lines.append(f"- Target audience: {audience}")
+        if product_type:
+            lines.append(f"- Product type: {product_type}")
+        if complexity:
+            lines.append(f"- Complexity: {complexity}")
+        if doc_tier:
+            lines.append(f"- Doc tier: {doc_tier}")
+
+        if goal:
+            lines.append("\n## Goal")
+            lines.append(f"- {goal}")
 
         if goals:
             lines.append("\n## Goals")
@@ -789,11 +1363,52 @@ class ProductDocAgent(BaseAgent):
                     continue
                 title = page.get("title") or "Page"
                 slug = page.get("slug") or ""
+                role = page.get("role") or "general"
                 purpose = page.get("purpose") or ""
-                lines.append(f"- {title} ({slug}) - {purpose}")
+                lines.append(f"- {title} ({slug}) [{role}] - {purpose}")
                 sections = page.get("sections") or []
                 if sections:
                     lines.append("  - Sections: " + ", ".join(str(item) for item in sections))
+
+        if data_flow:
+            lines.append("\n## Data Flow")
+            for flow in data_flow:
+                if not isinstance(flow, dict):
+                    continue
+                from_page = flow.get("from_page") or flow.get("from") or ""
+                to_page = flow.get("to_page") or flow.get("to") or ""
+                event = flow.get("event") or ""
+                if from_page and to_page:
+                    lines.append(f"- {from_page} -> {to_page} ({event})")
+
+        if state_contract and isinstance(state_contract, dict):
+            lines.append("\n## State Contract")
+            lines.append(f"- shared_state_key: {state_contract.get('shared_state_key')}")
+            lines.append(f"- records_key: {state_contract.get('records_key')}")
+            lines.append(f"- events_key: {state_contract.get('events_key')}")
+            events = state_contract.get("events")
+            if isinstance(events, list) and events:
+                lines.append("- events: " + ", ".join(str(item) for item in events))
+
+        if component_inventory:
+            lines.append("\n## Component Inventory")
+            for item in component_inventory:
+                lines.append(f"- {item}")
+
+        if core_points:
+            lines.append("\n## Core Points")
+            for item in core_points:
+                lines.append(f"- {item}")
+
+        if users:
+            lines.append("\n## Users")
+            for item in users:
+                lines.append(f"- {item}")
+
+        if user_stories:
+            lines.append("\n## User Stories")
+            for item in user_stories:
+                lines.append(f"- {item}")
 
         if constraints:
             lines.append("\n## Constraints")

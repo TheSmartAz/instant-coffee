@@ -169,8 +169,9 @@ Navigation HTML template:
 - Mobile viewport: max-width 430px
 - Buttons: minimum 44px height
 - Fonts: body 16px, headings 24-32px
-- Include navigation bar linking to all pages
-- Mark current page as active in nav
+- Include a navigation bar linking to all pages only when there is more than one page
+- Place the navigation bar at the bottom of the page
+- Mark current page as active in nav (if nav exists)
 - Use CSS variables from design system
 - Single-file HTML with inline CSS and JS
 - No external dependencies (fonts, images must be inline or placeholder)
@@ -186,6 +187,110 @@ Output complete HTML code directly, wrapped in special markers for extraction:
 </HTML_OUTPUT>
 
 Do not include any other content, only output the HTML wrapped in this marker."""
+
+# ============ Style Reference Prompts ============
+
+STYLE_REFERENCE_STYLE_ONLY_PROMPT = """You are a design analyst. Extract design tokens from the reference images.
+
+Analyze and extract:
+1. Colors: primary (buttons/links), accent (highlights), background (main, card, surface), text (primary, secondary)
+2. Typography: font family (sans/serif/mono), size scale (small/base/large/xlarge), weights
+3. Border radius: sharp (0px), small (4px), medium (8px), large (16px), pill (999px)
+4. Shadow: none, soft (subtle), medium, strong
+5. Spacing: tight (compact), medium, airy (generous whitespace)
+
+Ensure primary text/background contrast meets WCAG AA (>=4.5:1). If contrast is weak, adjust text color tokens.
+
+Return JSON only:
+{
+  "colors": {"primary": "#hex", "accent": "#hex", "background": {"main": "#hex", "card": "#hex", "surface": "#hex"}, "text": {"primary": "#hex", "secondary": "#hex"}},
+  "typography": {"family": "sans/serif/mono", "scale": "small/base/large/xlarge", "weights": ["400", "600"]},
+  "radius": "sharp/small/medium/large/pill",
+  "shadow": "none/soft/medium/strong",
+  "spacing": "tight/medium/airy",
+  "layout_patterns": []
+}
+"""
+
+STYLE_REFERENCE_FULL_MIMIC_PROMPT = """You are a design analyst. Extract design tokens from the reference images.
+
+Analyze and extract:
+1. Colors: primary (buttons/links), accent (highlights), background (main, card, surface), text (primary, secondary)
+2. Typography: font family (sans/serif/mono), size scale (small/base/large/xlarge), weights
+3. Border radius: sharp (0px), small (4px), medium (8px), large (16px), pill (999px)
+4. Shadow: none, soft (subtle), medium, strong
+5. Spacing: tight (compact), medium, airy (generous whitespace)
+6. Layout patterns: hero-left, hero-center, hero-full, card-grid, card-list, split-vertical, split-horizontal, stacked-sections (include confidence 0-1)
+
+Ensure primary text/background contrast meets WCAG AA (>=4.5:1). If contrast is weak, adjust text color tokens.
+
+Return JSON only:
+{
+  "colors": {"primary": "#hex", "accent": "#hex", "background": {"main": "#hex", "card": "#hex", "surface": "#hex"}, "text": {"primary": "#hex", "secondary": "#hex"}},
+  "typography": {"family": "sans/serif/mono", "scale": "small/base/large/xlarge", "weights": ["400", "600"]},
+  "radius": "sharp/small/medium/large/pill",
+  "shadow": "none/soft/medium/strong",
+  "spacing": "tight/medium/airy",
+  "layout_patterns": [{"pattern": "hero-left", "confidence": 0.82}, {"pattern": "card-grid", "confidence": 0.74}]
+}
+"""
+
+
+def get_style_reference_prompt(mode: str) -> str:
+    if mode == "style_only":
+        return STYLE_REFERENCE_STYLE_ONLY_PROMPT
+    return STYLE_REFERENCE_FULL_MIMIC_PROMPT
+
+# ============ Aesthetic Scoring & Refinement Prompts ============
+
+AESTHETIC_SCORING_PROMPT = """You are a visual design reviewer. Score this page on 5 dimensions (1-5 each):
+
+1. Typography: Clear hierarchy (title/body/CTA)? Appropriate sizes?
+2. Contrast: Text readable against background? Good color contrast?
+3. Layout: Balanced layout? Good whitespace?
+4. Color: Colors work well together? Professional appearance?
+5. CTA: Call-to-action prominent and clear?
+
+Scoring guide:
+- 5: Excellent, professional quality
+- 4: Good, minor issues
+- 3: Acceptable, some improvement needed
+- 2: Poor, significant issues
+- 1: Unusable, major problems
+
+Return JSON only (no markdown):
+{
+  "dimensions": {
+    "typography": 0,
+    "contrast": 0,
+    "layout": 0,
+    "color": 0,
+    "cta": 0
+  },
+  "total": 0,
+  "issues": ["Specific issue 1", "Specific issue 2"]
+}
+"""
+
+STYLE_REFINER_SYSTEM_PROMPT = """You are a style refiner. Improve the aesthetic quality of the provided HTML.
+
+Requirements:
+- Preserve the content, structure, and semantics.
+- Do NOT remove scripts, data attributes, or required IDs/classes.
+- Improve typography hierarchy, contrast, layout spacing, and CTA prominence.
+- Keep the page mobile-first and single-file (inline CSS/JS).
+
+Output complete HTML only, wrapped in:
+
+<HTML_OUTPUT>
+<!DOCTYPE html>
+<html>
+...
+</html>
+</HTML_OUTPUT>
+
+No additional text.
+"""
 
 # ============ Refinement Agent Prompt ============
 
@@ -279,59 +384,132 @@ Output only valid JSON, no additional text."""
 
 # ============ ProductDoc Agent Prompts ============
 
-PRODUCT_DOC_GENERATE_SYSTEM = """You are a product document specialist. Your job is to create a comprehensive product document that will serve as the source of truth for generating a mobile-first website.
+_PRODUCT_DOC_BASE_SCHEMA = """{
+  "product_type": "ecommerce|booking|dashboard|landing|card|invitation",
+  "complexity": "simple|medium|complex",
+  "doc_tier": "checklist|standard|extended",
+  "goal": "string",
+  "pages": [
+    {"slug": "index", "role": "landing", "title": "Home"}
+  ],
+  "data_flow": [
+    {"from_page": "index", "event": "submit", "to_page": "thanks"}
+  ],
+  "state_contract": {
+    "shared_state_key": "instant-coffee:state",
+    "records_key": "instant-coffee:records",
+    "events_key": "instant-coffee:events",
+    "schema": {},
+    "events": []
+  },
+  "style_reference": {
+    "mode": "full_mimic|style_only",
+    "scope": {},
+    "images": []
+  },
+  "component_inventory": ["Hero", "Footer"]
+}"""
+
+_PRODUCT_DOC_TIER_SCHEMAS = {
+    "checklist": """{
+  "product_type": "ecommerce|booking|dashboard|landing|card|invitation",
+  "complexity": "simple|medium|complex",
+  "doc_tier": "checklist",
+  "goal": "string",
+  "pages": [
+    {"slug": "index", "role": "landing", "title": "Home"}
+  ],
+  "data_flow": [],
+  "state_contract": null,
+  "style_reference": {"mode": "full_mimic|style_only", "scope": {}, "images": []},
+  "component_inventory": [],
+  "core_points": ["string"],
+  "constraints": ["string"],
+  "project_name": "string (optional)",
+  "description": "string (optional)",
+  "target_audience": "string (optional)",
+  "goals": ["string (optional)"],
+  "features": [{"name": "string", "description": "string", "priority": "must|should|nice"}],
+  "design_direction": {"style": "string", "color_preference": "string", "tone": "string", "reference_sites": []}
+}""",
+    "standard": """{
+  "product_type": "ecommerce|booking|dashboard|landing|card|invitation",
+  "complexity": "simple|medium|complex",
+  "doc_tier": "standard",
+  "goal": "string",
+  "pages": [
+    {"slug": "index", "role": "landing", "title": "Home"}
+  ],
+  "data_flow": [
+    {"from_page": "index", "event": "submit", "to_page": "thanks"}
+  ],
+  "state_contract": {"shared_state_key": "instant-coffee:state", "records_key": "instant-coffee:records", "events_key": "instant-coffee:events", "schema": {}, "events": []},
+  "style_reference": {"mode": "full_mimic|style_only", "scope": {}, "images": []},
+  "component_inventory": [],
+  "users": ["string"],
+  "user_stories": ["string"],
+  "components": ["string"],
+  "data_flow_explanation": "string",
+  "project_name": "string (optional)",
+  "description": "string (optional)",
+  "target_audience": "string (optional)",
+  "goals": ["string (optional)"],
+  "features": [{"name": "string", "description": "string", "priority": "must|should|nice"}],
+  "design_direction": {"style": "string", "color_preference": "string", "tone": "string", "reference_sites": []}
+}""",
+    "extended": """{
+  "product_type": "ecommerce|booking|dashboard|landing|card|invitation",
+  "complexity": "simple|medium|complex",
+  "doc_tier": "extended",
+  "goal": "string",
+  "pages": [
+    {"slug": "index", "role": "landing", "title": "Home"}
+  ],
+  "data_flow": [
+    {"from_page": "index", "event": "submit", "to_page": "thanks"}
+  ],
+  "state_contract": {"shared_state_key": "instant-coffee:state", "records_key": "instant-coffee:records", "events_key": "instant-coffee:events", "schema": {}, "events": []},
+  "style_reference": {"mode": "full_mimic|style_only", "scope": {}, "images": []},
+  "component_inventory": [],
+  "users": ["string"],
+  "user_stories": ["string"],
+  "components": ["string"],
+  "data_flow_explanation": "string",
+  "mermaid_page_flow": "string (optional)",
+  "mermaid_data_flow": "string (optional)",
+  "detailed_specs": ["string"],
+  "appendices": ["string"],
+  "project_name": "string (optional)",
+  "description": "string (optional)",
+  "target_audience": "string (optional)",
+  "goals": ["string (optional)"],
+  "features": [{"name": "string", "description": "string", "priority": "must|should|nice"}],
+  "design_direction": {"style": "string", "color_preference": "string", "tone": "string", "reference_sites": []}
+}""",
+}
+
+PRODUCT_DOC_GENERATE_SYSTEM = """You are a product document specialist. Your job is to create a structured product document that serves as the source of truth for generating a mobile-first website.
 
 Output Requirements:
 1. Markdown content with clear sections
 2. Structured JSON data following the schema below
 
+Document tier: {doc_tier}
 JSON Schema:
-{
-  "project_name": "string",
-  "description": "string (1-2 sentences)",
-  "target_audience": "string",
-  "goals": ["string (max 5)"],
-  "features": [
-    {"name": "string", "description": "string", "priority": "must|should|nice"}
-  ],
-  "design_direction": {
-    "style": "string (e.g., modern, minimal, playful)",
-    "color_preference": "string",
-    "tone": "string (e.g., professional, friendly)",
-    "reference_sites": ["string (optional)"]
-  },
-  "pages": [
-    {"title": "string", "slug": "string", "purpose": "string", "sections": ["string"], "required": boolean}
-  ],
-  "constraints": ["string"]
-}
+{json_schema}
+
+Rules:
+- Always include base fields: product_type, complexity, doc_tier, goal, pages, data_flow, state_contract, style_reference, component_inventory
+- Pages must include slug and role (title optional)
+- Data flow items must include from_page, event, to_page
+- State contract is required for flow apps (ecommerce, booking, dashboard); for static types set it to null
+- Mermaid fields are optional for extended tier; include them when possible
 
 Mobile-First Requirements:
 - All designs must target mobile viewport (max 430px)
 - Buttons minimum 44px height
 - Font sizes: body 16px, headings 24-32px
 - Touch-friendly interactions
-
-Example JSON:
-{
-  "project_name": "TrailBuddy",
-  "description": "A mobile-first hiking planner that helps users find and save trails.",
-  "target_audience": "Weekend hikers and outdoor enthusiasts",
-  "goals": ["Help users discover trails", "Enable quick trip planning"],
-  "features": [
-    {"name": "Trail search", "description": "Filter by distance and difficulty", "priority": "must"}
-  ],
-  "design_direction": {
-    "style": "clean, outdoorsy",
-    "color_preference": "earth tones",
-    "tone": "friendly",
-    "reference_sites": []
-  },
-  "pages": [
-    {"title": "Home", "slug": "index", "purpose": "Landing page", "sections": ["hero", "features", "cta"], "required": true}
-  ],
-  "constraints": ["Mobile-first only"]
-}
 
 Language:
 - Respond in the same language as the user request (Chinese or English)
@@ -351,13 +529,19 @@ User Request: {user_message}
 
 {interview_context_section}
 
+Routing:
+- product_type: {product_type}
+- complexity: {complexity}
+- doc_tier: {doc_tier}
+
 Create a comprehensive product document that captures:
-1. The project's purpose and goals
-2. Target audience
-3. Required features and their priorities
-4. Design direction
-5. Page structure (at minimum, include an index page)
-6. Any constraints or special requirements
+1. Goal and core requirements
+2. Target users and stories (for standard/extended tiers)
+3. Page structure (include an index page at minimum)
+4. Data flow and state contract (for flow apps)
+5. Components and shared inventory
+6. Style reference and constraints
+7. Mermaid diagrams (extended tier, optional)
 
 Remember to output in the specified format with MARKDOWN, JSON, and MESSAGE sections."""
 
@@ -368,9 +552,14 @@ Rules:
 2. Preserve all other content unchanged
 3. Track which pages are affected by changes
 4. Provide a clear change summary
+5. Keep the document tier and schema consistent
 
 Language:
 - Respond in the same language as the user request (Chinese or English)
+
+Document tier: {doc_tier}
+JSON Schema:
+{json_schema}
 
 Output Format:
 ---MARKDOWN---
@@ -391,6 +580,11 @@ PRODUCT_DOC_UPDATE_USER = """Current Product Document:
 
 Current Structured Data:
 {current_json}
+
+Routing:
+- product_type: {product_type}
+- complexity: {complexity}
+- doc_tier: {doc_tier}
 
 User's Change Request: {user_message}
 
@@ -424,14 +618,43 @@ def get_sitemap_prompt() -> str:
     return SITEMAP_SYSTEM_PROMPT
 
 
-def get_product_doc_generate_prompt() -> str:
+EXPANDER_SYSTEM_PROMPT = """You are the Expander agent. Enrich the page plan with concise expansion notes.
+
+Rules:
+- Focus on secondary details, supporting content, and helpful UI elements.
+- Preserve the user's intent and product document constraints.
+- Keep it short: 4-6 bullet points max.
+- Output plain text only, no JSON and no markdown headers.
+"""
+
+
+def get_expander_prompt() -> str:
+    """Get Expander Agent system prompt"""
+    return EXPANDER_SYSTEM_PROMPT
+
+
+def get_aesthetic_scoring_prompt() -> str:
+    """Get Aesthetic Scoring prompt"""
+    return AESTHETIC_SCORING_PROMPT
+
+
+def get_style_refiner_prompt() -> str:
+    """Get Style Refiner system prompt"""
+    return STYLE_REFINER_SYSTEM_PROMPT
+
+
+def get_product_doc_generate_prompt(doc_tier: str | None = None) -> str:
     """Get ProductDoc Agent generate system prompt"""
-    return PRODUCT_DOC_GENERATE_SYSTEM
+    tier = (doc_tier or "standard").lower().strip()
+    schema = _PRODUCT_DOC_TIER_SCHEMAS.get(tier) or _PRODUCT_DOC_BASE_SCHEMA
+    return PRODUCT_DOC_GENERATE_SYSTEM.format(doc_tier=tier, json_schema=schema)
 
 
-def get_product_doc_update_prompt() -> str:
+def get_product_doc_update_prompt(doc_tier: str | None = None) -> str:
     """Get ProductDoc Agent update system prompt"""
-    return PRODUCT_DOC_UPDATE_SYSTEM
+    tier = (doc_tier or "standard").lower().strip()
+    schema = _PRODUCT_DOC_TIER_SCHEMAS.get(tier) or _PRODUCT_DOC_BASE_SCHEMA
+    return PRODUCT_DOC_UPDATE_SYSTEM.format(doc_tier=tier, json_schema=schema)
 
 
 __all__ = [
@@ -440,9 +663,15 @@ __all__ = [
     "GENERATION_SYSTEM_MULTIPAGE",
     "REFINEMENT_SYSTEM_PROMPT",
     "SITEMAP_SYSTEM_PROMPT",
+    "AESTHETIC_SCORING_PROMPT",
+    "STYLE_REFINER_SYSTEM_PROMPT",
+    "EXPANDER_SYSTEM_PROMPT",
     "get_interview_prompt",
     "get_generation_prompt",
     "get_generation_prompt_multipage",
     "get_refinement_prompt",
     "get_sitemap_prompt",
+    "get_expander_prompt",
+    "get_aesthetic_scoring_prompt",
+    "get_style_refiner_prompt",
 ]

@@ -9,6 +9,17 @@ from .openai_client import (
     TimeoutError,
     TokenUsage,
 )
+from .client_factory import ModelClientFactory, ModelClientFactoryError
+from .model_pool import (
+    FallbackTrigger,
+    ModelCallResult,
+    ModelExhaustedError,
+    ModelPoolManager,
+    ModelRole,
+    ModelSelection,
+    get_model_pool_manager,
+    should_fallback,
+)
 from .tools import (
     FILESYSTEM_READ_TOOL,
     FILESYSTEM_WRITE_TOOL,
@@ -32,6 +43,16 @@ __all__ = [
     "RateLimitError",
     "TimeoutError",
     "TokenUsage",
+    "ModelClientFactory",
+    "ModelClientFactoryError",
+    "FallbackTrigger",
+    "ModelCallResult",
+    "ModelExhaustedError",
+    "ModelPoolManager",
+    "ModelRole",
+    "ModelSelection",
+    "get_model_pool_manager",
+    "should_fallback",
     "FILESYSTEM_READ_TOOL",
     "FILESYSTEM_WRITE_TOOL",
     "VALIDATE_HTML_TOOL",

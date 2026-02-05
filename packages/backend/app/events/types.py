@@ -31,6 +31,7 @@ class EventType(str, Enum):
     PAGE_CREATED = "page_created"
     PAGE_VERSION_CREATED = "page_version_created"
     PAGE_PREVIEW_READY = "page_preview_ready"
+    AESTHETIC_SCORE = "aesthetic_score"
 
     # Phase 4: ProductDoc events
     PRODUCT_DOC_GENERATED = "product_doc_generated"

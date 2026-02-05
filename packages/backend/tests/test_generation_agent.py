@@ -48,6 +48,7 @@ def test_build_messages_format():
         requirements="Build a landing page",
         history=history,
         current_html="<html><body>Old</body></html>",
+        guardrails=None,
     )
     assert messages[0]["role"] == "system"
     assert messages[1]["content"] == "Earlier request"

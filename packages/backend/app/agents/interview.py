@@ -9,6 +9,7 @@ from uuid import uuid4
 from .base import AgentResult, BaseAgent
 from .prompts import get_interview_prompt
 from ..events.models import InterviewQuestionEvent
+from ..llm.model_pool import ModelRole
 
 
 @dataclass
@@ -41,6 +42,7 @@ class InterviewAgent(BaseAgent):
             agent_id=agent_id,
             task_id=task_id,
             emit_lifecycle_events=emit_lifecycle_events,
+            model_role=ModelRole.EXPANDER,
         )
         self.system_prompt = get_interview_prompt()
         self.state = InterviewState()
@@ -111,9 +113,8 @@ class InterviewAgent(BaseAgent):
         response = await self._call_llm(
             messages=messages,
             agent_type=self.agent_type,
-            model=self.settings.model,
             temperature=self.settings.temperature,
-            stream=True,
+            stream=False,
             context="interview",
         )
         parsed = self._parse_response(response.content or "")

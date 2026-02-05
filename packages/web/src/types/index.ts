@@ -162,6 +162,36 @@ export interface ChatResponse {
   tokens_used?: number
 }
 
+export type ChatAttachmentType = 'image'
+
+export interface ChatAttachment {
+  type: ChatAttachmentType
+  data: string
+  name: string
+  size: number
+  mimeType?: string
+  width?: number
+  height?: number
+  previewUrl?: string
+}
+
+export type ChatStyleReferenceMode = 'full_mimic' | 'style_only'
+
+export interface ChatStyleReference {
+  mode: ChatStyleReferenceMode
+  scope_pages?: string[]
+}
+
+export interface ChatRequestPayload {
+  session_id?: string
+  message: string
+  interview?: boolean
+  generate_now?: boolean
+  images?: string[]
+  target_pages?: string[]
+  style_reference?: ChatStyleReference
+}
+
 export interface TokenUsage {
   input_tokens: number
   output_tokens: number
@@ -187,6 +217,7 @@ export interface ProductDoc {
   sessionId: string
   content: string
   structured: ProductDocStructured
+  version: number
   status: ProductDocStatus
   createdAt: Date
   updatedAt: Date

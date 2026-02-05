@@ -10,9 +10,11 @@ from typing import Any, Callable, List, Optional, Sequence
 
 from .base import BaseAgent
 from .prompts import get_generation_prompt, get_generation_prompt_multipage
+from ..llm.model_pool import ModelRole
 from ..llm.tool_handlers import MAX_WRITE_BYTES
 from ..llm.tools import get_filesystem_tools
 from ..schemas.sitemap import GlobalStyle, NavItem, SitemapPage
+from ..services.data_protocol import DataProtocolGenerator
 from ..services.filesystem import FilesystemService
 from ..services.page_version import PageVersionService
 from ..utils.html import (
@@ -23,6 +25,7 @@ from ..utils.html import (
     normalize_internal_links,
     strip_prompt_artifacts,
 )
+from ..utils.guardrails import guardrails_to_prompt
 from ..utils.style import build_global_style_css, build_site_css
 from ..generators.mobile_html import build_fallback_excerpt
 from ..exceptions import HTMLExtractionError, new_trace_id
@@ -82,6 +85,7 @@ class GenerationAgent(BaseAgent):
             agent_id=agent_id,
             task_id=task_id,
             emit_lifecycle_events=emit_lifecycle_events,
+            model_role=ModelRole.WRITER,
         )
         self.system_prompt = get_generation_prompt()
         self.system_prompt_multipage = get_generation_prompt_multipage()
@@ -109,6 +113,7 @@ class GenerationAgent(BaseAgent):
         product_doc: Any | None = None,
         all_pages: Sequence[str] | None = None,
         css_mode: str = "inline",
+        guardrails: dict | None = None,
     ) -> GenerationResult:
         history = history or []
         html = ""
@@ -133,18 +138,19 @@ class GenerationAgent(BaseAgent):
                     requirements=requirements,
                     history=history,
                     current_html=resolved_current_html,
+                    guardrails=guardrails,
                 )
             else:
                 messages = self._build_messages(
                     requirements=requirements or "",
                     history=history,
                     current_html=resolved_current_html,
+                    guardrails=guardrails,
                 )
             if stream:
                 response = await self._call_llm(
                     messages=messages,
                     agent_type=self.agent_type,
-                    model=self.settings.model,
                     temperature=self.settings.temperature,
                     stream=True,
                     context="generation",
@@ -154,7 +160,6 @@ class GenerationAgent(BaseAgent):
                     response = await self._call_llm(
                         messages=messages,
                         agent_type=self.agent_type,
-                        model=self.settings.model,
                         temperature=self.settings.temperature,
                         stream=False,
                         context="generation",
@@ -166,7 +171,6 @@ class GenerationAgent(BaseAgent):
                         messages=messages,
                         tools=tools,
                         tool_handlers=tool_handlers,
-                        model=self.settings.model,
                         temperature=self.settings.temperature,
                         context="generation",
                     )
@@ -213,6 +217,12 @@ class GenerationAgent(BaseAgent):
                 html = ensure_css_link(html, css_href)
             else:
                 html = inline_css(html, global_style_css)
+            html = self._apply_data_protocol(
+                html,
+                product_doc=product_doc,
+                output_dir=output_dir,
+                page_slug=self._get_page_slug(page_spec),
+            )
 
             filepath = ""
             preview_url = ""
@@ -250,6 +260,13 @@ class GenerationAgent(BaseAgent):
                 fallback_excerpt=fallback_excerpt,
             )
 
+        html = self._apply_data_protocol(
+            html,
+            product_doc=product_doc,
+            output_dir=output_dir,
+            page_slug="index",
+        )
+
         filepath, preview_url = self._save_html(output_dir=output_dir, html=html)
         self._current_html = html
         token_usage = self._serialize_token_usage(response)
@@ -269,11 +286,13 @@ class GenerationAgent(BaseAgent):
         requirements: str,
         history: Sequence[dict],
         current_html: Optional[str],
+        guardrails: dict | None,
     ) -> list[dict]:
         resolved_current_html = current_html if current_html is not None else self._current_html
-        messages: list[dict] = [
-            {"role": "system", "content": self.system_prompt},
-        ]
+        messages: list[dict] = [{"role": "system", "content": self.system_prompt}]
+        guardrails_text = guardrails_to_prompt(guardrails)
+        if guardrails_text:
+            messages.append({"role": "system", "content": guardrails_text})
         self._append_history_messages(messages, history)
 
         requirements_text = requirements.strip() or "Generate a mobile-first HTML page."
@@ -294,6 +313,7 @@ class GenerationAgent(BaseAgent):
         requirements: Optional[str],
         history: Sequence[dict],
         current_html: Optional[str],
+        guardrails: dict | None,
     ) -> list[dict]:
         page_title = self._get_page_field(page_spec, "title")
         page_slug = self._get_page_field(page_spec, "slug")
@@ -323,6 +343,9 @@ class GenerationAgent(BaseAgent):
         )
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        guardrails_text = guardrails_to_prompt(guardrails)
+        if guardrails_text:
+            messages.append({"role": "system", "content": guardrails_text})
         self._append_history_messages(messages, history)
 
         resolved_current_html = current_html if current_html is not None else self._current_html
@@ -423,6 +446,9 @@ class GenerationAgent(BaseAgent):
             goals = structured.get("goals") if isinstance(structured.get("goals"), list) else []
             features = structured.get("features") if isinstance(structured.get("features"), list) else []
             constraints = structured.get("constraints") if isinstance(structured.get("constraints"), list) else []
+            component_inventory = structured.get("component_inventory")
+            if not isinstance(component_inventory, list):
+                component_inventory = structured.get("components") if isinstance(structured.get("components"), list) else []
             design = structured.get("design_direction") or structured.get("designDirection") or {}
 
             if project_name:
@@ -449,6 +475,8 @@ class GenerationAgent(BaseAgent):
                     parts.append(f"Key features: {', '.join(feature_names)}")
             if constraints:
                 parts.append(f"Constraints: {', '.join(map(str, constraints[:6]))}")
+            if component_inventory:
+                parts.append(f"Component inventory: {', '.join(map(str, component_inventory[:8]))}")
             if isinstance(design, dict) and design:
                 style = design.get("style")
                 tone = design.get("tone")
@@ -464,6 +492,11 @@ class GenerationAgent(BaseAgent):
                     parts.append(f"Design direction: {', '.join(design_bits)}")
 
         if not parts:
+            if content:
+                excerpt = content.strip()
+                if len(excerpt) > max_chars:
+                    excerpt = excerpt[:max_chars] + "..."
+                return f"Product doc excerpt:\n{excerpt}"
             return "No product document available."
 
         context = "\n".join(parts)
@@ -586,7 +619,6 @@ class GenerationAgent(BaseAgent):
             response = await self._call_llm(
                 messages=retry_messages,
                 agent_type=self.agent_type,
-                model=self.settings.model,
                 temperature=retry_temperature,
                 stream=False,
                 emit_progress=False,
@@ -682,6 +714,27 @@ class GenerationAgent(BaseAgent):
             }
 
         return handler
+
+    def _apply_data_protocol(
+        self,
+        html: str,
+        *,
+        product_doc: Any | None,
+        output_dir: Optional[str],
+        page_slug: str,
+    ) -> str:
+        if not output_dir:
+            return html
+        try:
+            generator = DataProtocolGenerator(
+                output_dir=output_dir,
+                session_id=self.session_id,
+                db=self.db,
+            )
+            return generator.prepare_html(html, product_doc=product_doc, page_slug=page_slug)
+        except Exception:
+            logger.exception("GenerationAgent failed to apply data protocol injection")
+            return html
 
     def _resolve_safe_path(self, *, session_dir: Path, path: str) -> Path:
         if not path or not str(path).strip():

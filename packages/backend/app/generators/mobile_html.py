@@ -12,6 +12,10 @@ _ALT_RE = re.compile(r"\balt\s*=\s*([\"'])(.*?)\1", re.IGNORECASE | re.DOTALL)
 _HREF_RE = re.compile(r"href\s*=\s*([\"'])(.*?)\1", re.IGNORECASE)
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 _BASE64_RE = re.compile(r"data:[^;]+;base64,([A-Za-z0-9+/=]+)")
+_INPUT_RE = re.compile(r"<(input|textarea|select)\b[^>]*>", re.IGNORECASE)
+_LABEL_RE = re.compile(r"<label\b[^>]*>", re.IGNORECASE)
+_ARIA_LABEL_RE = re.compile(r"aria-label\s*=", re.IGNORECASE)
+_ARIA_LABELLED_RE = re.compile(r"aria-labelledby\s*=", re.IGNORECASE)
 
 MAX_INLINE_BASE64_BYTES = 200_000
 FALLBACK_EXCERPT_MAX_CHARS = 1200
@@ -56,7 +60,7 @@ def _validate_internal_link(value: str) -> bool:
     return False
 
 
-def validate_mobile_html(html: str) -> Dict[str, List[str]]:
+def validate_mobile_html(html: str, *, guardrails: dict | None = None) -> Dict[str, List[str]]:
     errors: List[str] = []
     warnings: List[str] = []
 
@@ -94,6 +98,21 @@ def validate_mobile_html(html: str) -> Dict[str, List[str]]:
         if not _validate_internal_link(href):
             errors.append("invalid_internal_link")
             break
+
+    guardrail_ids = set()
+    if guardrails and isinstance(guardrails, dict):
+        for group in ("hard", "soft"):
+            rules = guardrails.get(group)
+            if not isinstance(rules, list):
+                continue
+            for rule in rules:
+                if isinstance(rule, dict) and rule.get("id"):
+                    guardrail_ids.add(str(rule.get("id")))
+
+    if "form-labels" in guardrail_ids:
+        if _INPUT_RE.search(html):
+            if not (_LABEL_RE.search(html) or _ARIA_LABEL_RE.search(html) or _ARIA_LABELLED_RE.search(html)):
+                errors.append("form_missing_labels")
 
     return {"errors": errors, "warnings": warnings}
 

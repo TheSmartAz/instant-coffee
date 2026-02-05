@@ -2,6 +2,7 @@ from app.utils.html import (
     build_nav_html,
     ensure_css_link,
     ensure_nav_html,
+    inline_css,
     normalize_internal_links,
     rewrite_internal_links_for_export,
 )
@@ -17,6 +18,12 @@ def test_build_nav_html_active_and_links() -> None:
     assert "href=\"index.html\"" in html
     assert "href=\"pages/about.html\"" in html
     assert "nav-link active" in html
+
+
+def test_build_nav_html_skips_single_page() -> None:
+    nav = [{"slug": "index", "label": "Home", "order": 0}]
+    html = build_nav_html(nav, current_slug="index")
+    assert html == ""
 
 
 def test_normalize_internal_links_and_warnings() -> None:
@@ -42,13 +49,25 @@ def test_ensure_nav_html_inserts_into_body() -> None:
     nav_html = "<nav class=\"site-nav\">Nav</nav>"
     updated = ensure_nav_html(html, nav_html)
     assert "site-nav" in updated
-    assert updated.index("site-nav") < updated.index("Content")
+    assert updated.index("site-nav") > updated.index("Content")
 
 
 def test_ensure_css_link_in_head() -> None:
     html = "<html><head></head><body></body></html>"
     updated = ensure_css_link(html, "assets/site.css")
     assert "assets/site.css" in updated
+
+
+def test_inline_css_prepend_keeps_page_styles_winning() -> None:
+    html = "<html><head><style>.x{color:red}</style></head><body></body></html>"
+    updated = inline_css(html, "body{background:blue}", position="prepend")
+    assert updated.index("body{background:blue}") < updated.index(".x{color:red}")
+
+
+def test_inline_css_append_keeps_injected_styles_last() -> None:
+    html = "<html><head><style>.x{color:red}</style></head><body></body></html>"
+    updated = inline_css(html, "body{background:blue}")
+    assert updated.index("body{background:blue}") > updated.index(".x{color:red}")
 
 
 def test_rewrite_internal_links_for_export_index_page() -> None:

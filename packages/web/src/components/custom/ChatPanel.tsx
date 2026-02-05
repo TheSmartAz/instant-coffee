@@ -5,11 +5,20 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useVirtualList } from '@/hooks/useVirtualList'
-import type { InterviewActionPayload, Message } from '@/types'
+import type { ChatAttachment, ChatStyleReference, InterviewActionPayload, Message, Page } from '@/types'
 
 export interface ChatPanelProps {
   messages: Message[]
-  onSendMessage: (content: string, options?: { triggerInterview?: boolean; generateNow?: boolean }) => void
+  onSendMessage: (
+    content: string,
+    options?: {
+      triggerInterview?: boolean
+      generateNow?: boolean
+      attachments?: ChatAttachment[]
+      targetPages?: string[]
+      styleReference?: ChatStyleReference
+    }
+  ) => void
   onInterviewAction?: (payload: InterviewActionPayload) => void
   onTabChange?: (tab: 'preview' | 'code' | 'product-doc') => void
   onDisambiguationSelect?: (option: { id: string; slug: string; title: string }) => void
@@ -20,6 +29,7 @@ export interface ChatPanelProps {
   showHeader?: boolean
   showBorder?: boolean
   className?: string
+  pages?: Page[]
 }
 
 export function ChatPanel({
@@ -35,6 +45,7 @@ export function ChatPanel({
   showHeader = true,
   showBorder = true,
   className,
+  pages,
 }: ChatPanelProps) {
   const bottomRef = React.useRef<HTMLDivElement | null>(null)
   const visibleMessages = React.useMemo(
@@ -159,6 +170,7 @@ export function ChatPanel({
           disabled={isLoading}
           initialInterviewOn={isFirstMessage}
           showInterviewToggle
+          pages={pages}
         />
       </div>
     </div>

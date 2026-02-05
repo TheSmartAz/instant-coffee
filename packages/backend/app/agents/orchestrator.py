@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
 import logging
@@ -15,17 +16,28 @@ from ..events.emitter import EventEmitter
 from ..events.models import PlanCreatedEvent
 from ..events.models import DoneEvent, ErrorEvent
 from ..schemas.page import PageCreate
+from ..schemas.style_reference import StyleReference, StyleScope
 from ..services.plan import PlanService
 from ..services.page import PageService
 from ..services.page_version import PageVersionService
 from ..services.product_doc import ProductDocService
+from ..services.skills import load_style_profiles, route_style_profile
+from ..services.style_reference import (
+    StyleReferenceService,
+    merge_style_tokens,
+    normalize_style_tokens,
+    tokens_to_global_style,
+)
 from ..services.token_tracker import TokenTrackerService
 from ..services.version import VersionService
 from ..executor.manager import ExecutorManager
 from ..executor.parallel import ParallelExecutor
+from .base import AgentResult
 from .generation import GenerationAgent
+from .expander import ExpanderAgent
 from .interview import InterviewAgent
 from .multipage_decider import AutoMultiPageDecider
+from .orchestrator_routing import OrchestratorRouter, RoutingDecision
 from .product_doc import ProductDocAgent
 from .refinement import DisambiguationResult, RefinementAgent
 from .sitemap import SitemapAgent
@@ -43,6 +55,19 @@ PRODUCT_DOC_KEYWORDS = [
     "design direction",
     "product doc",
     "product document",
+    "\u4ea7\u54c1\u6587\u6863",
+    "\u9700\u6c42\u6587\u6863",
+    "\u9700\u6c42",
+    "\u529f\u80fd\u9700\u6c42",
+    "\u9875\u9762\u7ed3\u6784",
+    "\u9875\u9762\u89c4\u5212",
+    "\u7ad9\u70b9\u5730\u56fe",
+    "\u65b0\u589e\u9875\u9762",
+    "\u6dfb\u52a0\u9875\u9762",
+    "\u5220\u9664\u9875\u9762",
+    "\u4fee\u6539\u9875\u9762",
+    "\u8bbe\u8ba1\u65b9\u5411",
+    "\u8bbe\u8ba1\u98ce\u683c",
 ]
 
 CONFIRMATION_KEYWORDS = [
@@ -54,9 +79,33 @@ CONFIRMATION_KEYWORDS = [
     "proceed",
     "lgtm",
     "continue",
+    "regenerate",
+    "go ahead",
+    "\u786e\u8ba4",
+    "\u5f00\u59cb",
+    "\u5f00\u59cb\u751f\u6210",
+    "\u751f\u6210",
+    "\u7ee7\u7eed",
+    "\u53ef\u4ee5",
+    "\u597d",
+    "\u6ca1\u95ee\u9898",
+    "\u76f4\u63a5\u751f\u6210",
+    "\u5f00\u59cb\u6784\u5efa",
+    "\u91cd\u65b0\u751f\u6210",
 ]
 
-PAGE_REFINEMENT_KEYWORDS = ["change", "modify", "update", "adjust", "fix"]
+PAGE_REFINEMENT_KEYWORDS = [
+    "change",
+    "modify",
+    "update",
+    "adjust",
+    "fix",
+    "\u4fee\u6539",
+    "\u8c03\u6574",
+    "\u66f4\u65b0",
+    "\u4fee\u590d",
+    "\u4f18\u5316",
+]
 
 PRODUCT_DOC_CONTEXT_TEMPLATE = """
 === Product Document Context ===
@@ -148,6 +197,12 @@ class AgentOrchestrator:
         self.session = session
         self.settings = get_settings()
         self.event_emitter = event_emitter
+        self._router = OrchestratorRouter(
+            db=self.db,
+            session_id=self.session.id,
+            settings=self.settings,
+        )
+        self._routing_decision: RoutingDecision | None = None
 
     def _token_summary(self) -> dict | None:
         try:
@@ -180,6 +235,77 @@ class AgentOrchestrator:
             return None
         return versions[0].html
 
+    def _normalize_target_pages(self, targets: Optional[list[str]]) -> list[str]:
+        if not targets:
+            return []
+        resolved: list[str] = []
+        seen = set()
+        for item in targets:
+            slug = str(item or "").strip()
+            if not slug or slug in seen:
+                continue
+            resolved.append(slug)
+            seen.add(slug)
+        return resolved
+
+    def _resolve_target_pages(
+        self,
+        explicit_targets: Optional[list[str]],
+        routing_decision: RoutingDecision | None,
+    ) -> list[str]:
+        resolved = self._normalize_target_pages(explicit_targets)
+        if resolved:
+            return resolved
+        if routing_decision and routing_decision.target_pages:
+            return self._normalize_target_pages(routing_decision.target_pages)
+        return []
+
+    def _schema_contains_key(self, value: object, keys: set[str]) -> bool:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key).lower() in keys:
+                    return True
+                if self._schema_contains_key(item, keys):
+                    return True
+        if isinstance(value, list):
+            return any(self._schema_contains_key(item, keys) for item in value)
+        return False
+
+    def _should_expand(self, product_doc: ProductDoc | None) -> bool:
+        if product_doc is None:
+            return False
+        structured = getattr(product_doc, "structured", None)
+        if not isinstance(structured, dict):
+            return False
+        product_type = str(structured.get("product_type") or "").strip().lower()
+        pages = structured.get("pages") if isinstance(structured.get("pages"), list) else []
+        data_flow = structured.get("data_flow") if isinstance(structured.get("data_flow"), list) else []
+        component_inventory = (
+            structured.get("component_inventory") if isinstance(structured.get("component_inventory"), list) else []
+        )
+        state_contract = structured.get("state_contract") if isinstance(structured.get("state_contract"), dict) else {}
+
+        if product_type in {"ecommerce", "booking", "dashboard"}:
+            return True
+        if len(pages) > 1:
+            return True
+        if data_flow:
+            return True
+        if len(component_inventory) >= 6:
+            return True
+        schema = state_contract.get("schema") if isinstance(state_contract, dict) else None
+        if schema and self._schema_contains_key(schema, {"cart", "draft"}):
+            return True
+        return False
+
+    def _should_expand_page(self, page_spec: object, *, page_index: int, total_pages: int) -> bool:
+        if total_pages <= 1:
+            return True
+        slug = getattr(page_spec, "slug", None) or ""
+        if slug == "index":
+            return False
+        return page_index > 0
+
     def _wants_new_generation(self, message: str) -> bool:
         if not message:
             return False
@@ -193,8 +319,21 @@ class AgentOrchestrator:
             "make a new",
             "regenerate",
             "generate a new",
+            "start building",
+        ]
+        chinese_keywords = [
+            "\u91cd\u65b0\u751f\u6210",
+            "\u91cd\u65b0\u5f00\u59cb",
+            "\u4ece\u5934\u751f\u6210",
+            "\u4ece\u5934\u5f00\u59cb",
+            "\u91cd\u65b0\u6784\u5efa",
+            "\u91cd\u505a",
+            "\u518d\u751f\u6210",
+            "\u91cd\u65b0\u505a",
         ]
         if any(keyword in lower for keyword in english_keywords):
+            return True
+        if any(keyword in message for keyword in chinese_keywords):
             return True
         return False
 
@@ -210,6 +349,13 @@ class AgentOrchestrator:
             "merge to one page",
             "combine into one page",
             "singlepage",
+            "\u5355\u9875",
+            "\u5355\u9875\u9762",
+            "\u4e00\u4e2a\u9875\u9762",
+            "\u5408\u5e76\u6210\u4e00\u4e2a\u9875\u9762",
+            "\u5408\u5e76\u4e3a\u4e00\u4e2a\u9875\u9762",
+            "\u5408\u5e76\u4e3a\u5355\u9875",
+            "\u5355\u9875\u6a21\u5f0f",
         ]
         multi_keywords = [
             "multi page",
@@ -218,6 +364,13 @@ class AgentOrchestrator:
             "multi pages",
             "separate pages",
             "split into pages",
+            "\u591a\u9875",
+            "\u591a\u9875\u9762",
+            "\u591a\u4e2a\u9875\u9762",
+            "\u5206\u6210\u591a\u4e2a\u9875\u9762",
+            "\u62c6\u5206\u9875\u9762",
+            "\u62c6\u6210\u591a\u4e2a\u9875\u9762",
+            "\u591a\u9875\u6a21\u5f0f",
         ]
         if any(keyword in lower for keyword in single_keywords):
             return "single"
@@ -352,6 +505,163 @@ class AgentOrchestrator:
             return {}
         return raw_style
 
+    def _build_style_router_text(self, user_message: str, product_doc: ProductDoc | None) -> str:
+        parts = [user_message or ""]
+        if product_doc is not None:
+            structured = getattr(product_doc, "structured", None)
+            if isinstance(structured, dict):
+                design = structured.get("design_direction") or structured.get("designDirection") or {}
+                if isinstance(design, dict):
+                    style = design.get("style")
+                    tone = design.get("tone")
+                    color_pref = design.get("color_preference") or design.get("colorPreference")
+                    if style:
+                        parts.append(str(style))
+                    if tone:
+                        parts.append(str(tone))
+                    if color_pref:
+                        parts.append(str(color_pref))
+        return " ".join(part for part in parts if part)
+
+    def _resolve_style_profile_tokens(
+        self,
+        user_message: str,
+        product_doc: ProductDoc | None,
+        *,
+        profile_id_override: Optional[str] = None,
+        allowed_profiles: Optional[list[str]] = None,
+    ) -> tuple[str, dict]:
+        router_text = self._build_style_router_text(user_message, product_doc)
+        profile_id = profile_id_override or route_style_profile(router_text)
+        profiles = load_style_profiles()
+        if allowed_profiles and profile_id not in allowed_profiles:
+            profile_id = allowed_profiles[0] if allowed_profiles else profile_id
+        profile = profiles.get(profile_id) or profiles.get("clean-modern") or next(iter(profiles.values()), None)
+        if profile is None:
+            return profile_id, {}
+        return profile_id, normalize_style_tokens(profile.tokens)
+
+    def _fallback_interview_result(self, reason: str) -> AgentResult:
+        hint = "timed out" if reason == "timeout" else "hit an error"
+        message = (
+            "I ran into an issue while preparing the interview "
+            f"({hint}). Please answer these quick questions so I can continue:"
+        )
+        questions = [
+            {
+                "id": "goal",
+                "type": "text",
+                "title": "What is the primary goal of this page?",
+                "placeholder": "e.g., collect leads, sell a product, announce an event",
+            },
+            {
+                "id": "audience",
+                "type": "text",
+                "title": "Who is the target audience?",
+                "placeholder": "e.g., busy professionals, students, coffee lovers",
+            },
+            {
+                "id": "style",
+                "type": "text",
+                "title": "What style or brand cues should I follow?",
+                "placeholder": "e.g., clean, bold, minimal; colors or fonts you prefer",
+            },
+            {
+                "id": "sections",
+                "type": "text",
+                "title": "What key sections should the page include?",
+                "placeholder": "e.g., hero, features, testimonials, CTA",
+            },
+        ]
+        return AgentResult(message=message, is_complete=False, confidence=0.0, questions=questions)
+
+    async def _resolve_style_context(
+        self,
+        *,
+        style_reference: Optional[dict],
+        user_message: str,
+        target_pages: Optional[list[str]],
+        product_doc: ProductDoc | None,
+        profile_id_override: Optional[str] = None,
+        allowed_profiles: Optional[list[str]] = None,
+    ) -> Optional[dict]:
+        profile_id, profile_tokens = self._resolve_style_profile_tokens(
+            user_message,
+            product_doc,
+            profile_id_override=profile_id_override,
+            allowed_profiles=allowed_profiles,
+        )
+        reference_tokens: Optional[dict] = None
+        scope = StyleScope()
+
+        if style_reference:
+            try:
+                style_ref = StyleReference.model_validate(style_reference)
+                scope = style_ref.scope
+                if style_ref.tokens is not None:
+                    reference_tokens = normalize_style_tokens(style_ref.tokens.model_dump())
+                elif style_ref.images:
+                    resolved_product_type = None
+                    if product_doc is not None:
+                        resolved_product_type = getattr(product_doc, "product_type", None)
+                    if resolved_product_type is None:
+                        resolved_product_type = getattr(self.session, "product_type", None)
+                    service = StyleReferenceService(
+                        settings=self.settings,
+                        product_type=resolved_product_type,
+                    )
+                    extracted = await service.extract_style(
+                        style_ref.images,
+                        mode=style_ref.mode,
+                        product_type=resolved_product_type,
+                    )
+                    if extracted is not None:
+                        reference_tokens = normalize_style_tokens(extracted.model_dump())
+            except Exception as exc:
+                logger.warning("Failed to resolve style reference context: %s", exc)
+
+        merged_tokens = merge_style_tokens(profile_tokens, reference_tokens)
+        if not merged_tokens:
+            return None
+
+        resolved_product_type = None
+        if product_doc is not None:
+            resolved_product_type = getattr(product_doc, "product_type", None)
+        if resolved_product_type is None:
+            resolved_product_type = getattr(self.session, "product_type", None)
+        service = StyleReferenceService(settings=self.settings, product_type=resolved_product_type)
+
+        tokens_by_page: dict[str, dict] = {}
+        if profile_tokens:
+            tokens_by_page["*"] = profile_tokens
+
+        unscoped_reference_tokens = None
+        if reference_tokens:
+            scoped_reference = service.apply_scope(reference_tokens, scope, target_pages)
+            if scoped_reference:
+                for page, scoped_tokens in scoped_reference.items():
+                    tokens_by_page[page] = merge_style_tokens(profile_tokens, scoped_tokens)
+            elif scope.type == "model_decide" and not target_pages:
+                unscoped_reference_tokens = reference_tokens
+
+        return {
+            "profile_id": profile_id,
+            "tokens": merged_tokens,
+            "tokens_by_page": tokens_by_page,
+            "unscoped_reference_tokens": unscoped_reference_tokens,
+            "scope": scope.model_dump(),
+        }
+
+    def _merge_global_style(self, base: dict, style_tokens: Optional[dict]) -> dict:
+        if not style_tokens:
+            return base
+        override = tokens_to_global_style(style_tokens)
+        if not override:
+            return base
+        merged = dict(base)
+        merged.update({k: v for k, v in override.items() if v is not None})
+        return merged
+
     def _batch_refinement_message(self, batch_result, pages: list[Page], user_message: str) -> str:
         total = len(pages)
         successes = len([item for item in batch_result.results if item is not None])
@@ -391,8 +701,28 @@ class AgentOrchestrator:
         page_spec: dict,
         nav: list,
         global_style: dict,
+        style_tokens: Optional[dict] = None,
+        unscoped_style_tokens: Optional[dict] = None,
+        expansion_notes: Optional[str] = None,
     ) -> str:
         base = user_message.strip() if user_message else ""
+        if style_tokens:
+            style_payload = json.dumps(style_tokens, ensure_ascii=False, indent=2)
+            if base:
+                base = f"{base}\n\nStyle Tokens (scoped):\n{style_payload}"
+            else:
+                base = f"Style Tokens (scoped):\n{style_payload}"
+        if unscoped_style_tokens:
+            style_payload = json.dumps(unscoped_style_tokens, ensure_ascii=False, indent=2)
+            if base:
+                base = f"{base}\n\nStyle Tokens (model decide):\n{style_payload}"
+            else:
+                base = f"Style Tokens (model decide):\n{style_payload}"
+        if expansion_notes:
+            if base:
+                base = f"{base}\n\nExpansion Notes:\n{expansion_notes}"
+            else:
+                base = f"Expansion Notes:\n{expansion_notes}"
         return base
 
     def _build_plan_goal(self, product_doc: ProductDoc | None) -> str:
@@ -515,6 +845,51 @@ class AgentOrchestrator:
         pages = PageService(self.db).list_by_session(self.session.id)
         status = product_doc.status if product_doc is not None else None
         return SessionState(product_doc=product_doc, status=status, pages=pages)
+
+    async def _resolve_routing_decision(
+        self,
+        *,
+        user_message: str,
+        target_pages: Optional[list[str]],
+        state: SessionState,
+    ) -> RoutingDecision | None:
+        try:
+            decision = await self._router.route(
+                user_message,
+                project_pages=state.pages,
+                explicit_targets=target_pages,
+                product_doc=state.product_doc,
+                session=self.session,
+            )
+        except Exception:
+            logger.exception("Failed to resolve routing decision")
+            return None
+
+        if decision:
+            self._routing_decision = decision
+            self._apply_routing_metadata(decision)
+        return decision
+
+    def _apply_routing_metadata(self, decision: RoutingDecision) -> None:
+        if decision.product_type and decision.product_type != "unknown":
+            self.session.product_type = decision.product_type
+        if decision.complexity and decision.complexity != "unknown":
+            self.session.complexity = decision.complexity
+        if decision.skill_id:
+            self.session.skill_id = decision.skill_id
+        if decision.doc_tier:
+            self.session.doc_tier = decision.doc_tier
+        if decision.model_prefs:
+            self.session.model_classifier = decision.model_prefs.get("classifier") or self.session.model_classifier
+            self.session.model_writer = decision.model_prefs.get("writer") or self.session.model_writer
+            self.session.model_expander = decision.model_prefs.get("expander") or self.session.model_expander
+            self.session.model_validator = decision.model_prefs.get("validator") or self.session.model_validator
+            self.session.model_style_refiner = decision.model_prefs.get("style_refiner") or self.session.model_style_refiner
+        try:
+            self.db.add(self.session)
+            self.db.commit()
+        except Exception:
+            logger.exception("Failed to persist routing metadata")
 
     def _contains_keyword(self, message: str, keywords: list[str], *, lower: bool = False) -> bool:
         if not message:
@@ -655,6 +1030,13 @@ class AgentOrchestrator:
                 page_mode_override=page_mode_override,
             )
 
+        if state.has_pages and self._wants_new_generation(cleaned_message):
+            return RouteResult(
+                route="generation_pipeline",
+                generate_now=generate_now,
+                page_mode_override=page_mode_override,
+            )
+
         if state.has_pages:
             refinement_agent = RefinementAgent(
                 self.db,
@@ -732,6 +1114,8 @@ class AgentOrchestrator:
         history: Sequence[dict] | None = None,
         trigger_interview: bool = True,
         generate_now: bool = False,
+        style_reference: Optional[dict] = None,
+        target_pages: Optional[list[str]] = None,
     ) -> AsyncGenerator[OrchestratorResponse, None]:
         history = history or []
         emitter = self.event_emitter or EventEmitter(session_id=self.session.id)
@@ -756,7 +1140,34 @@ class AgentOrchestrator:
                 event_emitter=emitter,
                 agent_id="interview_1",
             )
-            interview_result = await interview.process(user_message, history=history)
+            try:
+                timeout_seconds = float(getattr(self.settings, "interview_timeout_seconds", 0.0) or 0.0)
+                if timeout_seconds > 0:
+                    interview_result = await asyncio.wait_for(
+                        interview.process(user_message, history=history),
+                        timeout=timeout_seconds,
+                    )
+                else:
+                    interview_result = await interview.process(user_message, history=history)
+            except asyncio.TimeoutError:
+                timeout_value = getattr(self.settings, "interview_timeout_seconds", None)
+                logger.warning("Interview agent timed out after %ss", timeout_value)
+                emitter.emit(
+                    ErrorEvent(
+                        message="Interview agent timed out",
+                        details=f"timeout_after={timeout_value}s",
+                    )
+                )
+                interview_result = self._fallback_interview_result("timeout")
+            except Exception as exc:
+                logger.warning("Interview agent failed: %s", exc)
+                emitter.emit(
+                    ErrorEvent(
+                        message="Interview agent failed",
+                        details=str(exc),
+                    )
+                )
+                interview_result = self._fallback_interview_result("error")
             if not interview_result.is_complete and not interview.should_generate():
                 summary = self._token_summary()
                 yield OrchestratorResponse(
@@ -770,6 +1181,15 @@ class AgentOrchestrator:
                 return
             interview_context = interview_result.context
 
+        routing_decision = await self._resolve_routing_decision(
+            user_message=cleaned_user_message or user_message,
+            target_pages=target_pages,
+            state=state,
+        )
+        resolved_targets = self._resolve_target_pages(target_pages, routing_decision)
+        guardrails = routing_decision.guardrails if routing_decision else None
+        style_profile_override = routing_decision.style_profile if routing_decision else None
+
         route_result = await self.route(
             cleaned_user_message,
             self.session,
@@ -778,6 +1198,14 @@ class AgentOrchestrator:
 
         try:
             if route_result.route in ("product_doc_generation", "product_doc_generation_generate_now"):
+                style_context = await self._resolve_style_context(
+                    style_reference=style_reference,
+                    user_message=cleaned_user_message or user_message,
+                    target_pages=resolved_targets,
+                    product_doc=None,
+                    profile_id_override=style_profile_override,
+                )
+                style_tokens = style_context.get("tokens") if style_context else None
                 product_doc_agent = ProductDocAgent(
                     self.db,
                     self.session.id,
@@ -785,12 +1213,68 @@ class AgentOrchestrator:
                     event_emitter=emitter,
                     agent_id="product_doc_1",
                 )
-                result = await product_doc_agent.generate(
-                    session_id=self.session.id,
-                    user_message=cleaned_user_message or user_message,
-                    interview_context=interview_context,
-                    history=history,
-                )
+                try:
+                    timeout_seconds = float(
+                        getattr(self.settings, "product_doc_timeout_seconds", 0.0) or 0.0
+                    )
+                    if timeout_seconds > 0:
+                        result = await asyncio.wait_for(
+                            product_doc_agent.generate(
+                                session_id=self.session.id,
+                                user_message=cleaned_user_message or user_message,
+                                interview_context=interview_context,
+                                history=history,
+                                style_tokens=style_tokens,
+                                guardrails=guardrails,
+                            ),
+                            timeout=timeout_seconds,
+                        )
+                    else:
+                        result = await product_doc_agent.generate(
+                            session_id=self.session.id,
+                            user_message=cleaned_user_message or user_message,
+                            interview_context=interview_context,
+                            history=history,
+                            style_tokens=style_tokens,
+                            guardrails=guardrails,
+                        )
+                except asyncio.TimeoutError:
+                    timeout_value = getattr(self.settings, "product_doc_timeout_seconds", None)
+                    logger.warning("Product doc generation timed out after %ss", timeout_value)
+                    emitter.emit(
+                        ErrorEvent(
+                            message="Product doc generation timed out",
+                            details=f"timeout_after={timeout_value}s",
+                        )
+                    )
+                    summary = self._token_summary()
+                    yield OrchestratorResponse(
+                        session_id=self.session.id,
+                        phase="product_doc",
+                        message="Product doc generation is taking too long. Please retry or shorten the request.",
+                        is_complete=True,
+                        action="direct_reply",
+                    )
+                    emitter.emit(DoneEvent(summary="product_doc_timeout", token_usage=summary))
+                    return
+                except Exception as exc:
+                    logger.warning("Product doc generation failed: %s", exc)
+                    emitter.emit(
+                        ErrorEvent(
+                            message="Product doc generation failed",
+                            details=str(exc),
+                        )
+                    )
+                    summary = self._token_summary()
+                    yield OrchestratorResponse(
+                        session_id=self.session.id,
+                        phase="product_doc",
+                        message="Product doc generation failed. Please try again.",
+                        is_complete=True,
+                        action="direct_reply",
+                    )
+                    emitter.emit(DoneEvent(summary="product_doc_failed", token_usage=summary))
+                    return
                 self.db.commit()
 
                 action = "product_doc_generated"
@@ -805,9 +1289,11 @@ class AgentOrchestrator:
                             history=history,
                             user_message=cleaned_user_message,
                             emitter=emitter,
-                            target_slugs=None,
+                            target_slugs=resolved_targets or None,
                             page_mode_override=route_result.page_mode_override,
                             allow_defer_on_suggest=not route_result.generate_now and not state.has_pages,
+                            style_context=style_context,
+                            guardrails=guardrails,
                         )
                         if pipeline_result.get("deferred"):
                             summary = self._token_summary()
@@ -867,6 +1353,17 @@ class AgentOrchestrator:
                     emitter.emit(DoneEvent(summary="complete", token_usage=self._token_summary()))
                     return
 
+                style_context = None
+                if style_reference:
+                    style_context = await self._resolve_style_context(
+                        style_reference=style_reference,
+                        user_message=cleaned_user_message or user_message,
+                        target_pages=resolved_targets,
+                        product_doc=product_doc,
+                        profile_id_override=style_profile_override,
+                    )
+                style_tokens = style_context.get("tokens") if style_context else None
+
                 update_message = cleaned_user_message or user_message
                 if interview_context:
                     update_message = f"{update_message}\n\nCollected info:\n{interview_context}".strip()
@@ -878,12 +1375,74 @@ class AgentOrchestrator:
                     event_emitter=emitter,
                     agent_id="product_doc_1",
                 )
-                update_result = await product_doc_agent.update(
-                    session_id=self.session.id,
-                    current_doc=product_doc,
-                    user_message=update_message,
-                    history=history,
-                )
+                try:
+                    timeout_seconds = float(
+                        getattr(self.settings, "product_doc_timeout_seconds", 0.0) or 0.0
+                    )
+                    if timeout_seconds > 0:
+                        update_result = await asyncio.wait_for(
+                            product_doc_agent.update(
+                                session_id=self.session.id,
+                                current_doc=product_doc,
+                                user_message=update_message,
+                                history=history,
+                                style_tokens=style_tokens,
+                                guardrails=guardrails,
+                            ),
+                            timeout=timeout_seconds,
+                        )
+                    else:
+                        update_result = await product_doc_agent.update(
+                            session_id=self.session.id,
+                            current_doc=product_doc,
+                            user_message=update_message,
+                            history=history,
+                            style_tokens=style_tokens,
+                            guardrails=guardrails,
+                        )
+                except asyncio.TimeoutError:
+                    timeout_value = getattr(self.settings, "product_doc_timeout_seconds", None)
+                    logger.warning("Product doc update timed out after %ss", timeout_value)
+                    emitter.emit(
+                        ErrorEvent(
+                            message="Product doc update timed out",
+                            details=f"timeout_after={timeout_value}s",
+                        )
+                    )
+                    summary = self._token_summary()
+                    yield OrchestratorResponse(
+                        session_id=self.session.id,
+                        phase="product_doc",
+                        message="Product doc update is taking too long. Please retry.",
+                        is_complete=True,
+                        action="direct_reply",
+                    )
+                    emitter.emit(DoneEvent(summary="product_doc_timeout", token_usage=summary))
+                    return
+                except Exception as exc:
+                    logger.warning("Product doc update failed: %s", exc)
+                    emitter.emit(
+                        ErrorEvent(
+                            message="Product doc update failed",
+                            details=str(exc),
+                        )
+                    )
+                    summary = self._token_summary()
+                    yield OrchestratorResponse(
+                        session_id=self.session.id,
+                        phase="product_doc",
+                        message="Product doc update failed. Please try again.",
+                        is_complete=True,
+                        action="direct_reply",
+                    )
+                    emitter.emit(DoneEvent(summary="product_doc_failed", token_usage=summary))
+                    return
+                if resolved_targets:
+                    try:
+                        service.set_pending_regeneration(product_doc.id, resolved_targets)
+                        update_result.affected_pages = list(resolved_targets)
+                    except Exception:
+                        logger.exception("Failed to set pending regeneration targets")
                 if product_doc.status == ProductDocStatus.CONFIRMED:
                     try:
                         service.mark_outdated(product_doc.id)
@@ -920,7 +1479,14 @@ class AgentOrchestrator:
                     )
                     emitter.emit(DoneEvent(summary="complete", token_usage=self._token_summary()))
                     return
-                pending_pages = self._pending_regeneration_pages(product_doc)
+                style_context = await self._resolve_style_context(
+                    style_reference=style_reference,
+                    user_message=cleaned_user_message or user_message,
+                    target_pages=resolved_targets,
+                    product_doc=product_doc,
+                    profile_id_override=style_profile_override,
+                )
+                pending_pages = resolved_targets or self._pending_regeneration_pages(product_doc)
                 pipeline_result = await self._run_generation_pipeline(
                     product_doc=product_doc,
                     output_dir=output_dir,
@@ -930,6 +1496,8 @@ class AgentOrchestrator:
                     target_slugs=pending_pages,
                     page_mode_override=route_result.page_mode_override,
                     allow_defer_on_suggest=False,
+                    style_context=style_context,
+                    guardrails=guardrails,
                 )
                 if product_doc.status != ProductDocStatus.CONFIRMED:
                     try:
@@ -939,7 +1507,11 @@ class AgentOrchestrator:
                         logger.exception("Failed to confirm ProductDoc after regeneration")
                 if pending_pages:
                     try:
-                        service.set_pending_regeneration(product_doc.id, [])
+                        remaining_pages = []
+                        if resolved_targets:
+                            current_pending = self._pending_regeneration_pages(product_doc)
+                            remaining_pages = [page for page in current_pending if page not in pending_pages]
+                        service.set_pending_regeneration(product_doc.id, remaining_pages)
                         self.db.commit()
                     except Exception:
                         logger.exception("Failed to clear pending regeneration pages")
@@ -973,15 +1545,24 @@ class AgentOrchestrator:
                 if product_doc.status != ProductDocStatus.CONFIRMED:
                     service.confirm(product_doc.id)
                     self.db.commit()
+                style_context = await self._resolve_style_context(
+                    style_reference=style_reference,
+                    user_message=cleaned_user_message or user_message,
+                    target_pages=resolved_targets,
+                    product_doc=product_doc,
+                    profile_id_override=style_profile_override,
+                )
                 pipeline_result = await self._run_generation_pipeline(
                     product_doc=product_doc,
                     output_dir=output_dir,
                     history=history,
                     user_message=cleaned_user_message,
                     emitter=emitter,
-                    target_slugs=None,
+                    target_slugs=resolved_targets or None,
                     page_mode_override=route_result.page_mode_override,
                     allow_defer_on_suggest=not state.has_pages,
+                    style_context=style_context,
+                    guardrails=guardrails,
                 )
                 if pipeline_result.get("deferred"):
                     summary = self._token_summary()
@@ -1025,15 +1606,24 @@ class AgentOrchestrator:
                     )
                     emitter.emit(DoneEvent(summary="complete", token_usage=self._token_summary()))
                     return
+                style_context = await self._resolve_style_context(
+                    style_reference=style_reference,
+                    user_message=cleaned_user_message or user_message,
+                    target_pages=resolved_targets,
+                    product_doc=product_doc,
+                    profile_id_override=style_profile_override,
+                )
                 pipeline_result = await self._run_generation_pipeline(
                     product_doc=product_doc,
                     output_dir=output_dir,
                     history=history,
                     user_message=cleaned_user_message,
                     emitter=emitter,
-                    target_slugs=None,
+                    target_slugs=resolved_targets or None,
                     page_mode_override=route_result.page_mode_override,
                     allow_defer_on_suggest=not state.has_pages,
+                    style_context=style_context,
+                    guardrails=guardrails,
                 )
                 if pipeline_result.get("deferred"):
                     summary = self._token_summary()
@@ -1073,6 +1663,38 @@ class AgentOrchestrator:
                     event_emitter=emitter,
                     agent_id="refinement_1",
                 )
+                if resolved_targets:
+                    target_pages = [page for page in state.pages if page.slug in resolved_targets]
+                    if len(target_pages) == 1:
+                        route_result.target_page = target_pages[0]
+                    elif len(target_pages) > 1:
+                        global_style = self._extract_global_style(state.product_doc)
+                        batch_result = await refinement_agent.batch_refine(
+                            session_id=self.session.id,
+                            pages=target_pages,
+                            user_message=cleaned_user_message,
+                            product_doc=state.product_doc,
+                            global_style=global_style,
+                            history=list(history),
+                        )
+                        preview_html, active_slug = self._select_preview_from_batch(batch_result, target_pages)
+                        try:
+                            self.db.commit()
+                        except Exception:
+                            self.db.rollback()
+                        summary = self._token_summary()
+                        yield OrchestratorResponse(
+                            session_id=self.session.id,
+                            phase="refinement",
+                            message=self._batch_refinement_message(batch_result, target_pages, cleaned_user_message),
+                            is_complete=True,
+                            preview_html=preview_html,
+                            progress=100,
+                            action="page_refined",
+                            active_page_slug=active_slug,
+                        )
+                        emitter.emit(DoneEvent(summary="complete", token_usage=summary))
+                        return
                 target_page = route_result.target_page
                 if target_page is None:
                     if refinement_agent.is_global_change(cleaned_user_message) and state.pages:
@@ -1235,6 +1857,8 @@ class AgentOrchestrator:
         target_slugs: Optional[list[str]] = None,
         page_mode_override: Optional[str] = None,
         allow_defer_on_suggest: bool = False,
+        style_context: Optional[dict] = None,
+        guardrails: Optional[dict] = None,
     ) -> dict:
         decider = AutoMultiPageDecider(event_emitter=emitter)
         decision = None
@@ -1283,9 +1907,46 @@ class AgentOrchestrator:
 
         nav_payload = [_dump_model(item) for item in sitemap_result.nav]
         global_style_payload = _dump_model(sitemap_result.global_style)
+        style_tokens_by_page = {}
+        if style_context and isinstance(style_context.get("tokens_by_page"), dict):
+            style_tokens_by_page = style_context["tokens_by_page"]
+        unscoped_reference_tokens = None
+        if style_context and isinstance(style_context.get("unscoped_reference_tokens"), dict):
+            unscoped_reference_tokens = style_context["unscoped_reference_tokens"]
+        global_override = style_tokens_by_page.get("*") if isinstance(style_tokens_by_page, dict) else None
+        if isinstance(global_style_payload, dict) and global_override:
+            global_style_payload = self._merge_global_style(global_style_payload, global_override)
         all_pages = [getattr(page_spec, "slug", None) or "index" for page_spec in sitemap_result.pages]
         selected_slugs = self._resolve_regeneration_targets(target_slugs, all_pages)
         product_doc_context = self._build_product_doc_context(product_doc)
+
+        expansion_notes_by_page: dict[str, str] = {}
+        if self._should_expand(product_doc):
+            expander = ExpanderAgent(
+                self.db,
+                self.session.id,
+                self.settings,
+                event_emitter=emitter,
+                agent_id="expander_1",
+            )
+            total_pages = len(sitemap_result.pages)
+            for idx, page_spec in enumerate(sitemap_result.pages):
+                slug = getattr(page_spec, "slug", None) or "index"
+                if selected_slugs and slug not in selected_slugs:
+                    continue
+                if not self._should_expand_page(page_spec, page_index=idx, total_pages=total_pages):
+                    continue
+                try:
+                    notes = await expander.expand_page(
+                        user_message=user_message,
+                        page_spec=_dump_model(page_spec),
+                        product_doc_context=product_doc_context,
+                    )
+                except Exception:
+                    logger.exception("Expander failed for page %s", slug)
+                    notes = ""
+                if notes:
+                    expansion_notes_by_page[slug] = notes
 
         tasks_payload: list[dict] = []
         generation_task_ids: list[str] = []
@@ -1299,20 +1960,34 @@ class AgentOrchestrator:
             if page is None:
                 continue
             page_spec_payload = _dump_model(page_spec)
+            page_style_tokens = None
+            if isinstance(style_tokens_by_page, dict):
+                page_style_tokens = style_tokens_by_page.get(slug) or style_tokens_by_page.get("*")
+            page_global_style = (
+                self._merge_global_style(global_style_payload, page_style_tokens)
+                if isinstance(global_style_payload, dict) and page_style_tokens
+                else global_style_payload
+            )
+            expansion_notes = expansion_notes_by_page.get(slug)
+            effective_unscoped = unscoped_reference_tokens
             requirements = self._build_page_requirements(
                 user_message=user_message,
                 product_doc_context=product_doc_context,
                 page_spec=page_spec_payload if isinstance(page_spec_payload, dict) else {},
                 nav=nav_payload,
-                global_style=global_style_payload if isinstance(global_style_payload, dict) else {},
+                global_style=page_global_style if isinstance(page_global_style, dict) else {},
+                style_tokens=page_style_tokens,
+                unscoped_style_tokens=effective_unscoped,
+                expansion_notes=expansion_notes,
             )
             payload = {
                 "page_id": page.id,
                 "page_spec": page_spec_payload,
                 "nav": nav_payload,
-                "global_style": global_style_payload,
+                "global_style": page_global_style,
                 "all_pages": all_pages,
                 "requirements": requirements,
+                "guardrails": guardrails or {},
             }
             title = getattr(page_spec, "title", None) or slug or "Page"
             task_id = uuid4().hex
@@ -1331,6 +2006,7 @@ class AgentOrchestrator:
                 {
                     "page_id": page.id,
                     "slug": slug or "index",
+                    "guardrails": guardrails or {},
                 }
             )
 
@@ -1396,6 +2072,7 @@ class AgentOrchestrator:
             user_message=user_message,
             history=list(history),
             max_concurrent=self.settings.max_concurrent_tasks,
+            task_timeout_seconds=self.settings.task_timeout_seconds,
         )
         manager = ExecutorManager.get_instance()
         manager.register(plan.id, executor)

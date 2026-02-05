@@ -5,6 +5,7 @@ from .migrations import (
     migrate_v04_product_doc_pages,
     migrate_v04_product_doc_pending_pages,
     migrate_v05_version_models,
+    migrate_v06_session_metadata,
 )
 from .models import (
     Message,
@@ -39,6 +40,7 @@ __all__ = [
     "migrate_v04_product_doc_pages",
     "migrate_v04_product_doc_pending_pages",
     "migrate_v05_version_models",
+    "migrate_v06_session_metadata",
     "downgrade_v04_product_doc_pages",
     "Session",
     "Message",

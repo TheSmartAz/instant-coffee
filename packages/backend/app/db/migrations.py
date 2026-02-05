@@ -28,6 +28,7 @@ def init_db(database: Database | None = None) -> None:
     migrate_v04_product_doc_pending_pages(db_instance)
     migrate_v05_version_models(db_instance)
     migrate_v06_indexes(db_instance)
+    migrate_v06_session_metadata(db_instance)
 
 
 def migrate_v04_product_doc_pages(database: Database | None = None) -> None:
@@ -116,6 +117,31 @@ def migrate_v06_indexes(database: Database | None = None) -> None:
     _ensure_index(engine, "tasks", "idx_tasks_plan_id", ["plan_id"])
     _ensure_index(engine, "tasks", "idx_tasks_status", ["status"])
     _ensure_index(engine, "page_versions", "idx_page_versions_page_created_at", ["page_id", "created_at"])
+def migrate_v06_session_metadata(database: Database | None = None) -> None:
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    inspector = inspect(engine)
+    if "sessions" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("sessions")}
+    column_defs = {
+        "product_type": "VARCHAR(50)",
+        "complexity": "VARCHAR(20)",
+        "skill_id": "VARCHAR(100)",
+        "doc_tier": "VARCHAR(20)",
+        "style_reference_mode": "VARCHAR(50)",
+        "model_classifier": "VARCHAR(100)",
+        "model_writer": "VARCHAR(100)",
+        "model_expander": "VARCHAR(100)",
+        "model_validator": "VARCHAR(100)",
+        "model_style_refiner": "VARCHAR(100)",
+    }
+
+    with engine.begin() as connection:
+        for column, ddl_type in column_defs.items():
+            if column in columns:
+                continue
+            connection.execute(text(f"ALTER TABLE sessions ADD COLUMN {column} {ddl_type}"))
 
 
 def _normalize_v05_sources(engine) -> None:
@@ -427,5 +453,6 @@ __all__ = [
     "migrate_v04_product_doc_pages",
     "migrate_v04_product_doc_pending_pages",
     "migrate_v05_version_models",
+    "migrate_v06_session_metadata",
     "downgrade_v04_product_doc_pages",
 ]

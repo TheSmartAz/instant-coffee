@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from ..config import get_settings
@@ -14,9 +14,24 @@ class Database:
         resolved_url = url or settings.database_url
         connect_args = {}
         if resolved_url.startswith("sqlite"):
-            connect_args = {"check_same_thread": False}
+            connect_args = {"check_same_thread": False, "timeout": 30}
         self.url = resolved_url
-        self.engine = create_engine(self.url, connect_args=connect_args, future=True)
+        self.engine = create_engine(
+            self.url,
+            connect_args=connect_args,
+            pool_pre_ping=True,
+            future=True,
+        )
+        if resolved_url.startswith("sqlite"):
+            @event.listens_for(self.engine, "connect")
+            def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL;")
+                    cursor.execute("PRAGMA synchronous=NORMAL;")
+                    cursor.execute("PRAGMA busy_timeout=30000;")
+                finally:
+                    cursor.close()
         self.SessionLocal = sessionmaker(
             autocommit=False,
             autoflush=False,

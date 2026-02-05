@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -24,8 +25,27 @@ from ..events.models import (
     ProductDocUpdatedEvent,
 )
 from ..services.event_store import EventStoreService
+from .skills import SkillsRegistry
 from ..exceptions import PinnedLimitExceeded
 from ..schemas.product_doc import ProductDocStructured
+
+logger = logging.getLogger(__name__)
+
+_STATIC_PRODUCT_TYPES = {"landing", "card", "invitation"}
+_FLOW_PRODUCT_TYPES = {"ecommerce", "booking", "dashboard"}
+_VALID_DOC_TIERS = {"checklist", "standard", "extended"}
+_VALID_COMPLEXITIES = {"simple", "medium", "complex"}
+_COMPLEXITY_TO_TIER = {"simple": "checklist", "medium": "standard", "complex": "extended"}
+_TIER_TO_COMPLEXITY = {"checklist": "simple", "standard": "medium", "extended": "complex"}
+_DEFAULT_STATE_EVENTS = [
+    "add_to_cart",
+    "update_qty",
+    "remove_item",
+    "checkout_draft",
+    "submit_booking",
+    "submit_form",
+    "clear_cart",
+]
 
 
 class ProductDocService:
@@ -64,6 +84,7 @@ class ProductDocService:
         )
         self.db.add(record)
         self.db.flush()
+        self._sync_session_metadata(session_id, resolved_structured)
         self._emit(
             ProductDocGeneratedEvent(
                 session_id=session_id,
@@ -91,6 +112,7 @@ class ProductDocService:
         if structured is not None:
             merged = self._merge_structured(record.structured, structured)
             record.structured = self._normalize_structured(merged)
+            self._sync_session_metadata(record.session_id, record.structured)
         if affected_pages is not None:
             record.pending_regeneration_pages = self._normalize_pages(affected_pages)
         if bump_version:
@@ -367,7 +389,8 @@ class ProductDocService:
             model = ProductDocStructured.model_validate(resolved)
         except ValidationError as exc:
             raise ValueError(f"Invalid structured data: {exc}") from exc
-        return model.model_dump(exclude_none=True, exclude_unset=True)
+        payload = model.model_dump(exclude_none=True, exclude_unset=True)
+        return self._ensure_structured_fields(payload)
 
     def _merge_structured(self, base: Optional[Dict[str, Any]], updates: Dict[str, Any]) -> Dict[str, Any]:
         if updates is None:
@@ -385,6 +408,154 @@ class ProductDocService:
             else:
                 merged[key] = value
         return merged
+
+    def _sync_session_metadata(self, session_id: str, structured: Dict[str, Any]) -> None:
+        if not structured:
+            return
+        session = self.db.get(SessionModel, session_id)
+        if session is None:
+            return
+        product_type = self.normalize_product_type(structured.get("product_type"))
+        complexity = self.normalize_complexity(structured.get("complexity"))
+        doc_tier = self.normalize_doc_tier(structured.get("doc_tier"))
+        updated = False
+        if product_type and product_type != session.product_type:
+            session.product_type = product_type
+            updated = True
+        if complexity and complexity != session.complexity:
+            session.complexity = complexity
+            updated = True
+        if doc_tier and doc_tier != session.doc_tier:
+            session.doc_tier = doc_tier
+            updated = True
+        if updated:
+            session.updated_at = datetime.utcnow()
+            self.db.add(session)
+            self.db.flush()
+
+    def _ensure_structured_fields(self, structured: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(structured, dict):
+            structured = {}
+        product_type = self.normalize_product_type(structured.get("product_type")) or "unknown"
+        complexity = self.normalize_complexity(structured.get("complexity")) or "unknown"
+        doc_tier = self.normalize_doc_tier(structured.get("doc_tier")) or self.select_doc_tier(
+            product_type, complexity
+        )
+        structured.setdefault("product_type", product_type)
+        structured.setdefault("complexity", complexity)
+        structured.setdefault("doc_tier", doc_tier)
+        structured.setdefault("goal", structured.get("goal") or "")
+        structured.setdefault("pages", [])
+        structured.setdefault("data_flow", [])
+        structured.setdefault("component_inventory", [])
+        if not structured.get("component_inventory"):
+            fallback = structured.get("components") or []
+            if not fallback and isinstance(structured.get("features"), list):
+                fallback = [
+                    item.get("name")
+                    for item in structured.get("features", [])
+                    if isinstance(item, dict) and item.get("name")
+                ]
+            if not fallback:
+                try:
+                    registry = SkillsRegistry()
+                    manifest = registry.select_best(product_type)
+                    if manifest and manifest.components:
+                        fallback = list(manifest.components)
+                except Exception:
+                    logger.exception("Failed to load skill components for product doc")
+            if isinstance(fallback, list):
+                structured["component_inventory"] = [str(item) for item in fallback if str(item).strip()]
+
+        if "state_contract" not in structured:
+            structured["state_contract"] = None
+        structured["state_contract"] = self._ensure_state_contract(
+            product_type, structured.get("state_contract")
+        )
+        if "style_reference" not in structured:
+            structured["style_reference"] = None
+        return structured
+
+    def _ensure_state_contract(self, product_type: str, value: Any) -> Any:
+        if product_type in _FLOW_PRODUCT_TYPES:
+            if isinstance(value, dict) and value.get("schema") is not None:
+                events_value = value.get("events") if isinstance(value.get("events"), list) else None
+                normalized_events = (
+                    [str(item) for item in events_value if str(item).strip()] if events_value else []
+                )
+                if not normalized_events:
+                    normalized_events = list(_DEFAULT_STATE_EVENTS)
+                return {
+                    "shared_state_key": value.get("shared_state_key") or "instant-coffee:state",
+                    "records_key": value.get("records_key") or "instant-coffee:records",
+                    "events_key": value.get("events_key") or "instant-coffee:events",
+                    "schema": value.get("schema") if isinstance(value.get("schema"), dict) else {},
+                    "events": normalized_events,
+                }
+            return {
+                "shared_state_key": "instant-coffee:state",
+                "records_key": "instant-coffee:records",
+                "events_key": "instant-coffee:events",
+                "schema": {},
+                "events": list(_DEFAULT_STATE_EVENTS),
+            }
+        return None
+
+    @staticmethod
+    def normalize_product_type(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        if text in _STATIC_PRODUCT_TYPES or text in _FLOW_PRODUCT_TYPES:
+            return text
+        return "unknown"
+
+    @staticmethod
+    def normalize_complexity(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        if text in _VALID_COMPLEXITIES:
+            return text
+        if text in _VALID_DOC_TIERS:
+            return _TIER_TO_COMPLEXITY.get(text, "unknown")
+        return "unknown"
+
+    @staticmethod
+    def normalize_doc_tier(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        if text in _VALID_DOC_TIERS:
+            return text
+        if text in _VALID_COMPLEXITIES:
+            return _COMPLEXITY_TO_TIER.get(text, "standard")
+        return "standard"
+
+    @classmethod
+    def select_doc_tier(
+        cls,
+        product_type: Optional[str],
+        complexity: Optional[str],
+        override: Optional[str] = None,
+    ) -> str:
+        if override:
+            return cls.normalize_doc_tier(override) or "standard"
+        normalized_product = cls.normalize_product_type(product_type)
+        if normalized_product in _STATIC_PRODUCT_TYPES:
+            return "checklist"
+        normalized_complexity = cls.normalize_complexity(complexity)
+        if normalized_complexity in _COMPLEXITY_TO_TIER:
+            return _COMPLEXITY_TO_TIER[normalized_complexity]
+        if normalized_complexity in _VALID_DOC_TIERS:
+            return normalized_complexity
+        return "standard"
 
     @staticmethod
     def _normalize_pages(pages: list[str]) -> list[str]:

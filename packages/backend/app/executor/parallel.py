@@ -42,7 +42,7 @@ class ParallelExecutor:
         user_message: str,
         history: List[Dict[str, str]],
         max_concurrent: int = 5,
-        task_timeout_seconds: float = 180.0,
+        task_timeout_seconds: float = 600.0,
         retry_policy: Optional[RetryPolicy] = None,
         poll_interval: float = 1.0,
     ) -> None:

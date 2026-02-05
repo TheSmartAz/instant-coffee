@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session as DbSession
 
 from ..config import get_model_catalog, get_settings, update_runtime_overrides
+from ..llm.model_catalog import get_model_entry
 from ..db.utils import get_db
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -46,15 +47,6 @@ def _resolve_settings() -> dict:
     }
 
 
-def _find_model_option(model_id: str | None) -> dict | None:
-    if not model_id:
-        return None
-    for entry in get_model_catalog():
-        if entry.get("id") == model_id:
-            return entry
-    return None
-
-
 @router.get("")
 def get_settings_endpoint(db: DbSession = Depends(_get_db_session)) -> dict:
     return _resolve_settings()
@@ -72,14 +64,10 @@ def update_settings(payload: SettingsPayload, db: DbSession = Depends(_get_db_se
 
     if "model" in data and data.get("model"):
         overrides["model"] = data["model"]
-        model_option = _find_model_option(data["model"])
-        if model_option:
-            if not has_api_key and model_option.get("key"):
-                overrides["default_key"] = model_option["key"]
-                overrides["openai_api_key"] = model_option["key"]
-            if model_option.get("base_url"):
-                overrides["default_base_url"] = model_option["base_url"]
-                overrides["openai_base_url"] = model_option["base_url"]
+        model_option = get_model_entry(data["model"])
+        if model_option and model_option.get("base_url"):
+            overrides["default_base_url"] = model_option["base_url"]
+            overrides["openai_base_url"] = model_option["base_url"]
 
     if has_api_key:
         overrides["default_key"] = api_key_value

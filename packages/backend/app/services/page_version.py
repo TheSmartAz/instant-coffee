@@ -293,7 +293,7 @@ class PageVersionService:
             )
         if version is None:
             return None
-        html = inline_css(version.html or "", global_style_css)
+        html = inline_css(version.html or "", global_style_css, position="prepend")
         html = strip_prompt_artifacts(html)
         return version, html
 

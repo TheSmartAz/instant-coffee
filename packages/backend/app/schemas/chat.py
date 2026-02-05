@@ -1,8 +1,18 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .style_reference import StyleTokens
+
+class StyleReferenceInput(BaseModel):
+    mode: Literal["full_mimic", "style_only"] = "full_mimic"
+    images: List[str] = Field(default_factory=list)
+    scope_pages: List[str] = Field(default_factory=list)
+    tokens: Optional[StyleTokens] = None
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class ChatRequest(BaseModel):
@@ -10,6 +20,19 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     interview: Optional[bool] = None
     generate_now: bool = False
+    images: List[str] = Field(default_factory=list)
+    target_pages: List[str] = Field(default_factory=list)
+    style_reference: Optional[StyleReferenceInput] = None
+    style_reference_mode: Optional[Literal["full_mimic", "style_only"]] = None
+
+    @model_validator(mode="after")
+    def validate_image_count(self) -> "ChatRequest":
+        combined = list(self.images)
+        if self.style_reference and self.style_reference.images:
+            combined.extend(self.style_reference.images)
+        if len(combined) > 3:
+            raise ValueError("images must contain at most 3 items")
+        return self
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -53,4 +76,4 @@ class ChatResponse(BaseModel):
     )
 
 
-__all__ = ["ChatRequest", "ChatResponse"]
+__all__ = ["ChatRequest", "ChatResponse", "StyleReferenceInput"]
