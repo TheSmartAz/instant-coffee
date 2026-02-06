@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy.orm import Session as DbSession
 
+from ..utils.datetime import utcnow
 from ..db.models import Page, Session as SessionModel
 from ..events.emitter import EventEmitter
 from ..events.models import PageCreatedEvent
@@ -173,7 +173,7 @@ class PageService:
             record.order_index = order_index
         if current_version_id is not None:
             record.current_version_id = current_version_id
-        record.updated_at = datetime.utcnow()
+        record.updated_at = utcnow()
         self.db.add(record)
         return record
 

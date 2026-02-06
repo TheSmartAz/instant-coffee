@@ -17,10 +17,10 @@
 
 ## 技术栈
 
-- **CLI**: TypeScript + Node.js + Commander.js
-- **Backend**: Python + FastAPI + Claude AI
+- **CLI**: Node.js + Commander.js（当前仓库提交的是 `packages/cli/dist` 编译产物）
+- **Backend**: Python + FastAPI + OpenAI/Anthropic 客户端
 - **Database**: SQLite + SQLAlchemy
-- **AI**: Claude Sonnet 4 (Anthropic)
+- **AI**: OpenAI / Anthropic（按环境变量配置）
 
 ## 快速开始
 
@@ -28,7 +28,7 @@
 
 - Node.js 18.0+
 - Python 3.11+
-- Anthropic API Key
+- OpenAI API Key 或 Anthropic API Key
 
 ### 安装
 
@@ -45,20 +45,17 @@ pip install -r requirements.txt
 
 # 3. 配置环境变量
 cp .env.example .env
-# 编辑 .env 文件，添加你的 ANTHROPIC_API_KEY
+# 编辑 .env 文件，添加你的 OPENAI_API_KEY 或 ANTHROPIC_API_KEY
 
-# 4. 初始化数据库
-python -m app.db.migrations
-
-# 5. 启动后端服务
+# 4. 启动后端服务（首次启动会自动初始化数据库）
 uvicorn app.main:app --reload
 
-# 6. 安装 CLI (新终端)
+# 5. 安装 CLI (新终端)
 cd packages/cli
 npm install
 npm run dev
 
-# 7. 使用 CLI
+# 6. 使用 CLI
 npx instant-coffee chat
 ```
 

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
+from ..utils.datetime import utcnow
 from ..db.models import (
     Page,
     PageVersion,
@@ -127,7 +127,7 @@ class ProjectSnapshotService:
         rollback_snapshot: Optional[ProjectSnapshot] = None
 
         with self.db.begin_nested():
-            now = datetime.utcnow()
+            now = utcnow()
             product_doc.content = snapshot.doc.content or ""
             product_doc.structured = snapshot.doc.structured or {}
             self.db.add(product_doc)
@@ -213,7 +213,7 @@ class ProjectSnapshotService:
         keep_ids = {snap.id for snap in auto_keep + pinned_keep}
 
         released_count = 0
-        now = datetime.utcnow()
+        now = utcnow()
         for snapshot in snapshots:
             if snapshot.id in keep_ids:
                 continue

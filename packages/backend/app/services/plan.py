@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 from enum import Enum
@@ -9,6 +8,7 @@ from enum import Enum
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
+from ..utils.datetime import utcnow
 from ..db.models import Plan, PlanStatus, Task, TaskStatus
 
 
@@ -132,7 +132,7 @@ class PlanService:
             plan.status = PlanStatus.DONE.value
         else:
             plan.status = PlanStatus.PENDING.value
-        plan.updated_at = datetime.utcnow()
+        plan.updated_at = utcnow()
         self.db.add(plan)
         return plan
 

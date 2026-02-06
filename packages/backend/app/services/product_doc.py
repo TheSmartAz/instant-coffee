@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 import logging
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
+from ..utils.datetime import utcnow
 from ..db.models import (
     ProductDoc,
     ProductDocHistory,
@@ -26,13 +26,14 @@ from ..events.models import (
 )
 from ..services.event_store import EventStoreService
 from .skills import SkillsRegistry
+from ..schemas.scenario import get_default_data_model
 from ..exceptions import PinnedLimitExceeded
 from ..schemas.product_doc import ProductDocStructured
 
 logger = logging.getLogger(__name__)
 
 _STATIC_PRODUCT_TYPES = {"landing", "card", "invitation"}
-_FLOW_PRODUCT_TYPES = {"ecommerce", "booking", "dashboard"}
+_FLOW_PRODUCT_TYPES = {"ecommerce", "travel", "manual", "kanban", "booking", "dashboard"}
 _VALID_DOC_TIERS = {"checklist", "standard", "extended"}
 _VALID_COMPLEXITIES = {"simple", "medium", "complex"}
 _COMPLEXITY_TO_TIER = {"simple": "checklist", "medium": "standard", "complex": "extended"}
@@ -123,7 +124,7 @@ class ProductDocService:
                 source=VersionSource.AUTO,
                 change_summary=change_summary,
             )
-        record.updated_at = datetime.utcnow()
+        record.updated_at = utcnow()
         self.db.add(record)
         self.db.flush()
         self._emit(
@@ -149,7 +150,7 @@ class ProductDocService:
         resolved_source = self._normalize_source(source)
         next_version = self._next_history_version(doc.id, doc.version)
         doc.version = next_version
-        doc.updated_at = datetime.utcnow()
+        doc.updated_at = utcnow()
 
         resolved_structured = self._normalize_structured(structured or {})
         record = ProductDocHistory(
@@ -273,7 +274,7 @@ class ProductDocService:
         keep_ids.update(record.id for record in keep_auto)
 
         updated = 0
-        now = datetime.utcnow()
+        now = utcnow()
         for record in histories:
             should_release = record.id not in keep_ids
             if should_release and not record.is_released:
@@ -318,7 +319,7 @@ class ProductDocService:
             )
         if previous_status != next_status:
             record.status = next_status
-            record.updated_at = datetime.utcnow()
+            record.updated_at = utcnow()
             self.db.add(record)
             self.db.flush()
             self._emit_status_event(record, next_status)
@@ -335,7 +336,7 @@ class ProductDocService:
         if record is None:
             raise ValueError("ProductDoc not found")
         record.pending_regeneration_pages = self._normalize_pages(pages)
-        record.updated_at = datetime.utcnow()
+        record.updated_at = utcnow()
         self.db.add(record)
         self.db.flush()
         return record
@@ -389,7 +390,7 @@ class ProductDocService:
             model = ProductDocStructured.model_validate(resolved)
         except ValidationError as exc:
             raise ValueError(f"Invalid structured data: {exc}") from exc
-        payload = model.model_dump(exclude_none=True, exclude_unset=True)
+        payload = model.model_dump(mode="json", exclude_none=True, exclude_unset=True, by_alias=True)
         return self._ensure_structured_fields(payload)
 
     def _merge_structured(self, base: Optional[Dict[str, Any]], updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -429,7 +430,7 @@ class ProductDocService:
             session.doc_tier = doc_tier
             updated = True
         if updated:
-            session.updated_at = datetime.utcnow()
+            session.updated_at = utcnow()
             self.db.add(session)
             self.db.flush()
 
@@ -446,6 +447,7 @@ class ProductDocService:
         structured.setdefault("doc_tier", doc_tier)
         structured.setdefault("goal", structured.get("goal") or "")
         structured.setdefault("pages", [])
+        structured.setdefault("data_model", None)
         structured.setdefault("data_flow", [])
         structured.setdefault("component_inventory", [])
         if not structured.get("component_inventory"):
@@ -469,6 +471,11 @@ class ProductDocService:
 
         if "state_contract" not in structured:
             structured["state_contract"] = None
+        data_model_value = structured.get("data_model")
+        if not isinstance(data_model_value, dict) or not data_model_value.get("entities"):
+            default_model = get_default_data_model(product_type)
+            if default_model is not None:
+                structured["data_model"] = default_model.model_dump(by_alias=True, exclude_none=True)
         structured["state_contract"] = self._ensure_state_contract(
             product_type, structured.get("state_contract")
         )

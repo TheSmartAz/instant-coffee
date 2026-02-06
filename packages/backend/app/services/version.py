@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from datetime import datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
+from ..utils.datetime import utcnow
 from ..db.models import Session, Version
 
 
@@ -33,7 +33,7 @@ class VersionService:
             description=description,
         )
         session.current_version = next_version
-        session.updated_at = datetime.utcnow()
+        session.updated_at = utcnow()
         self.db.add(record)
         self.db.add(session)
         self.db.flush()

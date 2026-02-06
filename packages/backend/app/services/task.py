@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional
 
 from sqlalchemy.orm import Session as DbSession
 
+from ..utils.datetime import utcnow
 from ..db.models import Plan, PlanStatus, Task, TaskEvent, TaskStatus
 from ..exceptions import new_trace_id
 from .plan import PlanService
@@ -73,7 +74,7 @@ class TaskService:
             task.error_message = message
         if result is not None:
             task.result = json.dumps(result, ensure_ascii=False)
-        now = datetime.utcnow()
+        now = utcnow()
         if status in (TaskStatus.IN_PROGRESS.value, TaskStatus.RETRYING.value):
             task.started_at = task.started_at or now
         if status in (
@@ -127,7 +128,7 @@ class TaskService:
         if plan is None:
             return None
         plan.status = PlanStatus.ABORTED.value
-        plan.updated_at = datetime.utcnow()
+        plan.updated_at = utcnow()
         self.db.add(plan)
         tasks = self.db.query(Task).filter(Task.plan_id == plan_id).all()
         for task in tasks:
@@ -140,7 +141,7 @@ class TaskService:
             ):
                 continue
             task.status = TaskStatus.ABORTED.value
-            task.completed_at = task.completed_at or datetime.utcnow()
+            task.completed_at = task.completed_at or utcnow()
             self.db.add(task)
         self.db.flush()
         return plan
@@ -151,7 +152,7 @@ class TaskService:
         timeout_minutes: int = 30,
         reason: Optional[str] = None,
     ) -> List[Dict[str, str]]:
-        cutoff = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+        cutoff = utcnow() - timedelta(minutes=timeout_minutes)
         candidates = (
             self.db.query(Task)
             .filter(Task.status.in_([TaskStatus.IN_PROGRESS.value, TaskStatus.RETRYING.value]))
@@ -233,7 +234,7 @@ class TaskService:
             event_type="task_modified",
             message="Task description modified",
             payload=json.dumps(payload, ensure_ascii=False),
-            timestamp=datetime.utcnow(),
+            timestamp=utcnow(),
         )
         self.db.add(event)
 

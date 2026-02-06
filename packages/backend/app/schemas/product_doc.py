@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .scenario import DataModel
+
 
 class ProductDocFeature(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -65,7 +67,7 @@ class StateContract(BaseModel):
     shared_state_key: str = "instant-coffee:state"
     records_key: str = "instant-coffee:records"
     events_key: str = "instant-coffee:events"
-    schema: Dict[str, Any] = Field(default_factory=dict)
+    state_schema: Dict[str, Any] = Field(default_factory=dict, alias="schema", serialization_alias="schema")
     events: List[str] = Field(default_factory=list)
 
 
@@ -77,18 +79,37 @@ class StyleReferenceInfo(BaseModel):
     images: List[str] = Field(default_factory=list)
 
 
+class ComponentRegistryPlan(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    components: List[Any] = Field(default_factory=list)
+    page_map: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class ComponentRegistryInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    path: Optional[str] = None
+    version: Optional[int] = None
+    hash: Optional[str] = None
+    generated_at: Optional[datetime] = None
+
+
 class ProductDocStructured(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    product_type: str = "unknown"  # ecommerce, booking, dashboard, landing, card, invitation
+    product_type: str = "unknown"  # ecommerce, travel, manual, kanban, landing, card, invitation, booking, dashboard
     complexity: str = "unknown"  # simple, medium, complex
     doc_tier: str = "standard"  # checklist, standard, extended
     goal: str = ""
     pages: List[PageInfo] = Field(default_factory=list)
+    data_model: Optional[DataModel] = None
     data_flow: List[DataFlow] = Field(default_factory=list)
     state_contract: Optional[StateContract] = None
     style_reference: Optional[StyleReferenceInfo] = None
     component_inventory: List[str] = Field(default_factory=list)
+    component_registry_plan: Optional[ComponentRegistryPlan] = None
+    component_registry: Optional[ComponentRegistryInfo] = None
 
     core_points: List[str] = Field(default_factory=list)
     users: List[str] = Field(default_factory=list)
@@ -191,4 +212,6 @@ __all__ = [
     "ProductDocStructured",
     "StateContract",
     "StyleReferenceInfo",
+    "ComponentRegistryPlan",
+    "ComponentRegistryInfo",
 ]

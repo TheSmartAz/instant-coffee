@@ -22,6 +22,7 @@ from ..schemas.product_doc import (
     ProductDocStandard,
     ProductDocStructured,
 )
+from ..schemas.scenario import get_default_data_model
 from ..services.product_doc import ProductDocService
 from ..services.skills import SkillsRegistry
 from ..llm.model_pool import FallbackTrigger, ModelRole
@@ -431,6 +432,7 @@ class ProductDocAgent(BaseAgent):
         structured.setdefault("doc_tier", "standard")
         structured.setdefault("goal", structured.get("goal") or "")
         structured.setdefault("pages", [])
+        structured.setdefault("data_model", None)
         structured.setdefault("data_flow", [])
         structured.setdefault("component_inventory", [])
         product_type = ProductDocService.normalize_product_type(structured.get("product_type")) or "unknown"
@@ -453,6 +455,11 @@ class ProductDocAgent(BaseAgent):
         structured["doc_tier"] = (
             ProductDocService.normalize_doc_tier(structured.get("doc_tier")) or structured["doc_tier"]
         )
+        data_model_value = structured.get("data_model")
+        if not isinstance(data_model_value, dict) or not data_model_value.get("entities"):
+            default_model = get_default_data_model(product_type)
+            if default_model is not None:
+                structured["data_model"] = default_model.model_dump(by_alias=True, exclude_none=True)
         structured["state_contract"] = self._normalize_state_contract(
             structured.get("state_contract"),
             product_type=product_type,
@@ -1076,7 +1083,7 @@ class ProductDocAgent(BaseAgent):
             except ValidationError as exc2:
                 errors.append(str(exc2))
                 return {}, errors
-        payload = model.model_dump(exclude_none=True, exclude_unset=True)
+        payload = model.model_dump(exclude_none=True, exclude_unset=True, by_alias=True)
         payload = self._ensure_structured_fields(payload)
         if doc_tier == "extended":
             payload = self._ensure_mermaid(payload)

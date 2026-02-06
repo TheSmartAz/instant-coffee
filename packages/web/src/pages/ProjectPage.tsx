@@ -20,6 +20,8 @@ import { VersionPanel } from '@/components/custom/VersionPanel'
 import { EventList } from '@/components/EventFlow/EventList'
 import { api, type RequestError } from '@/api/client'
 import { useChat } from '@/hooks/useChat'
+import { useAestheticScore } from '@/hooks/useAestheticScore'
+import { useBuildStatus } from '@/hooks/useBuildStatus'
 import { useSSE } from '@/hooks/useSSE'
 import { useSession } from '@/hooks/useSession'
 import { usePages } from '@/hooks/usePages'
@@ -38,6 +40,7 @@ export function ProjectPage() {
   const [activeTab, setActiveTab] = React.useState<'chat' | 'events'>('chat')
   const [workbenchTab, setWorkbenchTab] = React.useState<WorkbenchTab>('preview')
   const [appMode, setAppMode] = React.useState(false)
+  const [previewMode, setPreviewMode] = React.useState<'live' | 'build'>('live')
   const [pagePreviewVersion, setPagePreviewVersion] = React.useState<number | null>(
     null
   )
@@ -48,6 +51,7 @@ export function ProjectPage() {
   const [previewHtml, setPreviewHtml] = React.useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
   const autoLoadedPreviewRef = React.useRef<Set<string>>(new Set())
+  const [buildPreviewStamp, setBuildPreviewStamp] = React.useState(0)
 
   // Multi-page support (v04) - use usePages hook
   const {
@@ -86,6 +90,17 @@ export function ProjectPage() {
       setWorkbenchTab('product-doc')
     },
   })
+  const { score: aestheticScore } = useAestheticScore(sessionId)
+  const {
+    build: buildState,
+    isLoading: isBuildLoading,
+    error: buildError,
+    refresh: refreshBuildStatus,
+    startBuild,
+    cancelBuild,
+    selectedPage: selectedBuildPage,
+    selectPage: selectBuildPage,
+  } = useBuildStatus(sessionId)
 
   const buildPagePreviewUrl = React.useCallback(
     (pageId: string, options?: { bustCache?: boolean }) => {
@@ -95,6 +110,30 @@ export function ProjectPage() {
     },
     []
   )
+
+  const extractBuildSlug = React.useCallback((pagePath: string) => {
+    if (!pagePath) return null
+    let normalized = pagePath.replace(/\\\\/g, '/')
+    if (normalized.startsWith('pages/')) {
+      normalized = normalized.slice(6)
+    }
+    if (normalized.endsWith('/index.html')) {
+      normalized = normalized.slice(0, -'/index.html'.length)
+    } else if (normalized.endsWith('index.html')) {
+      normalized = normalized.slice(0, -'index.html'.length)
+    }
+    if (normalized.endsWith('.html')) {
+      normalized = normalized.slice(0, -'.html'.length)
+    }
+    normalized = normalized.replace(/\/$/, '')
+    if (!normalized) return 'index'
+    return normalized
+  }, [])
+
+  const toBuildPath = React.useCallback((slug?: string | null) => {
+    if (!slug) return null
+    return slug === 'index' ? 'index.html' : `pages/${slug}/index.html`
+  }, [])
 
   // Function to load page preview (prefer preview_url)
   const loadPagePreview = React.useCallback(
@@ -191,6 +230,8 @@ export function ProjectPage() {
         : sse.connectionState === 'error'
           ? 'Connection lost'
           : undefined
+  const isBuildRunning =
+    buildState.status === 'building' || buildState.status === 'pending'
 
   React.useEffect(() => {
     setActiveTab('chat')
@@ -280,6 +321,7 @@ export function ProjectPage() {
   React.useEffect(() => {
     if (!sessionId) {
       setAppMode(false)
+      setPreviewMode('live')
       return
     }
     try {
@@ -301,8 +343,39 @@ export function ProjectPage() {
     }
   }, [appMode, sessionId])
 
+  React.useEffect(() => {
+    if (!selectedPageId || buildState.pages.length === 0) return
+    const slug = pages.find((page) => page.id === selectedPageId)?.slug
+    const path = toBuildPath(slug)
+    if (!path) return
+    if (buildState.pages.includes(path) && selectedBuildPage !== path) {
+      selectBuildPage(path)
+    }
+  }, [
+    buildState.pages,
+    pages,
+    selectedBuildPage,
+    selectedPageId,
+    selectBuildPage,
+    toBuildPath,
+  ])
+
+  const lastBuildErrorRef = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    if (!buildError) return
+    if (buildError === lastBuildErrorRef.current) return
+    lastBuildErrorRef.current = buildError
+    toast({ title: 'Build error', description: buildError })
+  }, [buildError])
+
   const handleRefreshPreview = async () => {
     if (!sessionId) return
+    if (previewMode === 'build') {
+      setBuildPreviewStamp(Date.now())
+      toast({ title: 'Build preview refreshed' })
+      return
+    }
     setIsRefreshing(true)
     try {
       const ok = await refresh()
@@ -325,8 +398,15 @@ export function ProjectPage() {
     try {
       const result = await api.export.session(sessionId)
       if (result.success) {
-        const successCount = result.manifest.pages.filter((p) => p.status === 'success').length
-        const failedCount = result.manifest.pages.filter((p) => p.status === 'failed').length
+        let successCount = 0
+        let failedCount = 0
+        for (const page of result.manifest.pages) {
+          if (page.status === 'success') {
+            successCount += 1
+          } else if (page.status === 'failed') {
+            failedCount += 1
+          }
+        }
 
         let message = `Export succeeded! ${successCount} pages exported to ${result.export_dir}`
         if (failedCount > 0) {
@@ -384,6 +464,11 @@ export function ProjectPage() {
   // Refresh handler for individual page
   const handleRefreshPage = React.useCallback(
     async (pageId: string) => {
+      if (previewMode === 'build') {
+        setBuildPreviewStamp(Date.now())
+        toast({ title: 'Build preview refreshed' })
+        return
+      }
       setIsRefreshing(true)
       try {
         await loadPagePreview(pageId, { bustCache: true })
@@ -395,17 +480,91 @@ export function ProjectPage() {
         setIsRefreshing(false)
       }
     },
-    [loadPagePreview]
+    [loadPagePreview, previewMode]
   )
 
-  const handleBuildFromDoc = React.useCallback(() => {
+  const previousBuildStatusRef = React.useRef(buildState.status)
+
+  React.useEffect(() => {
+    const previous = previousBuildStatusRef.current
+    if (previous !== 'success' && buildState.status === 'success') {
+      setBuildPreviewStamp(Date.now())
+      if (selectedPageId) {
+        void loadPagePreview(selectedPageId, { bustCache: true })
+      } else {
+        void refresh()
+      }
+    }
+    previousBuildStatusRef.current = buildState.status
+  }, [buildState.status, loadPagePreview, refresh, selectedPageId])
+
+  const buildPreviewPath = React.useMemo(() => {
+    const buildPages = buildState.pages ?? []
+    const selectedSlug = pages.find((page) => page.id === selectedPageId)?.slug
+    const slugPath = toBuildPath(selectedSlug)
+    if (slugPath && (buildPages.length === 0 || buildPages.includes(slugPath))) {
+      return slugPath
+    }
+    if (selectedBuildPage) return selectedBuildPage
+    if (buildPages.length > 0) return buildPages[0]
+    return slugPath
+  }, [buildState.pages, pages, selectedBuildPage, selectedPageId, toBuildPath])
+
+  const handleBuildFromDoc = React.useCallback(async () => {
     if (!sessionId) return
-    void chat.sendMessage('Start building', { generateNow: true })
-  }, [chat, sessionId])
+    try {
+      await startBuild()
+      toast({ title: 'Build started' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start build'
+      toast({ title: 'Build failed', description: message })
+    }
+  }, [sessionId, startBuild])
+
+  const handleBuildRetry = React.useCallback(() => {
+    void handleBuildFromDoc()
+  }, [handleBuildFromDoc])
+
+  const handleBuildCancel = React.useCallback(async () => {
+    if (!sessionId) return
+    try {
+      await cancelBuild()
+      toast({ title: 'Build cancelled' })
+      void refreshBuildStatus()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to cancel build'
+      toast({ title: 'Cancel failed', description: message })
+    }
+  }, [cancelBuild, refreshBuildStatus, sessionId])
+
+  const handleBuildPageSelect = React.useCallback(
+    (pagePath: string) => {
+      if (!pagePath) return
+      selectBuildPage(pagePath)
+      if (pages.length === 0) return
+      const slug = extractBuildSlug(pagePath)
+      const matched =
+        pages.find((page) => page.slug === slug) ??
+        (slug === 'index' ? pages[0] : undefined)
+      if (matched) {
+        void handleSelectPage(matched.id)
+      }
+    },
+    [extractBuildSlug, handleSelectPage, pages, selectBuildPage]
+  )
 
   const activeSessionVersion =
     versions.find((version) => version.isCurrent)?.number ?? session?.currentVersion ?? null
   const previewVersionLabel = hasPages ? pagePreviewVersion : activeSessionVersion
+
+  const buildPreviewUrl = React.useMemo(() => {
+    if (!sessionId) return null
+    if (buildState.pages.length === 0) return null
+    const path = buildPreviewPath ?? 'index.html'
+    const baseUrl = api.build.previewUrl(sessionId, path)
+    if (!buildPreviewStamp) return baseUrl
+    return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}t=${buildPreviewStamp}`
+  }, [buildPreviewPath, buildPreviewStamp, buildState.pages.length, sessionId])
 
   return (
     <div className="flex h-screen flex-col animate-in fade-in">
@@ -469,6 +628,7 @@ export function ProjectPage() {
                             size="icon"
                             disabled={!canAbort}
                             aria-label="Abort current execution"
+                            className="hover:bg-red-500"
                           >
                             <Square className="h-4 w-4" />
                           </Button>
@@ -521,7 +681,10 @@ export function ProjectPage() {
               <TabsContent value="chat" className="mt-0 flex-1 min-h-0">
                 <ChatPanel
                   messages={messages}
+                  assets={chat.assets}
                   onSendMessage={chat.sendMessage}
+                  onAssetUpload={chat.uploadAsset}
+                  onAssetRemove={chat.removeAsset}
                   onInterviewAction={chat.handleInterviewAction}
                   onTabChange={setWorkbenchTab}
                   onDisambiguationSelect={(option) => {
@@ -565,8 +728,10 @@ export function ProjectPage() {
               onTabChange={setWorkbenchTab}
               appMode={appMode}
               onAppModeChange={setAppMode}
+              previewMode={previewMode}
+              onPreviewModeChange={setPreviewMode}
               onBuildFromDoc={handleBuildFromDoc}
-              buildDisabled={chat.isStreaming}
+              buildDisabled={chat.isStreaming || isBuildRunning || isBuildLoading}
               previewVersion={previewVersionLabel}
               productDocVersion={productDoc?.version ?? null}
               pages={pages}
@@ -574,11 +739,18 @@ export function ProjectPage() {
               onSelectPage={handleSelectPage}
               previewHtml={previewHtml}
               previewUrl={previewUrl}
+              buildPreviewUrl={buildPreviewUrl}
               isRefreshing={isRefreshing}
               isExporting={isExporting}
               onRefresh={handleRefreshPreview}
               onRefreshPage={handleRefreshPage}
               onExport={handleExportPreview}
+              aestheticScore={aestheticScore}
+              buildState={buildState}
+              onBuildRetry={handleBuildRetry}
+              onBuildCancel={handleBuildCancel}
+              onBuildPageSelect={handleBuildPageSelect}
+              selectedBuildPage={selectedBuildPage}
             />
           </div>
         </div>

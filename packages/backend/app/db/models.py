@@ -3,7 +3,6 @@ from __future__ import annotations
 import enum
 import re
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
@@ -21,6 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship, validates
 
+from ..utils.datetime import utcnow
 from .base import Base
 
 
@@ -29,8 +29,8 @@ class Session(Base):
 
     id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
     current_version = Column(Integer, default=0)
     product_type = Column(String(50))
     complexity = Column(String(20))
@@ -42,6 +42,10 @@ class Session(Base):
     model_expander = Column(String(100))
     model_validator = Column(String(100))
     model_style_refiner = Column(String(100))
+    graph_state = Column(JSON, nullable=True)
+    build_status = Column(String(20), default="pending")
+    build_artifacts = Column(JSON, nullable=True)
+    aesthetic_scores = Column(JSON, nullable=True)
 
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
     versions = relationship("Version", back_populates="session", cascade="all, delete-orphan")
@@ -64,6 +68,60 @@ class Session(Base):
         back_populates="session",
         cascade="all, delete-orphan",
     )
+    runs = relationship(
+        "SessionRun",
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+
+class SessionRun(Base):
+    __tablename__ = "session_runs"
+
+    id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
+    session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    parent_run_id = Column(String, nullable=True)
+    trigger_source = Column(String(20), nullable=False, default="chat")
+    status = Column(String(20), nullable=False, default="queued")
+    input_message = Column(Text, nullable=True)
+    resume_payload = Column(JSON, nullable=True)
+    checkpoint_thread = Column(String, nullable=True)
+    checkpoint_ns = Column(String, nullable=True)
+    latest_error = Column(JSON, nullable=True)
+    metrics = Column(JSON, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+    updated_at = Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    session = relationship("Session", back_populates="runs")
+
+    __table_args__ = (
+        Index("idx_session_runs_session_created", "session_id", "created_at"),
+        Index("idx_session_runs_status", "status"),
+        Index("idx_session_runs_parent", "parent_run_id"),
+    )
+
+    @validates("trigger_source")
+    def validate_trigger_source(self, _key: str, value: str) -> str:
+        allowed_sources = {"chat", "resume", "retry", "system"}
+        if value not in allowed_sources:
+            raise ValueError(f"trigger_source must be one of {sorted(allowed_sources)}")
+        return value
+
+    @validates("status")
+    def validate_status(self, _key: str, value: str) -> str:
+        allowed_statuses = {
+            "queued",
+            "running",
+            "waiting_input",
+            "completed",
+            "failed",
+            "cancelled",
+        }
+        if value not in allowed_statuses:
+            raise ValueError(f"status must be one of {sorted(allowed_statuses)}")
+        return value
 
 
 class Message(Base):
@@ -73,7 +131,7 @@ class Message(Base):
     session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utcnow)
 
     session = relationship("Session", back_populates="messages")
 
@@ -91,7 +149,7 @@ class Version(Base):
     version = Column(Integer, nullable=False)
     html = Column(Text, nullable=False)
     description = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     session = relationship("Session", back_populates="versions")
 
@@ -106,7 +164,7 @@ class TokenUsage(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utcnow)
     agent_type = Column(String, nullable=False)
     model = Column(String, nullable=False)
     input_tokens = Column(Integer, nullable=False)
@@ -149,8 +207,8 @@ class Plan(Base):
     session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
     goal = Column(Text, nullable=False)
     status = Column(String, default=PlanStatus.PENDING.value)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     session = relationship("Session", back_populates="plans")
     tasks = relationship("Task", back_populates="plan", cascade="all, delete-orphan")
@@ -179,7 +237,7 @@ class Task(Base):
     result = Column(Text)
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     plan = relationship("Plan", back_populates="tasks")
     events = relationship("TaskEvent", back_populates="task", cascade="all, delete-orphan")
@@ -198,7 +256,7 @@ class PlanEvent(Base):
     event_type = Column(String, nullable=False)
     message = Column(Text)
     payload = Column(Text)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utcnow)
 
     plan = relationship("Plan", back_populates="events")
 
@@ -218,7 +276,7 @@ class TaskEvent(Base):
     tool_input = Column(Text)
     tool_output = Column(Text)
     payload = Column(Text)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utcnow)
 
     task = relationship("Task", back_populates="events")
 
@@ -264,8 +322,8 @@ class ProductDoc(Base):
         default=ProductDocStatus.DRAFT,
     )
     pending_regeneration_pages = Column(JSON, nullable=False, default=list)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     session = relationship("Session", back_populates="product_doc")
     histories = relationship(
@@ -305,7 +363,7 @@ class ProductDocHistory(Base):
     is_pinned = Column(Boolean, nullable=False, default=False)
     is_released = Column(Boolean, nullable=False, default=False)
     released_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     product_doc = relationship("ProductDoc", back_populates="histories")
 
@@ -334,7 +392,7 @@ class ProjectSnapshot(Base):
     is_pinned = Column(Boolean, nullable=False, default=False)
     is_released = Column(Boolean, nullable=False, default=False)
     released_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     session = relationship("Session", back_populates="snapshots")
     doc = relationship(
@@ -405,8 +463,8 @@ class Page(Base):
     description = Column(Text, nullable=False, default="")
     order_index = Column(Integer, nullable=False, default=0)
     current_version_id = Column(Integer, ForeignKey("page_versions.id", ondelete="SET NULL"))
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     session = relationship("Session", back_populates="pages")
     versions = relationship(
@@ -457,7 +515,7 @@ class PageVersion(Base):
     payload_pruned_at = Column(DateTime)
     fallback_used = Column(Boolean, nullable=False, default=False)
     fallback_excerpt = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     page = relationship("Page", back_populates="versions", foreign_keys=[page_id])
 
@@ -474,17 +532,22 @@ class SessionEvent(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
     seq = Column(Integer, nullable=False)
+    run_id = Column(String, nullable=True)
+    event_id = Column(String, nullable=True)
     type = Column(String(100), nullable=False)
     payload = Column(JSON)
     source = Column(
         SAEnum(SessionEventSource, name="session_event_source", values_callable=_enum_values),
         nullable=False,
     )
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     session = relationship("Session", back_populates="session_events")
 
-    __table_args__ = (Index("idx_session_event_seq", "session_id", "seq"),)
+    __table_args__ = (
+        Index("idx_session_event_seq", "session_id", "seq"),
+        Index("idx_session_event_run_seq", "session_id", "run_id", "seq"),
+    )
 
 
 class SessionEventSequence(Base):
@@ -492,7 +555,7 @@ class SessionEventSequence(Base):
 
     session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True)
     next_seq = Column(Integer, nullable=False, default=1)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 __all__ = [
@@ -516,6 +579,7 @@ __all__ = [
     "ProjectSnapshotPage",
     "Page",
     "PageVersion",
+    "SessionRun",
     "SessionEvent",
     "SessionEventSequence",
 ]

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import List, Optional, Tuple
 
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session as DbSession
 
+from ..utils.datetime import utcnow
 from ..db.models import Page, PageVersion, VersionSource
 from ..events.emitter import EventEmitter
 from ..events.models import PagePreviewReadyEvent, PageVersionCreatedEvent
@@ -91,7 +91,7 @@ class PageVersionService:
         self.db.flush()
 
         page.current_version_id = record.id
-        page.updated_at = datetime.utcnow()
+        page.updated_at = utcnow()
         self.db.add(page)
 
         self.apply_retention_policy(page_id)
@@ -205,7 +205,7 @@ class PageVersionService:
         if page is None:
             return 0
 
-        now = datetime.utcnow()
+        now = utcnow()
         keep_ids: set[int] = set()
         if page.current_version_id is not None:
             keep_ids.add(page.current_version_id)

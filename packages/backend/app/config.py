@@ -74,6 +74,21 @@ def _get_json(key: str, default: Any) -> Any:
         return default
 
 
+def _get_str_list(key: str, default: list[str]) -> list[str]:
+    value = os.getenv(key)
+    if value is None or value.strip() == "":
+        return list(default)
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            result = [str(item).strip() for item in parsed if str(item).strip()]
+            return result or list(default)
+    except json.JSONDecodeError:
+        pass
+    result = [item.strip() for item in value.split(",") if item.strip()]
+    return result or list(default)
+
+
 def _resolve_default_model_id() -> str:
     return _get_env("MODEL") or _get_env("DEFAULT_MODEL") or get_default_model_id()
 
@@ -107,10 +122,47 @@ DEFAULT_MODEL_POOLS: dict[str, Any] = {
 }
 
 
+TOOL_POLICY_DEFAULT_ALLOWED_CMD_PREFIXES = [
+    "npm",
+    "npx",
+    "node",
+    "python",
+    "pip",
+    "git",
+    "ls",
+    "cat",
+    "echo",
+    "mkdir",
+    "cp",
+]
+
+
 @dataclass
 class Settings:
     database_url: str = field(default_factory=lambda: _get_env("DATABASE_URL", "sqlite:///./instant-coffee.db"))
+    app_data_pg_pool_min_size: int = field(default_factory=lambda: _get_int("APP_DATA_PG_POOL_MIN_SIZE", 1))
+    app_data_pg_pool_max_size: int = field(default_factory=lambda: _get_int("APP_DATA_PG_POOL_MAX_SIZE", 15))
+    app_data_pg_pool_command_timeout: float = field(
+        default_factory=lambda: _get_float("APP_DATA_PG_POOL_COMMAND_TIMEOUT", 30.0)
+    )
+    run_api_enabled: bool = field(default_factory=lambda: _get_bool("RUN_API_ENABLED", True))
+    chat_use_run_adapter: bool = field(default_factory=lambda: _get_bool("CHAT_USE_RUN_ADAPTER", False))
+    tool_policy_enabled: bool = field(default_factory=lambda: _get_bool("TOOL_POLICY_ENABLED", True))
+    tool_policy_mode: str = field(default_factory=lambda: _get_env("TOOL_POLICY_MODE", "log_only") or "log_only")
+    tool_policy_allowed_cmd_prefixes: list[str] = field(
+        default_factory=lambda: _get_str_list(
+            "TOOL_POLICY_ALLOWED_CMD_PREFIXES",
+            TOOL_POLICY_DEFAULT_ALLOWED_CMD_PREFIXES,
+        )
+    )
+    tool_policy_large_output_bytes: int = field(
+        default_factory=lambda: _get_int("TOOL_POLICY_LARGE_OUTPUT_BYTES", 100 * 1024)
+    )
     output_dir: str = field(default_factory=lambda: _get_env("OUTPUT_DIR", "instant-coffee-output"))
+    cors_allow_origins: list[str] = field(default_factory=lambda: _get_str_list("CORS_ALLOW_ORIGINS", ["*"]))
+    cors_allow_methods: list[str] = field(default_factory=lambda: _get_str_list("CORS_ALLOW_METHODS", ["*"]))
+    cors_allow_headers: list[str] = field(default_factory=lambda: _get_str_list("CORS_ALLOW_HEADERS", ["*"]))
+    cors_allow_credentials: bool = field(default_factory=lambda: _get_bool("CORS_ALLOW_CREDENTIALS", False))
     planner_provider: str | None = field(default_factory=lambda: _get_env("PLANNER_PROVIDER"))
     planner_model: str = field(
         default_factory=lambda: _get_env("PLANNER_MODEL") or "kimi-k2.5"
@@ -157,6 +209,32 @@ class Settings:
     temperature: float = field(default_factory=lambda: _get_float("TEMPERATURE", 0.7))
     max_tokens: int = field(default_factory=lambda: _get_int("MAX_TOKENS", 8000))
     auto_save: bool = field(default_factory=lambda: _get_bool("AUTO_SAVE", True))
+    use_langgraph: bool = field(
+        default_factory=lambda: _get_bool("USE_LANGGRAPH", _get_bool("FF_USE_LANGGRAPH", False))
+    )
+    langgraph_checkpointer: str = field(
+        default_factory=lambda: _get_env("LANGGRAPH_CHECKPOINTER", "sqlite") or "sqlite"
+    )
+    langgraph_checkpoint_url: str | None = field(default_factory=lambda: _get_env("LANGGRAPH_CHECKPOINT_URL"))
+    mcp_enabled: bool = field(default_factory=lambda: _get_bool("ENABLE_MCP", _get_bool("USE_MCP", False)))
+    mcp_servers: dict[str, Any] = field(default_factory=lambda: _get_json("MCP_SERVERS", {}))
+    mcp_server_url: str | None = field(default_factory=lambda: _get_env("MCP_SERVER_URL"))
+    style_extractor_enabled: bool = field(
+        default_factory=lambda: _get_bool("ENABLE_STYLE_EXTRACTOR", True)
+    )
+
+    aesthetic_scoring_enabled: bool = field(
+        default_factory=lambda: _get_bool("ENABLE_AESTHETIC_SCORING", False)
+    )
+    aesthetic_thresholds: dict[str, Any] = field(
+        default_factory=lambda: _get_json("AESTHETIC_THRESHOLDS", {})
+    )
+
+    verify_gate_enabled: bool = field(default_factory=lambda: _get_bool("VERIFY_GATE_ENABLED", True))
+    verify_gate_auto_fix_enabled: bool = field(
+        default_factory=lambda: _get_bool("VERIFY_GATE_AUTO_FIX_ENABLED", True)
+    )
+    verify_gate_max_retry: int = field(default_factory=lambda: _get_int("VERIFY_GATE_MAX_RETRY", 1))
 
     max_concurrent_tasks: int = field(default_factory=lambda: _get_int("MAX_CONCURRENCY", 3))
 
@@ -168,10 +246,10 @@ class Settings:
         default_factory=lambda: _get_float("TASK_TIMEOUT_CLEANUP_INTERVAL", 60.0)
     )
     interview_timeout_seconds: float = field(
-        default_factory=lambda: _get_float("INTERVIEW_TIMEOUT_SECONDS", 60.0)
+        default_factory=lambda: _get_float("INTERVIEW_TIMEOUT_SECONDS", 180.0)
     )
     product_doc_timeout_seconds: float = field(
-        default_factory=lambda: _get_float("PRODUCT_DOC_TIMEOUT_SECONDS", 120.0)
+        default_factory=lambda: _get_float("PRODUCT_DOC_TIMEOUT_SECONDS", 180.0)
     )
 
 

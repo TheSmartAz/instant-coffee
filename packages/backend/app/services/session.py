@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import List, Optional
 from uuid import uuid4
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
+from ..utils.datetime import utcnow
 from ..db.models import Message, Session
 
 
@@ -34,7 +34,7 @@ class SessionService:
                 continue
             if hasattr(record, key):
                 setattr(record, key, value)
-        record.updated_at = datetime.utcnow()
+        record.updated_at = utcnow()
         self.db.add(record)
         return record
 

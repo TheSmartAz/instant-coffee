@@ -22,6 +22,7 @@ import {
 import type { SessionEvent } from '@/types/events'
 
 const PENDING_MESSAGE_TTL_MS = 10 * 60 * 1000
+const INTERVIEW_EVENT_LIMIT = 400
 
 type ApiSession = {
   id: string
@@ -423,6 +424,37 @@ const buildInterviewBatchesFromEvents = (events: SessionEvent[]): InterviewBatch
   return batches
 }
 
+const extractMessagesList = (messagesResponse: unknown): ApiMessage[] =>
+  Array.isArray(messagesResponse)
+    ? (messagesResponse as ApiMessage[])
+    : (messagesResponse as { messages?: ApiMessage[] })?.messages ?? []
+
+const buildBaseMessages = (
+  sessionId: string | undefined,
+  rawMessages: ApiMessage[]
+) => {
+  const mappedMessages = rawMessages.map(mapMessage)
+  const payloadMap = buildInterviewPayloadMap(rawMessages, mappedMessages)
+  let nextMessages = applyStoredInterview(sessionId, rawMessages, mappedMessages)
+  nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
+  nextMessages = applyPendingMessage(sessionId, nextMessages)
+  return { messages: nextMessages, payloadMap }
+}
+
+const applyInterviewEvents = (
+  sessionId: string | undefined,
+  messages: Message[],
+  payloadMap: Map<string, { action?: string; answers: InterviewAnswer[] }>,
+  events: SessionEvent[]
+) => {
+  const interviewBatches = buildInterviewBatchesFromEvents(events)
+  if (interviewBatches.length === 0) return messages
+  let nextMessages = attachInterviewBatches(messages, interviewBatches)
+  nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
+  nextMessages = applyPendingMessage(sessionId, nextMessages)
+  return nextMessages
+}
+
 const attachInterviewBatches = (
   messages: Message[],
   batches: InterviewBatch[]
@@ -544,32 +576,20 @@ export function useSession(sessionId?: string) {
         await Promise.all([
           api.sessions.get(sessionId),
           api.sessions.messages(sessionId),
-          api.sessions.versions(sessionId),
+          api.sessions.versions(sessionId, { includePreviewHtml: false }),
         ])
 
       if (sessionResponse) {
         setSession(mapSession(sessionResponse as ApiSession))
       }
 
-      const messagesList = Array.isArray(messagesResponse)
-        ? messagesResponse
-        : (messagesResponse as { messages?: ApiMessage[] })?.messages ?? []
-      const mappedMessages = messagesList.map(mapMessage)
-      const payloadMap = buildInterviewPayloadMap(messagesList, mappedMessages)
-      let nextMessages = applyStoredInterview(sessionId, messagesList, mappedMessages)
-      try {
-        const eventsResponse = await api.events.getSessionEvents(sessionId)
-        const interviewBatches = buildInterviewBatchesFromEvents(
-          (eventsResponse as { events?: SessionEvent[] })?.events ?? []
-        )
-        nextMessages = attachInterviewBatches(nextMessages, interviewBatches)
-      } catch {
-        // Ignore event recovery failures, keep base messages.
-      }
-      nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
-      nextMessages = applyPendingMessage(sessionId, nextMessages)
+      const messagesList = extractMessagesList(messagesResponse)
+      const { messages: baseMessages, payloadMap } = buildBaseMessages(
+        sessionId,
+        messagesList
+      )
       if (lastMessageUpdateRef.current <= loadStartedAt) {
-        setMessagesState(nextMessages)
+        setMessagesState(baseMessages)
         lastMessageUpdateRef.current = Date.now()
       }
 
@@ -582,6 +602,25 @@ export function useSession(sessionId?: string) {
         ? versionsResponse
         : versionsPayload?.versions ?? []
       setVersions(versionList.map((item) => mapVersion(item, currentVersion)))
+
+      if (messagesList.length > 0) {
+        void (async () => {
+          try {
+            const eventsResponse = await api.events.getSessionEvents(
+              sessionId,
+              undefined,
+              INTERVIEW_EVENT_LIMIT
+            )
+            const events = (eventsResponse as { events?: SessionEvent[] })?.events ?? []
+            if (events.length === 0) return
+            setMessages((prev) =>
+              applyInterviewEvents(sessionId, prev, payloadMap, events)
+            )
+          } catch {
+            // Ignore event recovery failures, keep base messages.
+          }
+        })()
+      }
       return true
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load session'
@@ -590,7 +629,7 @@ export function useSession(sessionId?: string) {
     } finally {
       setIsLoading(false)
     }
-  }, [sessionId])
+  }, [sessionId, setMessages])
 
   React.useEffect(() => {
     let active = true
@@ -603,7 +642,7 @@ export function useSession(sessionId?: string) {
           await Promise.all([
             api.sessions.get(sessionId),
             api.sessions.messages(sessionId),
-            api.sessions.versions(sessionId),
+            api.sessions.versions(sessionId, { includePreviewHtml: false }),
           ])
         if (!active) return
 
@@ -611,25 +650,13 @@ export function useSession(sessionId?: string) {
           setSession(mapSession(sessionResponse as ApiSession))
         }
 
-        const messagesList = Array.isArray(messagesResponse)
-          ? messagesResponse
-          : (messagesResponse as { messages?: ApiMessage[] })?.messages ?? []
-        const mappedMessages = messagesList.map(mapMessage)
-        const payloadMap = buildInterviewPayloadMap(messagesList, mappedMessages)
-        let nextMessages = applyStoredInterview(sessionId, messagesList, mappedMessages)
-        try {
-          const eventsResponse = await api.events.getSessionEvents(sessionId)
-          const interviewBatches = buildInterviewBatchesFromEvents(
-            (eventsResponse as { events?: SessionEvent[] })?.events ?? []
-          )
-          nextMessages = attachInterviewBatches(nextMessages, interviewBatches)
-        } catch {
-          // Ignore event recovery failures, keep base messages.
-        }
-        nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
-        nextMessages = applyPendingMessage(sessionId, nextMessages)
+        const messagesList = extractMessagesList(messagesResponse)
+        const { messages: baseMessages, payloadMap } = buildBaseMessages(
+          sessionId,
+          messagesList
+        )
         if (lastMessageUpdateRef.current <= loadStartedAt) {
-          setMessagesState(nextMessages)
+          setMessagesState(baseMessages)
           lastMessageUpdateRef.current = Date.now()
         }
 
@@ -642,6 +669,26 @@ export function useSession(sessionId?: string) {
           ? versionsResponse
           : versionsPayload?.versions ?? []
         setVersions(versionList.map((item) => mapVersion(item, currentVersion)))
+
+        if (messagesList.length > 0) {
+          void (async () => {
+            try {
+              const eventsResponse = await api.events.getSessionEvents(
+                sessionId,
+                undefined,
+                INTERVIEW_EVENT_LIMIT
+              )
+              if (!active) return
+              const events = (eventsResponse as { events?: SessionEvent[] })?.events ?? []
+              if (events.length === 0) return
+              setMessages((prev) =>
+                applyInterviewEvents(sessionId, prev, payloadMap, events)
+              )
+            } catch {
+              // Ignore event recovery failures, keep base messages.
+            }
+          })()
+        }
       } catch (err) {
         if (!active) return
         const message = err instanceof Error ? err.message : 'Failed to load session'
@@ -654,7 +701,7 @@ export function useSession(sessionId?: string) {
     return () => {
       active = false
     }
-  }, [sessionId])
+  }, [sessionId, setMessages])
 
   return {
     session,
