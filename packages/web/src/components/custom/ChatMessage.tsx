@@ -6,7 +6,16 @@ import { formatDistanceToNow } from 'date-fns'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { InterviewWidget } from './InterviewWidget'
-import type { ChatStep, InterviewActionPayload, InterviewBatch, InterviewSummary, ChatAction, Disambiguation } from '@/types'
+import { AssetThumbnail } from './AssetThumbnail'
+import type {
+  ChatAction,
+  ChatAsset,
+  ChatStep,
+  Disambiguation,
+  InterviewActionPayload,
+  InterviewBatch,
+  InterviewSummary,
+} from '@/types'
 
 export interface ChatMessageProps {
   role: 'user' | 'assistant'
@@ -19,8 +28,10 @@ export interface ChatMessageProps {
   action?: ChatAction
   affectedPages?: string[]
   disambiguation?: Disambiguation
+  assets?: ChatAsset[]
+  onAssetRemove?: (assetId: string) => void
   onInterviewAction?: (payload: InterviewActionPayload) => void
-  onTabChange?: (tab: 'preview' | 'code' | 'product-doc') => void
+  onTabChange?: (tab: 'preview' | 'code' | 'product-doc' | 'data') => void
   onDisambiguationSelect?: (option: { id: string; slug: string; title: string }) => void
 }
 
@@ -35,6 +46,8 @@ export const ChatMessage = memo(function ChatMessage({
   action,
   affectedPages,
   disambiguation,
+  assets,
+  onAssetRemove,
   onInterviewAction,
   onTabChange,
   onDisambiguationSelect,
@@ -44,6 +57,19 @@ export const ChatMessage = memo(function ChatMessage({
   const hasSummary = Boolean(interviewSummary && interviewSummary.items.length > 0)
   const hasInterview = Boolean(interview) && !hasSummary
   const hasDisambiguation = Boolean(disambiguation && disambiguation.options.length > 0)
+  const hasAssets = Boolean(assets && assets.length > 0)
+
+  const renderAssets = (align: 'left' | 'right') => (
+    <div className={cn('flex flex-wrap gap-2', align === 'right' ? 'justify-end' : '')}>
+      {assets?.map((asset) => (
+        <AssetThumbnail
+          key={asset.id}
+          asset={asset}
+          onRemove={onAssetRemove ? () => onAssetRemove(asset.id) : undefined}
+        />
+      ))}
+    </div>
+  )
 
   // Determine if we should show ProductDoc link
   const showProductDocLink =
@@ -60,6 +86,7 @@ export const ChatMessage = memo(function ChatMessage({
       {isAssistant ? (
         <div className="w-full">
           <div className="mx-auto w-full max-w-3xl space-y-3 text-sm leading-relaxed text-foreground">
+            {hasAssets ? renderAssets('left') : null}
             {content ? (
               <div className="max-w-none">
                 <ReactMarkdown
@@ -230,6 +257,7 @@ export const ChatMessage = memo(function ChatMessage({
       ) : (
         <div className="flex w-full justify-end">
           <div className="flex max-w-[70%] flex-col items-end gap-1">
+            {hasAssets ? renderAssets('right') : null}
             <div className="w-full rounded-2xl bg-primary px-4 py-2 text-sm leading-relaxed text-primary-foreground shadow-sm">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}

@@ -1,14 +1,31 @@
 import * as React from 'react'
-import { ChatInput } from './ChatInput'
+import { ChatInput, type ChatInputProps } from './ChatInput'
 import { ChatMessage } from './ChatMessage'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useVirtualList } from '@/hooks/useVirtualList'
-import type { ChatAttachment, ChatStyleReference, InterviewActionPayload, Message, Page } from '@/types'
+import type {
+  ChatAsset,
+  ChatAttachment,
+  ChatStyleReference,
+  InterviewActionPayload,
+  Message,
+  Page,
+} from '@/types'
+
+const ASSET_REFERENCE_RE = /asset:[A-Za-z0-9_-]+/g
+
+const extractAssetIds = (content?: string) => {
+  if (!content) return []
+  const matches = content.match(ASSET_REFERENCE_RE)
+  if (!matches || matches.length === 0) return []
+  return Array.from(new Set(matches))
+}
 
 export interface ChatPanelProps {
   messages: Message[]
+  assets?: ChatAsset[]
   onSendMessage: (
     content: string,
     options?: {
@@ -19,8 +36,10 @@ export interface ChatPanelProps {
       styleReference?: ChatStyleReference
     }
   ) => void
+  onAssetUpload?: ChatInputProps['onAssetUpload']
+  onAssetRemove?: (assetId: string) => void
   onInterviewAction?: (payload: InterviewActionPayload) => void
-  onTabChange?: (tab: 'preview' | 'code' | 'product-doc') => void
+  onTabChange?: (tab: 'preview' | 'code' | 'product-doc' | 'data') => void
   onDisambiguationSelect?: (option: { id: string; slug: string; title: string }) => void
   isLoading?: boolean
   title?: string
@@ -34,7 +53,10 @@ export interface ChatPanelProps {
 
 export function ChatPanel({
   messages,
+  assets,
   onSendMessage,
+  onAssetUpload,
+  onAssetRemove,
   onInterviewAction,
   onTabChange,
   onDisambiguationSelect,
@@ -52,10 +74,62 @@ export function ChatPanel({
     () => messages.filter((message) => !message.hidden),
     [messages]
   )
-  const showEmptyState = !isLoading && visibleMessages.length === 0
+  const assetLookup = React.useMemo(() => {
+    const map = new Map<string, ChatAsset>()
+    if (assets) {
+      assets.forEach((asset) => {
+        map.set(asset.id, asset)
+      })
+    }
+    return map
+  }, [assets])
+  const assetsProvided = assets !== undefined
+  const hasAssetMentions = React.useMemo(
+    () =>
+      visibleMessages.some(
+        (message) =>
+          (message.assets && message.assets.length > 0) ||
+          extractAssetIds(message.content).length > 0
+      ),
+    [visibleMessages]
+  )
+  const assetMessage = React.useMemo(() => {
+    if (!assets || assets.length === 0) return null
+    if (hasAssetMentions) return null
+    return {
+      id: 'asset-summary',
+      role: 'user',
+      content: 'Uploaded assets',
+      assets,
+    } as Message
+  }, [assets, hasAssetMentions])
+  const displayMessages = React.useMemo(
+    () => (assetMessage ? [assetMessage, ...visibleMessages] : visibleMessages),
+    [assetMessage, visibleMessages]
+  )
+  const showEmptyState = !isLoading && displayMessages.length === 0
   const rootRef = React.useRef<HTMLDivElement | null>(null)
   const [scrollElement, setScrollElement] = React.useState<HTMLDivElement | null>(null)
   const [autoScroll, setAutoScroll] = React.useState(true)
+  const resolveMessageAssets = React.useCallback(
+    (message: Message) => {
+      const collected = new Map<string, ChatAsset>()
+      if (message.assets) {
+        message.assets.forEach((asset) => {
+          if (!assetsProvided || assetLookup.has(asset.id)) {
+            collected.set(asset.id, assetLookup.get(asset.id) ?? asset)
+          }
+        })
+      }
+      const referencedIds = extractAssetIds(message.content)
+      referencedIds.forEach((id) => {
+        const asset = assetLookup.get(id)
+        if (asset) collected.set(asset.id, asset)
+      })
+      return Array.from(collected.values())
+    },
+    [assetLookup, assetsProvided]
+  )
 
   React.useEffect(() => {
     const root = rootRef.current
@@ -77,7 +151,7 @@ export function ChatPanel({
     viewportHeight,
     shouldVirtualize,
   } = useVirtualList({
-    count: visibleMessages.length,
+    count: displayMessages.length,
     estimateSize: 120,
     overscan: 8,
     minItems: 80,
@@ -96,10 +170,10 @@ export function ChatPanel({
   React.useLayoutEffect(() => {
     if (!autoScroll || !scrollElement) return
     scrollElement.scrollTo({ top: effectiveTotalHeight, behavior: 'smooth' })
-  }, [autoScroll, scrollElement, effectiveTotalHeight, visibleMessages.length])
+  }, [autoScroll, scrollElement, effectiveTotalHeight, displayMessages.length])
 
-  const displayMessages = visibleMessages.slice(start, end)
-  const isFirstMessage = visibleMessages.length === 0
+  const windowedMessages = displayMessages.slice(start, end)
+  const isFirstMessage = displayMessages.length === 0
 
   return (
     <div
@@ -145,15 +219,20 @@ export function ChatPanel({
           ) : null}
           <div className="px-6 py-6">
             <div style={{ paddingTop, paddingBottom }} className="space-y-6">
-              {displayMessages.map((message, index) => (
-                <ChatMessage
-                  key={`${message.id}-${start + index}`}
-                  {...message}
-                  onInterviewAction={onInterviewAction}
-                  onTabChange={onTabChange}
-                  onDisambiguationSelect={onDisambiguationSelect}
-                />
-              ))}
+              {windowedMessages.map((message, index) => {
+                const messageAssets = resolveMessageAssets(message)
+                return (
+                  <ChatMessage
+                    key={`${message.id}-${start + index}`}
+                    {...message}
+                    assets={messageAssets.length > 0 ? messageAssets : undefined}
+                    onAssetRemove={onAssetRemove}
+                    onInterviewAction={onInterviewAction}
+                    onTabChange={onTabChange}
+                    onDisambiguationSelect={onDisambiguationSelect}
+                  />
+                )
+              })}
             </div>
           </div>
           <div ref={bottomRef} />
@@ -167,6 +246,7 @@ export function ChatPanel({
       <div className="border-t border-border p-4">
         <ChatInput
           onSend={onSendMessage}
+          onAssetUpload={onAssetUpload}
           disabled={isLoading}
           initialInterviewOn={isFirstMessage}
           showInterviewToggle

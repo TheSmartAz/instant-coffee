@@ -26,6 +26,8 @@ class SessionEventResponse(BaseModel):
     id: int
     session_id: str
     seq: int
+    run_id: str | None = None
+    event_id: str | None = None
     type: str
     payload: dict
     source: str
@@ -73,6 +75,8 @@ def _serialize_event(event: SessionEvent) -> SessionEventResponse:
         id=event.id,
         session_id=event.session_id,
         seq=event.seq,
+        run_id=event.run_id,
+        event_id=event.event_id,
         type=event.type,
         payload=payload,
         source=getattr(event.source, "value", event.source),

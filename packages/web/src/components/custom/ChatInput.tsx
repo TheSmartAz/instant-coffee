@@ -1,6 +1,13 @@
 import * as React from 'react'
-import { Loader2, Mic, MicOff, Send } from 'lucide-react'
+import { Loader2, Mic, MicOff, Send, Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   Select,
   SelectContent,
@@ -9,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import type { ChatAttachment, ChatStyleReference, Page } from '@/types'
+import type { AssetType, ChatAttachment, ChatStyleReference, Page } from '@/types'
 import { toast } from '@/hooks/use-toast'
 import { useSettings } from '@/hooks/useSettings'
 import logoDeepSeek from '@/assets/model-logos/deepseek.png'
@@ -21,6 +28,7 @@ import logoMiniMax from '@/assets/model-logos/minimax.png'
 import logoOpenAI from '@/assets/model-logos/openai.png'
 import logoQwen from '@/assets/model-logos/qwen.png'
 import logoZai from '@/assets/model-logos/zai.png'
+import { AssetTypeSelector } from './AssetTypeSelector'
 import { ImageThumbnail } from './ImageThumbnail'
 import { PageMentionPopover } from './PageMentionPopover'
 import { filterPages, parsePageMentions } from '@/utils/chat'
@@ -35,6 +43,11 @@ export interface ChatInputProps {
       styleReference?: ChatStyleReference
     }
   ) => void
+  onAssetUpload?: (
+    file: File,
+    type: AssetType,
+    options?: { onProgress?: (progress: number) => void }
+  ) => Promise<void>
   disabled?: boolean
   placeholder?: string
   initialInterviewOn?: boolean
@@ -43,21 +56,44 @@ export interface ChatInputProps {
 }
 
 const MAX_ATTACHMENTS = 3
-const MAX_FILE_SIZE = 5 * 1024 * 1024
+const MAX_FILE_SIZE = 10 * 1024 * 1024
+const MAX_ASSET_FILE_SIZE = 10 * 1024 * 1024
 const MAX_IMAGE_DIMENSION = 2048
 const MENTION_POPOVER_WIDTH = 288
 const MENTION_POPOVER_HEIGHT = 224
+const ASSET_ACCEPT_TYPES = 'image/png,image/jpeg,image/webp,image/svg+xml'
+
+const ASSET_TYPE_LABELS: Record<AssetType, string> = {
+  logo: 'Logo',
+  style_ref: 'Style reference',
+  background: 'Background',
+  product_image: 'Product image',
+}
 
 type SpeechRecognitionLike = {
   continuous: boolean
   interimResults: boolean
   lang: string
-  onresult: ((event: any) => void) | null
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null
   onstart: (() => void) | null
   onend: (() => void) | null
-  onerror: ((event: any) => void) | null
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
   start: () => void
   stop: () => void
+}
+
+type SpeechRecognitionResultLike = {
+  isFinal: boolean
+  0?: { transcript?: string }
+}
+
+type SpeechRecognitionEventLike = {
+  resultIndex: number
+  results: ArrayLike<SpeechRecognitionResultLike>
+}
+
+type SpeechRecognitionErrorEventLike = {
+  error?: string
 }
 
 const getSpeechRecognitionCtor = (): (new () => SpeechRecognitionLike) | null => {
@@ -306,6 +342,7 @@ const compressImageFile = async (file: File): Promise<File | null> => {
 
 export function ChatInput({
   onSend,
+  onAssetUpload,
   disabled = false,
   placeholder = 'Describe what you want to build...',
   initialInterviewOn = false,
@@ -316,6 +353,12 @@ export function ChatInput({
   const [triggerInterview, setTriggerInterview] = React.useState(initialInterviewOn)
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([])
   const [isProcessing, setIsProcessing] = React.useState(false)
+  const [assetPickerOpen, setAssetPickerOpen] = React.useState(false)
+  const [selectedAssetType, setSelectedAssetType] = React.useState<AssetType | null>(
+    null
+  )
+  const [isUploadingAsset, setIsUploadingAsset] = React.useState(false)
+  const [assetUploadProgress, setAssetUploadProgress] = React.useState(0)
   const [isListening, setIsListening] = React.useState(false)
   const [speechSupported, setSpeechSupported] = React.useState(false)
   const [isSavingModel, setIsSavingModel] = React.useState(false)
@@ -333,6 +376,7 @@ export function ChatInput({
     arrowOffset: number
   } | null>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+  const assetInputRef = React.useRef<HTMLInputElement>(null)
   const popoverRef = React.useRef<HTMLDivElement>(null)
   const prevInitialRef = React.useRef(initialInterviewOn)
   const recognitionRef = React.useRef<SpeechRecognitionLike | null>(null)
@@ -432,7 +476,7 @@ export function ChatInput({
     recognition.onstart = () => setIsListening(true)
     recognition.onend = () => setIsListening(false)
     recognition.onerror = () => setIsListening(false)
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event: SpeechRecognitionEventLike) => {
       let finalTranscript = ''
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i]
@@ -625,6 +669,94 @@ export function ChatInput({
     updateMentionState(textarea.value, textarea.selectionStart ?? textarea.value.length)
   }
 
+  const isSupportedAssetFile = (file: File) => {
+    const type = file.type.toLowerCase()
+    if (type) {
+      return [
+        'image/png',
+        'image/jpeg',
+        'image/jpg',
+        'image/webp',
+        'image/svg+xml',
+      ].includes(type)
+    }
+    const name = file.name.toLowerCase()
+    return (
+      name.endsWith('.png') ||
+      name.endsWith('.jpg') ||
+      name.endsWith('.jpeg') ||
+      name.endsWith('.webp') ||
+      name.endsWith('.svg')
+    )
+  }
+
+  const handleAssetTypeSelect = (type: AssetType) => {
+    setSelectedAssetType(type)
+    setAssetPickerOpen(false)
+    requestAnimationFrame(() => {
+      assetInputRef.current?.click()
+    })
+  }
+
+  const handleAssetUpload = async (file: File) => {
+    if (disabled) return
+    if (!onAssetUpload) {
+      toast({
+        title: 'Upload unavailable',
+        description: 'Asset upload is not configured yet.',
+      })
+      return
+    }
+    if (!selectedAssetType) {
+      toast({
+        title: 'Select an asset type',
+        description: 'Choose how this image should be used before uploading.',
+      })
+      return
+    }
+    if (!isSupportedAssetFile(file)) {
+      toast({
+        title: 'Unsupported file type',
+        description: 'Supported formats: PNG, JPEG, WebP, SVG.',
+      })
+      return
+    }
+    if (file.size > MAX_ASSET_FILE_SIZE) {
+      toast({
+        title: 'File too large',
+        description: 'Asset uploads are limited to 10MB.',
+      })
+      return
+    }
+
+    setIsUploadingAsset(true)
+    setAssetUploadProgress(0)
+    try {
+      await onAssetUpload(file, selectedAssetType, {
+        onProgress: (progress) => setAssetUploadProgress(progress),
+      })
+      toast({
+        title: 'Asset uploaded',
+        description: `${ASSET_TYPE_LABELS[selectedAssetType]} added to this session.`,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Upload failed'
+      toast({ title: 'Upload failed', description: message })
+    } finally {
+      setIsUploadingAsset(false)
+      setAssetUploadProgress(0)
+    }
+  }
+
+  const handleAssetInputChange = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    await handleAssetUpload(file)
+  }
+
   React.useEffect(() => {
     if (!mentionOpen) return
     const handlePointerDown = (event: PointerEvent) => {
@@ -686,7 +818,7 @@ export function ChatInput({
           if (!compressed || compressed.size > MAX_FILE_SIZE) {
             toast({
               title: 'File too large',
-              description: `${file.name} exceeds 5MB.`,
+              description: `${file.name} exceeds 10MB.`,
             })
             return null
           }
@@ -749,7 +881,10 @@ export function ChatInput({
   }
 
   return (
-    <div className="flex w-full flex-col gap-2 rounded-2xl border border-border bg-background p-3 shadow-sm">
+    <div
+      className="flex w-full flex-col gap-2 rounded-2xl border border-border bg-background p-3 shadow-sm"
+      data-testid="chat-input"
+    >
       {attachments.length > 0 ? (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {attachments.map((attachment, index) => (
@@ -759,6 +894,27 @@ export function ChatInput({
               onRemove={() => removeAttachment(index)}
             />
           ))}
+        </div>
+      ) : null}
+      {isUploadingAsset ? (
+        <div
+          className="flex items-center gap-3 rounded-lg border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+          data-testid="asset-upload-progress"
+        >
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <span>
+            Uploading{' '}
+            {selectedAssetType
+              ? ASSET_TYPE_LABELS[selectedAssetType]
+              : 'asset'}
+            {assetUploadProgress > 0 ? ` (${assetUploadProgress}%)` : ''}
+          </span>
+          <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary transition-all"
+              style={{ width: `${assetUploadProgress}%` }}
+            />
+          </div>
         </div>
       ) : null}
       <div className="relative">
@@ -776,12 +932,90 @@ export function ChatInput({
           placeholder={placeholder}
           disabled={disabled}
           aria-label="Message input"
+          data-testid="chat-textarea"
           rows={1}
-          className={`min-h-[44px] w-full resize-none border-0 bg-transparent p-0 pr-20 pb-10 text-sm shadow-none focus-visible:ring-0 ${
+          className={`min-h-[44px] w-full resize-none border-0 bg-transparent p-0 pb-2 text-sm shadow-none focus-visible:ring-0 ${
             dragActive ? 'ring-2 ring-primary/40' : ''
           }`}
         />
-        <div className="absolute bottom-1 right-1 flex items-center gap-1">
+      </div>
+      <div className="flex w-full flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2">
+          {showInterviewToggle ? (
+            <Button
+              type="button"
+              variant={triggerInterview ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setTriggerInterview((prev) => !prev)}
+              disabled={disabled}
+              aria-pressed={triggerInterview}
+              className="h-8 w-[72px] rounded-full"
+            >
+              {triggerInterview ? 'Interview' : 'Chat'}
+            </Button>
+          ) : null}
+          <div className="flex items-center gap-2">
+            <Select
+              value={settings.model ?? modelItems[0]?.id ?? ''}
+              onValueChange={handleModelChange}
+              disabled={disabled || isSettingsLoading || isSavingModel}
+            >
+              <SelectTrigger className="h-8 w-[180px] rounded-full text-xs">
+                <SelectValue placeholder="Select model" />
+              </SelectTrigger>
+              <SelectContent>
+                {modelItems.length > 0 ? (
+                  modelItems.map((option) => (
+                    <SelectItem
+                      key={option.id}
+                      value={option.id}
+                      textValue={option.label ?? option.id}
+                    >
+                      <div className="flex items-center gap-2">
+                        {option.logo ? (
+                          <img
+                            src={option.logo}
+                            alt={`${option.label ?? option.id} logo`}
+                            className="h-4 w-4 shrink-0 rounded-sm object-contain"
+                          />
+                        ) : null}
+                        <span className="text-xs">{option.label ?? option.id}</span>
+                      </div>
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem value="default" disabled>
+                    No models configured
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (disabled || isUploadingAsset) return
+              if (!onAssetUpload) {
+                toast({
+                  title: 'Upload unavailable',
+                  description: 'Asset upload is not configured yet.',
+                })
+                return
+              }
+              setAssetPickerOpen(true)
+            }}
+            disabled={disabled || isUploadingAsset || !onAssetUpload}
+            aria-label="Upload asset"
+            className="h-9 w-9"
+            title="Upload asset"
+            data-testid="asset-upload-button"
+          >
+            <Upload className="h-4 w-4" />
+          </Button>
           <Button
             type="button"
             variant="ghost"
@@ -820,58 +1054,6 @@ export function ChatInput({
           </Button>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {showInterviewToggle ? (
-          <Button
-            type="button"
-            variant={triggerInterview ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setTriggerInterview((prev) => !prev)}
-            disabled={disabled}
-            aria-pressed={triggerInterview}
-            className="h-8 w-[72px] rounded-full"
-          >
-            {triggerInterview ? 'Interview' : 'Chat'}
-          </Button>
-        ) : null}
-        <div className="flex items-center gap-2">
-          <Select
-            value={settings.model ?? modelItems[0]?.id ?? ''}
-            onValueChange={handleModelChange}
-            disabled={disabled || isSettingsLoading || isSavingModel}
-          >
-            <SelectTrigger className="h-8 w-[180px] rounded-full text-xs">
-              <SelectValue placeholder="Select model" />
-            </SelectTrigger>
-            <SelectContent>
-              {modelItems.length > 0 ? (
-                modelItems.map((option) => (
-                  <SelectItem
-                    key={option.id}
-                    value={option.id}
-                    textValue={option.label ?? option.id}
-                  >
-                    <div className="flex items-center gap-2">
-                      {option.logo ? (
-                        <img
-                          src={option.logo}
-                          alt={`${option.label ?? option.id} logo`}
-                          className="h-4 w-4 shrink-0 rounded-sm object-contain"
-                        />
-                      ) : null}
-                      <span className="text-xs">{option.label ?? option.id}</span>
-                    </div>
-                  </SelectItem>
-                ))
-              ) : (
-                <SelectItem value="default" disabled>
-                  No models configured
-                </SelectItem>
-              )}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
       {mentionOpen && mentionPosition ? (
         <PageMentionPopover
           ref={popoverRef}
@@ -905,6 +1087,29 @@ export function ChatInput({
           }}
         />
       ) : null}
+      <Dialog open={assetPickerOpen} onOpenChange={setAssetPickerOpen}>
+        <DialogContent data-testid="asset-type-dialog">
+          <DialogHeader>
+            <DialogTitle>Upload an asset</DialogTitle>
+            <DialogDescription>
+              Choose how this image should be used in the session.
+            </DialogDescription>
+          </DialogHeader>
+          <AssetTypeSelector
+            selected={selectedAssetType}
+            onSelect={handleAssetTypeSelect}
+            onCancel={() => setAssetPickerOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
+      <input
+        ref={assetInputRef}
+        type="file"
+        accept={ASSET_ACCEPT_TYPES}
+        className="hidden"
+        onChange={handleAssetInputChange}
+        data-testid="asset-file-input"
+      />
     </div>
   )
 }

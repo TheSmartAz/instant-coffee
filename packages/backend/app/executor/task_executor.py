@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from html.parser import HTMLParser
+from datetime import datetime, timezone
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -8,6 +10,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy.orm import Session as DbSession
 
+from ..agents.component_builder import ComponentBuilderAgent
+from ..agents.component_planner import ComponentPlannerAgent
 from ..agents.generation import GenerationAgent
 from ..agents.interview import InterviewAgent
 from ..agents.refinement import RefinementAgent
@@ -26,6 +30,7 @@ from ..generators.mobile_html import validate_mobile_html
 from ..services.export import ExportService
 from ..services.page_version import PageVersionService
 from ..services.product_doc import ProductDocService
+from ..services.component_registry import ComponentRegistryService, slugify_component_id
 from ..services.task import TaskService
 from ..services.version import VersionService
 
@@ -54,6 +59,349 @@ def _parse_depends_on(value: Optional[str]) -> List[str]:
     except json.JSONDecodeError:
         return [value]
     return [value]
+
+
+def _normalize_component_plan(plan: Dict[str, Any], sitemap_pages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    raw_components = plan.get("components") if isinstance(plan, dict) else []
+    raw_page_map = plan.get("page_map") if isinstance(plan, dict) else None
+    components: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    def add_component(item: Any) -> None:
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("id") or item.get("title") or ""
+            comp_id = slugify_component_id(item.get("id") or name)
+            if not comp_id:
+                return
+            base = dict(item)
+            base["id"] = comp_id
+            if not base.get("name"):
+                base["name"] = str(name or comp_id)
+        else:
+            name = str(item)
+            comp_id = slugify_component_id(name)
+            base = {"id": comp_id, "name": name}
+        if comp_id in seen_ids:
+            suffix = 2
+            unique_id = f"{comp_id}-{suffix}"
+            while unique_id in seen_ids:
+                suffix += 1
+                unique_id = f"{comp_id}-{suffix}"
+            base["id"] = unique_id
+            comp_id = unique_id
+        seen_ids.add(comp_id)
+        components.append(base)
+
+    if isinstance(raw_components, list):
+        for item in raw_components:
+            add_component(item)
+
+    page_map: Dict[str, List[str]] = {}
+    name_map = {
+        str(item.get("name") or item.get("id")).lower(): str(item.get("id"))
+        for item in components
+        if isinstance(item, dict)
+    }
+    id_map = {str(item.get("id")).lower(): str(item.get("id")) for item in components if isinstance(item, dict)}
+
+    if isinstance(raw_page_map, dict):
+        for page_slug, items in raw_page_map.items():
+            if not isinstance(items, list):
+                continue
+            normalized_items: List[str] = []
+            for raw in items:
+                key = str(raw).lower()
+                resolved = id_map.get(key) or name_map.get(key) or slugify_component_id(raw)
+                if resolved:
+                    normalized_items.append(resolved)
+            if normalized_items:
+                page_map[str(page_slug)] = normalized_items
+
+    if not components:
+        fallback_components, fallback_map = _fallback_components_from_pages(sitemap_pages)
+        components = fallback_components
+        page_map = fallback_map
+    elif not page_map and sitemap_pages:
+        for page in sitemap_pages:
+            slug = str(page.get("slug") or "index")
+            sections = page.get("sections") if isinstance(page.get("sections"), list) else []
+            if sections:
+                page_map[slug] = [slugify_component_id(section) for section in sections]
+
+    if components and page_map:
+        known_ids = {str(item.get("id")) for item in components if isinstance(item, dict) and item.get("id")}
+        for ids in page_map.values():
+            if not isinstance(ids, list):
+                continue
+            for comp_id in ids:
+                if comp_id not in known_ids:
+                    components.append({"id": comp_id, "name": comp_id})
+                    known_ids.add(comp_id)
+
+    return {"components": components, "page_map": page_map}
+
+
+def _fallback_components_from_pages(
+    sitemap_pages: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    components: Dict[str, Dict[str, Any]] = {}
+    page_map: Dict[str, List[str]] = {}
+    for page in sitemap_pages or []:
+        slug = str(page.get("slug") or "index")
+        sections = page.get("sections") if isinstance(page.get("sections"), list) else []
+        ids: List[str] = []
+        for section in sections:
+            name = str(section)
+            comp_id = slugify_component_id(name)
+            if comp_id not in components:
+                components[comp_id] = {
+                    "id": comp_id,
+                    "name": name,
+                    "category": "section",
+                    "sections": [name],
+                }
+            ids.append(comp_id)
+        if ids:
+            page_map[slug] = ids
+    return list(components.values()), page_map
+
+
+def _component_inventory(components: List[Dict[str, Any]]) -> List[str]:
+    inventory: List[str] = []
+    for item in components:
+        name = item.get("name") or item.get("id")
+        if name:
+            inventory.append(str(name))
+    return inventory
+
+
+def _collect_dependency_context(context: ExecutionContext, task: Task) -> str:
+    parts: List[str] = []
+    for dep_result in context.dependency_results(task):
+        if not isinstance(dep_result, dict):
+            continue
+        ctx = dep_result.get("context")
+        if ctx:
+            parts.append(f"Dependency context: {ctx}")
+        message = dep_result.get("message")
+        if message:
+            parts.append(f"Dependency summary: {message}")
+    return "\n".join(parts)
+
+
+class _ComponentFragmentParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.depth = 0
+        self.root_count = 0
+        self.has_script = False
+        self.has_text_outside = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "script":
+            self.has_script = True
+        if self.depth == 0:
+            self.root_count += 1
+        self.depth += 1
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "script":
+            self.has_script = True
+        if self.depth == 0:
+            self.root_count += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.depth > 0:
+            self.depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.depth == 0 and data.strip():
+            self.has_text_outside = True
+
+
+def _validate_component_html(html: Optional[str]) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    if not html or not html.strip():
+        return False, ["empty"]
+    parser = _ComponentFragmentParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        return False, ["parse_error"]
+    if parser.has_script:
+        reasons.append("contains_script")
+    if parser.root_count != 1:
+        reasons.append("invalid_root_count")
+    if parser.has_text_outside:
+        reasons.append("text_outside_root")
+    return not reasons, reasons
+
+
+def _component_registry_available(
+    dependency_results: List[Dict[str, Any]],
+    product_doc: Any,
+) -> bool:
+    for dep in dependency_results:
+        if dep.get("component_registry_available") is False:
+            return False
+        if isinstance(dep.get("component_registry"), dict):
+            return True
+    structured = getattr(product_doc, "structured", None) if product_doc is not None else None
+    if isinstance(structured, dict):
+        registry_info = structured.get("component_registry")
+        if hasattr(registry_info, "model_dump"):
+            registry_info = registry_info.model_dump()
+        if isinstance(registry_info, dict) and registry_info.get("path"):
+            return True
+    return False
+
+
+def _component_sequence_for_page(
+    dependency_results: List[Dict[str, Any]],
+    page_slug: str,
+) -> List[str]:
+    for dep in dependency_results:
+        plan = dep.get("component_registry_plan")
+        if not isinstance(plan, dict):
+            continue
+        page_map = plan.get("page_map")
+        if not isinstance(page_map, dict):
+            continue
+        sequence = page_map.get(page_slug) or page_map.get("index")
+        if isinstance(sequence, list):
+            return [str(item) for item in sequence if str(item).strip()]
+    return []
+
+
+def _component_ids_from_dependencies(dependency_results: List[Dict[str, Any]]) -> List[str]:
+    for dep in dependency_results:
+        components = dep.get("components")
+        if isinstance(components, list):
+            return [str(item) for item in components if str(item).strip()]
+    return []
+
+
+def _build_component_requirements(
+    *,
+    dependency_results: List[Dict[str, Any]],
+    product_doc: Any,
+    page_spec: Dict[str, Any] | None,
+) -> str:
+    if not _component_registry_available(dependency_results, product_doc):
+        return ""
+    slug = "index"
+    if isinstance(page_spec, dict):
+        slug = str(page_spec.get("slug") or "index")
+    component_ids = _component_ids_from_dependencies(dependency_results)
+    sequence = _component_sequence_for_page(dependency_results, slug)
+    parts = ["Component registry available."]
+    if component_ids:
+        parts.append(f"Allowed component ids: {', '.join(component_ids)}.")
+    if sequence:
+        parts.append(f"Component sequence for page '{slug}': {', '.join(sequence)}.")
+    parts.append("Use <component id=\"...\" data='{\"slot\":\"value\"}'></component> placeholders for these components.")
+    return "\n".join(parts)
+
+
+def _resolve_component_plan(
+    payload: Dict[str, Any],
+    dependency_results: List[Dict[str, Any]],
+    product_doc: Any,
+) -> Dict[str, Any]:
+    plan = None
+    for dep in dependency_results:
+        if isinstance(dep, dict) and isinstance(dep.get("component_registry_plan"), dict):
+            plan = dep.get("component_registry_plan")
+            break
+    if plan is None and isinstance(payload, dict):
+        plan = payload.get("component_registry_plan")
+    if plan is None and product_doc is not None:
+        structured = getattr(product_doc, "structured", None)
+        if isinstance(structured, dict):
+            plan = structured.get("component_registry_plan")
+    if not isinstance(plan, dict):
+        plan = {}
+    pages = payload.get("sitemap_pages") if isinstance(payload.get("sitemap_pages"), list) else []
+    return _normalize_component_plan(plan, pages)
+
+
+def _write_component_registry(
+    *,
+    context: ExecutionContext,
+    plan: Dict[str, Any],
+    components: List[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    service = ComponentRegistryService(context.output_dir, context.session_id)
+    built_map = {
+        slugify_component_id(item.get("id")): item
+        for item in components
+        if isinstance(item, dict) and item.get("id")
+    }
+    page_map = plan.get("page_map") if isinstance(plan.get("page_map"), dict) else {}
+    registry_components: List[Dict[str, Any]] = []
+
+    usage_map: Dict[str, List[str]] = {}
+    for page_slug, ids in page_map.items():
+        if not isinstance(ids, list):
+            continue
+        for comp_id in ids:
+            usage_map.setdefault(str(comp_id), []).append(str(page_slug))
+
+    for spec in plan.get("components", []):
+        if not isinstance(spec, dict):
+            continue
+        comp_id = spec.get("id") or spec.get("name")
+        if not comp_id:
+            continue
+        comp_id = slugify_component_id(comp_id)
+        built = built_map.get(comp_id, {})
+        name = spec.get("name") or built.get("name") or comp_id
+        file_name = f"{comp_id}.html"
+        file_path = f"components/{file_name}"
+        html = built.get("html") if isinstance(built, dict) else None
+        if html:
+            valid, reasons = _validate_component_html(html)
+            if not valid:
+                logger.warning(
+                    "Invalid component HTML for %s; reasons=%s",
+                    comp_id,
+                    ", ".join(reasons) if reasons else "unknown",
+                )
+                html = None
+        if not html:
+            html = f'<section data-component="{comp_id}"></section>'
+        service.write_component(file_name, html)
+        registry_components.append(
+            {
+                "id": comp_id,
+                "name": name,
+                "category": spec.get("category"),
+                "sections": spec.get("sections"),
+                "slots": built.get("slots") if isinstance(built, dict) else None,
+                "props": built.get("props") if isinstance(built, dict) else None,
+                "usage": {"pages": usage_map.get(comp_id, [])},
+                "file": file_path,
+            }
+        )
+
+    generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    registry = {
+        "version": 1,
+        "session_id": context.session_id,
+        "generated_at": generated_at,
+        "components": registry_components,
+        "page_map": page_map,
+    }
+    registry["hash"] = service.compute_hash(registry)
+    service.write_registry(registry)
+    registry_info = {
+        "path": "components/components.json",
+        "version": registry["version"],
+        "hash": registry["hash"],
+        "generated_at": generated_at,
+    }
+    return registry, registry_info
 
 
 @dataclass
@@ -208,6 +556,132 @@ class InterviewTaskExecutor(BaseTaskExecutor):
         }
 
 
+class ComponentPlanTaskExecutor(BaseTaskExecutor):
+    agent_type_label = "ComponentPlan"
+
+    async def execute(self, task: Task, emitter: EventEmitter, context: ExecutionContext) -> Dict[str, Any]:
+        agent_id = self._agent_id(task)
+        self._emit_agent_start(emitter, task, agent_id)
+        payload = _safe_json_loads(task.description) or {}
+        pages = payload.get("sitemap_pages") or payload.get("pages") or []
+        if not isinstance(pages, list):
+            pages = []
+        design_direction = payload.get("design_direction") if isinstance(payload, dict) else {}
+        if not isinstance(design_direction, dict):
+            design_direction = {}
+
+        agent = ComponentPlannerAgent(
+            context.db,
+            context.session_id,
+            context.settings,
+            event_emitter=emitter,
+            agent_id=agent_id,
+            task_id=task.id,
+            emit_lifecycle_events=False,
+        )
+        product_doc = ProductDocService(context.db).get_by_session_id(context.session_id)
+        try:
+            result = await agent.plan(
+                product_doc=product_doc,
+                sitemap_pages=pages,
+                design_direction=design_direction,
+            )
+            plan_source = result.plan
+        except Exception:
+            logger.exception("Component planning failed; using fallback plan")
+            plan_source = {}
+        plan = _normalize_component_plan(plan_source, pages)
+        inventory = _component_inventory(plan.get("components", []))
+        if product_doc is not None:
+            ProductDocService(context.db, event_emitter=emitter).update(
+                product_doc.id,
+                structured={
+                    "component_registry_plan": plan,
+                    "component_inventory": inventory,
+                },
+                change_summary="Component plan generated",
+            )
+
+        summary = "Component plan ready"
+        component_ids = [item.get("id") for item in plan.get("components", []) if isinstance(item, dict)]
+        context_text = f"Component plan ids: {', '.join(component_ids)}"
+        self._emit_agent_end(emitter, task, agent_id, status="success", summary=summary)
+        return {
+            "component_registry_plan": plan,
+            "component_inventory": inventory,
+            "context": context_text,
+            "message": summary,
+        }
+
+
+class ComponentBuildTaskExecutor(BaseTaskExecutor):
+    agent_type_label = "ComponentBuild"
+
+    async def execute(self, task: Task, emitter: EventEmitter, context: ExecutionContext) -> Dict[str, Any]:
+        agent_id = self._agent_id(task)
+        self._emit_agent_start(emitter, task, agent_id)
+        payload = _safe_json_loads(task.description) or {}
+        design_direction = payload.get("design_direction") if isinstance(payload, dict) else {}
+        if not isinstance(design_direction, dict):
+            design_direction = {}
+
+        product_doc = ProductDocService(context.db).get_by_session_id(context.session_id)
+        plan = _resolve_component_plan(payload, context.dependency_results(task), product_doc)
+        agent = ComponentBuilderAgent(
+            context.db,
+            context.session_id,
+            context.settings,
+            event_emitter=emitter,
+            agent_id=agent_id,
+            task_id=task.id,
+            emit_lifecycle_events=False,
+        )
+        try:
+            result = await agent.build(
+                component_plan=plan,
+                design_direction=design_direction,
+                product_doc=product_doc,
+            )
+            built_components = result.components
+        except Exception:
+            logger.exception("Component build failed; using fallback components")
+            built_components = []
+        if not built_components:
+            summary = "Component build failed; falling back to direct page generation"
+            self._emit_agent_end(emitter, task, agent_id, status="success", summary=summary)
+            return {
+                "component_registry": None,
+                "components": [],
+                "context": "",
+                "message": summary,
+                "component_registry_available": False,
+            }
+
+        registry, registry_info = _write_component_registry(
+            context=context,
+            plan=plan,
+            components=built_components,
+        )
+        if product_doc is not None:
+            ProductDocService(context.db, event_emitter=emitter).update(
+                product_doc.id,
+                structured={"component_registry": registry_info},
+                change_summary="Component registry generated",
+            )
+
+        summary = "Component registry ready"
+        component_ids = [item.get("id") for item in registry.get("components", []) if isinstance(item, dict)]
+        context_text = f"Component registry ids: {', '.join(component_ids)}."
+        self._emit_agent_end(emitter, task, agent_id, status="success", summary=summary)
+        return {
+            "component_registry": registry_info,
+            "components": component_ids,
+            "context": context_text,
+            "message": summary,
+            "component_registry_available": True,
+        }
+
+
 class GenerationTaskExecutor(BaseTaskExecutor):
     agent_type_label = "Generation"
 
@@ -244,6 +718,10 @@ class GenerationTaskExecutor(BaseTaskExecutor):
         payload = _safe_json_loads(task.description)
         if payload and isinstance(payload, dict) and payload.get("page_spec"):
             requirements = payload.get("requirements") or context.user_message or context.plan_goal
+            dependency_results = context.dependency_results(task)
+            dependency_context = _collect_dependency_context(context, task)
+            if dependency_context:
+                requirements = "\n\n".join([part for part in [requirements, dependency_context] if part])
             page_spec = payload.get("page_spec")
             nav = payload.get("nav") or []
             global_style = payload.get("global_style") or {}
@@ -260,6 +738,13 @@ class GenerationTaskExecutor(BaseTaskExecutor):
                 if current is not None:
                     current_html = current.html
             product_doc = ProductDocService(context.db).get_by_session_id(context.session_id)
+            component_notes = _build_component_requirements(
+                dependency_results=dependency_results,
+                product_doc=product_doc,
+                page_spec=page_spec if isinstance(page_spec, dict) else None,
+            )
+            if component_notes:
+                requirements = "\n\n".join([part for part in [requirements, component_notes] if part])
 
             result = await agent.generate(
                 requirements=requirements,
@@ -276,10 +761,12 @@ class GenerationTaskExecutor(BaseTaskExecutor):
             )
         else:
             requirements = context.build_requirements(task)
+            product_doc = ProductDocService(context.db).get_by_session_id(context.session_id)
             result = await agent.generate(
                 requirements=requirements,
                 output_dir=context.output_dir,
                 history=context.history,
+                product_doc=product_doc,
             )
 
             VersionService(context.db).create_version(
@@ -500,6 +987,8 @@ class ValidatorTaskExecutor(BaseTaskExecutor):
 class TaskExecutorFactory:
     _executors = {
         "interview": InterviewTaskExecutor,
+        "component_plan": ComponentPlanTaskExecutor,
+        "component_build": ComponentBuildTaskExecutor,
         "generation": GenerationTaskExecutor,
         "refinement": RefinementTaskExecutor,
         "export": ExportTaskExecutor,
@@ -519,6 +1008,8 @@ __all__ = [
     "ExecutionContext",
     "BaseTaskExecutor",
     "InterviewTaskExecutor",
+    "ComponentPlanTaskExecutor",
+    "ComponentBuildTaskExecutor",
     "GenerationTaskExecutor",
     "RefinementTaskExecutor",
     "ExportTaskExecutor",

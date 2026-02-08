@@ -36,6 +36,7 @@ from .base import AgentResult
 from .generation import GenerationAgent
 from .expander import ExpanderAgent
 from .interview import InterviewAgent
+from .intent_classifier import IntentClassifier
 from .multipage_decider import AutoMultiPageDecider
 from .orchestrator_routing import OrchestratorRouter, RoutingDecision
 from .product_doc import ProductDocAgent
@@ -106,6 +107,8 @@ PAGE_REFINEMENT_KEYWORDS = [
     "\u4fee\u590d",
     "\u4f18\u5316",
 ]
+
+INTENT_FALLBACK_MIN_CONFIDENCE = 0.55
 
 PRODUCT_DOC_CONTEXT_TEMPLATE = """
 === Product Document Context ===
@@ -285,7 +288,7 @@ class AgentOrchestrator:
         )
         state_contract = structured.get("state_contract") if isinstance(structured.get("state_contract"), dict) else {}
 
-        if product_type in {"ecommerce", "booking", "dashboard"}:
+        if product_type in {"ecommerce", "travel", "manual", "kanban", "booking", "dashboard"}:
             return True
         if len(pages) > 1:
             return True
@@ -914,6 +917,85 @@ class AgentOrchestrator:
             return False
         return self._contains_keyword(message, PAGE_REFINEMENT_KEYWORDS, lower=True)
 
+    async def _llm_intent_fallback(
+        self,
+        message: str,
+        state: SessionState,
+        *,
+        generate_now: bool,
+        page_mode_override: Optional[str],
+    ) -> RouteResult | None:
+        if not message:
+            return None
+
+        classifier = IntentClassifier(
+            self.db,
+            self.session.id,
+            self.settings,
+        )
+        result = await classifier.classify(message, pages=state.pages, product_doc=state.product_doc)
+        if result.confidence < INTENT_FALLBACK_MIN_CONFIDENCE:
+            return None
+
+        intent = result.intent
+        if intent == "product_doc_update":
+            return RouteResult(
+                route="product_doc_update",
+                generate_now=generate_now,
+                page_mode_override=page_mode_override,
+            )
+        if intent == "generation_pipeline":
+            return RouteResult(
+                route="generation_pipeline",
+                generate_now=generate_now,
+                page_mode_override=page_mode_override,
+            )
+        if intent != "page_refine":
+            return None
+
+        if not state.has_pages:
+            return RouteResult(
+                route="generation_pipeline",
+                generate_now=generate_now,
+                page_mode_override=page_mode_override,
+            )
+
+        refinement_agent = RefinementAgent(
+            self.db,
+            self.session.id,
+            self.settings,
+            event_emitter=self.event_emitter,
+            agent_id="refinement_1",
+        )
+
+        if result.target_pages:
+            slug_map: dict[str, Page] = {}
+            for page in state.pages:
+                slug = str(page.slug or "").strip()
+                if slug:
+                    slug_map[slug.lower()] = page
+            resolved = []
+            for slug in result.target_pages:
+                page = slug_map.get(str(slug).lower())
+                if page and page not in resolved:
+                    resolved.append(page)
+            if len(resolved) == 1:
+                return RouteResult(route="refinement", target_page=resolved[0], generate_now=generate_now)
+            if resolved:
+                return RouteResult(
+                    route="refinement",
+                    disambiguation=DisambiguationResult(
+                        candidates=resolved,
+                        message=refinement_agent._format_disambiguation_message(resolved),
+                    ),
+                    generate_now=generate_now,
+                )
+
+        detection = await refinement_agent.detect_target_page(message, state.pages)
+        if isinstance(detection, Page):
+            return RouteResult(route="refinement", target_page=detection, generate_now=generate_now)
+        return RouteResult(route="refinement", disambiguation=detection, generate_now=generate_now)
+
     def _detect_target_page(self, message: str, pages: list[Page]) -> Page | None:
         if not message or not pages:
             return None
@@ -1055,6 +1137,15 @@ class AgentOrchestrator:
             if self._contains_refinement_keyword(cleaned_message):
                 return RouteResult(route="refinement", disambiguation=detection, generate_now=generate_now)
 
+        llm_route = await self._llm_intent_fallback(
+            cleaned_message,
+            state,
+            generate_now=generate_now,
+            page_mode_override=page_mode_override,
+        )
+        if llm_route is not None:
+            return llm_route
+
         if not state.has_pages:
             return RouteResult(
                 route="generation_pipeline",
@@ -1116,7 +1207,9 @@ class AgentOrchestrator:
         generate_now: bool = False,
         style_reference: Optional[dict] = None,
         target_pages: Optional[list[str]] = None,
+        resume: Optional[dict] = None,
     ) -> AsyncGenerator[OrchestratorResponse, None]:
+        _ = resume
         history = history or []
         emitter = self.event_emitter or EventEmitter(session_id=self.session.id)
         cleaned_user_message = self._strip_structured_payload(user_message)
@@ -1952,6 +2045,43 @@ class AgentOrchestrator:
         generation_task_ids: list[str] = []
         validator_task_ids: list[str] = []
         page_payloads: list[dict] = []
+        component_plan_task_id = uuid4().hex
+        component_build_task_id = uuid4().hex
+
+        structured = getattr(product_doc, "structured", None)
+        if not isinstance(structured, dict):
+            structured = {}
+        design_direction = structured.get("design_direction")
+        if not isinstance(design_direction, dict):
+            design_direction = {}
+
+        component_plan_payload = {
+            "sitemap_pages": [_dump_model(item) for item in sitemap_result.pages],
+            "design_direction": design_direction,
+        }
+        tasks_payload.append(
+            {
+                "id": component_plan_task_id,
+                "title": "Plan components",
+                "description": json.dumps(component_plan_payload, ensure_ascii=False),
+                "depends_on": [],
+                "can_parallel": True,
+                "agent_type": "component_plan",
+            }
+        )
+        component_build_payload = {
+            "design_direction": design_direction,
+        }
+        tasks_payload.append(
+            {
+                "id": component_build_task_id,
+                "title": "Build components",
+                "description": json.dumps(component_build_payload, ensure_ascii=False),
+                "depends_on": [component_plan_task_id],
+                "can_parallel": True,
+                "agent_type": "component_build",
+            }
+        )
         for page_spec in sitemap_result.pages:
             slug = getattr(page_spec, "slug", None) or ""
             if selected_slugs and slug not in selected_slugs:
@@ -1996,7 +2126,7 @@ class AgentOrchestrator:
                     "id": task_id,
                     "title": f"Generate {title}",
                     "description": json.dumps(payload, ensure_ascii=False),
-                    "depends_on": [],
+                    "depends_on": [component_build_task_id],
                     "can_parallel": True,
                     "agent_type": "generation",
                 }

@@ -23,7 +23,7 @@ from ..db.models import (
     TaskEvent,
 )
 from ..events.models import BaseEvent, PlanCreatedEvent, PlanUpdatedEvent
-from ..events.types import EXCLUDED_EVENT_TYPES, STRUCTURED_EVENT_TYPES
+from ..events.types import EXCLUDED_EVENT_TYPES, RUN_SCOPED_EVENT_TYPES, STRUCTURED_EVENT_TYPES
 from ..config import get_settings
 from ..db.database import get_database
 from .plan import PlanService
@@ -74,12 +74,22 @@ class EventStoreService:
         self.db = db
         self._seq_cache = self.__class__._seq_cache
         settings = get_settings()
-        database_url = str(settings.database_url or "")
-        is_sqlite = database_url.startswith("sqlite")
-        is_memory = ":memory:" in database_url or "mode=memory" in database_url
+        settings_url = str(settings.database_url or "")
+        try:
+            db_url = str(db.get_bind().url) if db is not None else ""
+        except Exception:
+            db_url = ""
+        resolved_url = settings_url or db_url
+        is_sqlite = resolved_url.startswith("sqlite")
+        is_memory = ":memory:" in resolved_url or "mode=memory" in resolved_url
         # Use a dedicated writer session unless we're on in-memory SQLite (separate
         # connections would create isolated databases).
-        self._use_separate_session = not (is_sqlite and is_memory)
+        if db_url and settings_url and db_url != settings_url:
+            self._use_separate_session = False
+        elif db_url and not settings_url:
+            self._use_separate_session = False
+        else:
+            self._use_separate_session = not (is_sqlite and is_memory)
         self._database = get_database() if self._use_separate_session else None
 
     @classmethod
@@ -199,6 +209,9 @@ class EventStoreService:
         event_type = getattr(type, "value", type)
         if not session_id or not self.should_store_event(event_type):
             return None
+        if event_type in RUN_SCOPED_EVENT_TYPES:
+            if not isinstance(payload, dict) or not payload.get("run_id"):
+                raise ValueError(f"run_id is required for run-scoped event '{event_type}'")
 
         source_value = getattr(source, "value", source)
         try:
@@ -213,9 +226,13 @@ class EventStoreService:
         resolved_db = db or self.db
         with self._get_session_lock(session_id):
             seq = self.get_next_seq(session_id, db=resolved_db)
+            run_id = payload.get("run_id") if isinstance(payload, dict) else None
+            event_id = payload.get("event_id") if isinstance(payload, dict) else None
             session_event = SessionEvent(
                 session_id=session_id,
                 seq=seq,
+                run_id=run_id,
+                event_id=event_id,
                 type=event_type,
                 payload=safe_payload,
                 source=source_enum,
@@ -229,6 +246,21 @@ class EventStoreService:
         self, session_id: str, since_seq: Optional[int] = None, limit: int = 1000
     ) -> list[SessionEvent]:
         query = self.db.query(SessionEvent).filter(SessionEvent.session_id == session_id)
+        if since_seq is not None:
+            query = query.filter(SessionEvent.seq > since_seq)
+        return query.order_by(SessionEvent.seq.asc()).limit(limit).all()
+
+    def get_events_by_run(
+        self,
+        session_id: str,
+        run_id: str,
+        since_seq: Optional[int] = None,
+        limit: int = 1000,
+    ) -> list[SessionEvent]:
+        query = self.db.query(SessionEvent).filter(
+            SessionEvent.session_id == session_id,
+            SessionEvent.run_id == run_id,
+        )
         if since_seq is not None:
             query = query.filter(SessionEvent.seq > since_seq)
         return query.order_by(SessionEvent.seq.asc()).limit(limit).all()
@@ -263,6 +295,8 @@ class EventStoreService:
     def record_event(self, event: BaseEvent) -> None:
         event_type = getattr(event.type, "value", event.type)
         payload = event.model_dump(mode="json")
+        if event_type in RUN_SCOPED_EVENT_TYPES and not payload.get("run_id"):
+            raise ValueError(f"run_id is required for run-scoped event '{event_type}'")
         payload.pop("type", None)
         payload.pop("timestamp", None)
         payload.pop("session_id", None)
@@ -288,7 +322,7 @@ class EventStoreService:
             except OperationalError as exc:
                 if self._is_sqlite_locked(exc):
                     if attempt < len(delays):
-                        logger.warning("Event store busy, retrying (attempt %s)", attempt)
+                        logger.debug("Event store busy, retrying (attempt %s)", attempt)
                         continue
                     logger.warning("Event store busy, dropping event after retries")
                     return

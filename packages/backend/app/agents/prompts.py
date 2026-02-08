@@ -106,6 +106,14 @@ GENERATION_SYSTEM_PROMPT = """You are the Generation Agent for Instant Coffee, c
 3. Use modern CSS (Flexbox/Grid)
 4. Responsive images (max-width: 100%)
 5. Touch interaction support
+6. Include a <style> block that defines layout/visual styles for the classes you use
+
+## Component Registry (when provided)
+
+- If a component registry is provided, output <component> placeholders.
+- Use <component id="component-id" data='{"slot":"value"}'></component> for each component.
+- Do NOT inline component HTML when a component id exists.
+- Only use component ids listed in the registry.
 
 ## Priority Rules
 - Always prioritize the latest user message over any collected info if they conflict.
@@ -176,6 +184,9 @@ Navigation HTML template:
 - Single-file HTML with inline CSS and JS
 - No external dependencies (fonts, images must be inline or placeholder)
 - Never echo prompt text, requirements, ProductDoc context, or interview answers into the HTML body.
+- If a component registry is provided, use <component> placeholders instead of writing component HTML.
+- Only use component ids listed in the registry.
+- Include a <style> block with page-specific styles for the classes you use (in addition to the shared design system).
 
 Output complete HTML code directly, wrapped in special markers for extraction:
 
@@ -187,6 +198,106 @@ Output complete HTML code directly, wrapped in special markers for extraction:
 </HTML_OUTPUT>
 
 Do not include any other content, only output the HTML wrapped in this marker."""
+
+# ============ Component Registry Prompts ============
+
+COMPONENT_PLANNER_SYSTEM_PROMPT = """You are the Component Planner for Instant Coffee.
+
+Goal: derive a reusable component plan BEFORE page generation.
+
+Input: ProductDoc structured JSON + sitemap pages (with sections).
+Output: JSON only. No markdown. No commentary.
+
+Output format:
+{
+  "components": [
+    {
+      "id": "hero-split",
+      "name": "HeroSplitImage",
+      "category": "hero",
+      "sections": ["hero"],
+      "notes": "Short usage note"
+    }
+  ],
+  "page_map": {
+    "index": ["hero-split", "feature-grid", "cta", "footer-simple"]
+  }
+}
+
+Rules:
+- Use concise, reusable components (avoid per-page unique components unless necessary).
+- ids must be lowercase kebab-case.
+- page_map values must reference component ids.
+- Keep list short: 6-12 components total.
+"""
+
+COMPONENT_BUILDER_SYSTEM_PROMPT = """You are the Component Builder for Instant Coffee.
+
+Goal: generate HTML fragments for each component in the plan.
+Output JSON only. No markdown. No commentary.
+
+Output format:
+{
+  "components": [
+    {
+      "id": "hero-split",
+      "name": "HeroSplitImage",
+      "slots": {
+        "headline": "string",
+        "subhead": "string",
+        "cta_label": "string",
+        "cta_href": "string",
+        "image_url": "string"
+      },
+      "props": {
+        "theme": ["light", "dark"]
+      },
+      "html": "<section class=\\"hero hero-split\\" data-component=\\"hero-split\\">...{{headline}}...</section>"
+    }
+  ]
+}
+
+Rules:
+- html must be a single-root element.
+- Do NOT include <html>, <head>, <body>, or <script>.
+- Use {{slot}} placeholders for slot fields.
+- ids must match the plan; do not invent new ids.
+"""
+
+COMPONENT_REGISTRY_SYSTEM_PROMPT = """You are the Component Registry agent for Instant Coffee.
+
+Goal: generate schema component definitions that align with the runtime component library.
+
+Input: JSON payload containing:
+- structured: ProductDoc structured JSON
+- pages: sitemap pages
+- style_tokens: style token hints
+- component_library: allowed component list with default definitions
+
+Output JSON only. No markdown. No commentary.
+
+Output format:
+{
+  "components": [
+    {
+      "id": "nav-primary",
+      "type": "nav",
+      "slots": ["brand"],
+      "props": [
+        { "name": "brand", "type": "string", "required": false, "default": "Instant Coffee" }
+      ],
+      "variants": ["primary"]
+    }
+  ]
+}
+
+Rules:
+- Use only component ids that exist in component_library.
+- Include only these fields per component: id, type, slots, props, variants.
+- prop.type must be one of: string, number, boolean, asset, binding.
+- If unsure, reuse the component_library definition.
+- Prefer 8-16 components that cover the pages.
+"""
 
 # ============ Style Reference Prompts ============
 
@@ -279,6 +390,7 @@ Requirements:
 - Do NOT remove scripts, data attributes, or required IDs/classes.
 - Improve typography hierarchy, contrast, layout spacing, and CTA prominence.
 - Keep the page mobile-first and single-file (inline CSS/JS).
+- If the page lacks page-specific CSS, add a <style> block that styles the classes already present in the HTML.
 
 Output complete HTML only, wrapped in:
 
@@ -385,13 +497,17 @@ Output only valid JSON, no additional text."""
 # ============ ProductDoc Agent Prompts ============
 
 _PRODUCT_DOC_BASE_SCHEMA = """{
-  "product_type": "ecommerce|booking|dashboard|landing|card|invitation",
+  "product_type": "ecommerce|travel|manual|kanban|landing|card|invitation|booking|dashboard",
   "complexity": "simple|medium|complex",
   "doc_tier": "checklist|standard|extended",
   "goal": "string",
   "pages": [
     {"slug": "index", "role": "landing", "title": "Home"}
   ],
+  "data_model": {
+    "entities": {},
+    "relations": []
+  },
   "data_flow": [
     {"from_page": "index", "event": "submit", "to_page": "thanks"}
   ],
@@ -412,13 +528,17 @@ _PRODUCT_DOC_BASE_SCHEMA = """{
 
 _PRODUCT_DOC_TIER_SCHEMAS = {
     "checklist": """{
-  "product_type": "ecommerce|booking|dashboard|landing|card|invitation",
+  "product_type": "ecommerce|travel|manual|kanban|landing|card|invitation|booking|dashboard",
   "complexity": "simple|medium|complex",
   "doc_tier": "checklist",
   "goal": "string",
   "pages": [
     {"slug": "index", "role": "landing", "title": "Home"}
   ],
+  "data_model": {
+    "entities": {},
+    "relations": []
+  },
   "data_flow": [],
   "state_contract": null,
   "style_reference": {"mode": "full_mimic|style_only", "scope": {}, "images": []},
@@ -433,13 +553,17 @@ _PRODUCT_DOC_TIER_SCHEMAS = {
   "design_direction": {"style": "string", "color_preference": "string", "tone": "string", "reference_sites": []}
 }""",
     "standard": """{
-  "product_type": "ecommerce|booking|dashboard|landing|card|invitation",
+  "product_type": "ecommerce|travel|manual|kanban|landing|card|invitation|booking|dashboard",
   "complexity": "simple|medium|complex",
   "doc_tier": "standard",
   "goal": "string",
   "pages": [
     {"slug": "index", "role": "landing", "title": "Home"}
   ],
+  "data_model": {
+    "entities": {},
+    "relations": []
+  },
   "data_flow": [
     {"from_page": "index", "event": "submit", "to_page": "thanks"}
   ],
@@ -458,13 +582,17 @@ _PRODUCT_DOC_TIER_SCHEMAS = {
   "design_direction": {"style": "string", "color_preference": "string", "tone": "string", "reference_sites": []}
 }""",
     "extended": """{
-  "product_type": "ecommerce|booking|dashboard|landing|card|invitation",
+  "product_type": "ecommerce|travel|manual|kanban|landing|card|invitation|booking|dashboard",
   "complexity": "simple|medium|complex",
   "doc_tier": "extended",
   "goal": "string",
   "pages": [
     {"slug": "index", "role": "landing", "title": "Home"}
   ],
+  "data_model": {
+    "entities": {},
+    "relations": []
+  },
   "data_flow": [
     {"from_page": "index", "event": "submit", "to_page": "thanks"}
   ],
@@ -499,10 +627,10 @@ JSON Schema:
 {json_schema}
 
 Rules:
-- Always include base fields: product_type, complexity, doc_tier, goal, pages, data_flow, state_contract, style_reference, component_inventory
+- Always include base fields: product_type, complexity, doc_tier, goal, pages, data_model, data_flow, state_contract, style_reference, component_inventory
 - Pages must include slug and role (title optional)
 - Data flow items must include from_page, event, to_page
-- State contract is required for flow apps (ecommerce, booking, dashboard); for static types set it to null
+- State contract is required for flow apps (ecommerce, travel, manual, kanban, booking, dashboard); for static types set it to null
 - Mermaid fields are optional for extended tier; include them when possible
 
 Mobile-First Requirements:
@@ -618,6 +746,21 @@ def get_sitemap_prompt() -> str:
     return SITEMAP_SYSTEM_PROMPT
 
 
+def get_component_planner_prompt() -> str:
+    """Get Component Planner system prompt"""
+    return COMPONENT_PLANNER_SYSTEM_PROMPT
+
+
+def get_component_builder_prompt() -> str:
+    """Get Component Builder system prompt"""
+    return COMPONENT_BUILDER_SYSTEM_PROMPT
+
+
+def get_component_registry_prompt() -> str:
+    """Get Component Registry system prompt"""
+    return COMPONENT_REGISTRY_SYSTEM_PROMPT
+
+
 EXPANDER_SYSTEM_PROMPT = """You are the Expander agent. Enrich the page plan with concise expansion notes.
 
 Rules:
@@ -661,6 +804,9 @@ __all__ = [
     "INTERVIEW_SYSTEM_PROMPT",
     "GENERATION_SYSTEM_PROMPT",
     "GENERATION_SYSTEM_MULTIPAGE",
+    "COMPONENT_PLANNER_SYSTEM_PROMPT",
+    "COMPONENT_BUILDER_SYSTEM_PROMPT",
+    "COMPONENT_REGISTRY_SYSTEM_PROMPT",
     "REFINEMENT_SYSTEM_PROMPT",
     "SITEMAP_SYSTEM_PROMPT",
     "AESTHETIC_SCORING_PROMPT",
@@ -669,6 +815,9 @@ __all__ = [
     "get_interview_prompt",
     "get_generation_prompt",
     "get_generation_prompt_multipage",
+    "get_component_planner_prompt",
+    "get_component_builder_prompt",
+    "get_component_registry_prompt",
     "get_refinement_prompt",
     "get_sitemap_prompt",
     "get_expander_prompt",

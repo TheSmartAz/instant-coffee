@@ -24,6 +24,7 @@ class ChatRequest(BaseModel):
     target_pages: List[str] = Field(default_factory=list)
     style_reference: Optional[StyleReferenceInput] = None
     style_reference_mode: Optional[Literal["full_mimic", "style_only"]] = None
+    resume: Optional[dict] = None
 
     @model_validator(mode="after")
     def validate_image_count(self) -> "ChatRequest":

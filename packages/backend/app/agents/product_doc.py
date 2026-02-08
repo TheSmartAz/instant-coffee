@@ -26,7 +26,7 @@ from ..schemas.scenario import get_default_data_model
 from ..services.product_doc import ProductDocService
 from ..services.skills import SkillsRegistry
 from ..llm.model_pool import FallbackTrigger, ModelRole
-from ..utils.product_doc import extract_pages_from_markdown
+from ..utils.product_doc import extract_pages_from_markdown, is_valid_page_slug
 from ..utils.guardrails import guardrails_to_prompt
 
 logger = logging.getLogger(__name__)
@@ -903,6 +903,8 @@ class ProductDocAgent(BaseAgent):
                 if slug:
                     slug = self._truncate_slug(slug)
                 if not slug:
+                    continue
+                if not is_valid_page_slug(slug):
                     continue
                 if not role:
                     role = self._derive_page_role(slug, title, purpose)

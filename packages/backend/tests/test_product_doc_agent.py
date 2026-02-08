@@ -45,6 +45,15 @@ OK
     assert "about" in slugs
 
 
+def test_product_doc_agent_adds_default_data_model():
+    agent = _make_agent(None, "session-1")
+    structured = {"product_type": "travel", "pages": []}
+    result = agent._ensure_structured_fields(structured)
+    data_model = result.get("data_model")
+    assert isinstance(data_model, dict)
+    assert "Trip" in data_model.get("entities", {})
+
+
 def test_update_parsing_affected_pages_list():
     agent = _make_agent(None, "session-1")
     content = """---MARKDOWN---
@@ -240,3 +249,33 @@ def test_update_persists_change_summary_and_emits_event(tmp_path, monkeypatch):
     events = emitter.get_events()
     assert any(getattr(event, "type", None).value == "product_doc_updated" for event in events)
     assert any(getattr(event, "change_summary", None) == "Added CTA" for event in events)
+
+
+def test_normalize_pages_filters_non_page_slugs():
+    agent = _make_agent(None, "session-1")
+    pages = agent._normalize_pages(
+        [
+            {"title": "Home", "slug": "index"},
+            {"title": "Hard Rules", "slug": "must-follow"},
+            {"title": "Soft Rules", "slug": "recommended"},
+            {"title": "Future", "slug": "nice-to-have"},
+            {"title": "Search", "slug": "search"},
+        ]
+    )
+    slugs = [page["slug"] for page in pages]
+    assert slugs == ["index", "search"]
+
+
+def test_normalize_pages_filters_component_like_slugs():
+    agent = _make_agent(None, "session-1")
+    pages = agent._normalize_pages(
+        [
+            {"title": "Home", "slug": "index"},
+            {"title": "CategoryRow", "slug": "categoryrow"},
+            {"title": "ShowCard", "slug": "showcard"},
+            {"title": "Search", "slug": "search"},
+            {"title": "Video Player", "slug": "videoplayer"},
+        ]
+    )
+    slugs = [page["slug"] for page in pages]
+    assert slugs == ["index", "search", "videoplayer"]

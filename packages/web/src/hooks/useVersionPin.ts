@@ -32,7 +32,7 @@ const extractPinnedConflict = (error: RequestError): PinConflict => {
       currentPinned: data.current_pinned,
     }
   }
-  if (data.detail) {
+  if ('detail' in data && data.detail) {
     return {
       message: data.detail.message ?? error.message,
       currentPinned: data.detail.current_pinned,
@@ -79,10 +79,14 @@ export function useVersionPin() {
           | { detail?: { error?: string; current_pinned?: Array<string | number> } }
           | { detail?: string }
           | null
-        const errorCode = data && 'error' in data ? data.error : data?.detail?.error
+        const detail =
+          data && typeof data === 'object' && 'detail' in data && typeof data.detail === 'object'
+            ? data.detail
+            : null
+        const errorCode = data && 'error' in data ? data.error : detail?.error
         const hasPinnedList =
           Boolean(data && 'current_pinned' in data && data.current_pinned) ||
-          Boolean(data?.detail && data.detail.current_pinned)
+          Boolean(detail && detail.current_pinned)
         if (errorCode === 'pinned_limit_exceeded' || hasPinnedList) {
           return { ok: false, conflict: extractPinnedConflict(error) }
         }

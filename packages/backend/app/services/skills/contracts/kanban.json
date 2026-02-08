@@ -1,0 +1,17 @@
+{
+  "shared_state_key": "instant-coffee:state",
+  "records_key": "instant-coffee:records",
+  "events_key": "instant-coffee:events",
+  "events": [
+    "task_created",
+    "task_moved",
+    "task_completed"
+  ],
+  "schema": {
+    "board": {},
+    "columns": [],
+    "tasks": [],
+    "users": [],
+    "tags": []
+  }
+}

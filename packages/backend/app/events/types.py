@@ -48,6 +48,42 @@ class EventType(str, Enum):
     SNAPSHOT_CREATED = "snapshot_created"
     HISTORY_CREATED = "history_created"
 
+    # Phase 7: Workflow events (LangGraph + build)
+    BRIEF_START = "brief_start"
+    BRIEF_COMPLETE = "brief_complete"
+    STYLE_EXTRACTED = "style_extracted"
+    REGISTRY_START = "registry_start"
+    REGISTRY_COMPLETE = "registry_complete"
+    GENERATE_START = "generate_start"
+    GENERATE_PROGRESS = "generate_progress"
+    GENERATE_COMPLETE = "generate_complete"
+    REFINE_START = "refine_start"
+    REFINE_COMPLETE = "refine_complete"
+    REFINE_WAITING = "refine_waiting"
+    BUILD_START = "build_start"
+    BUILD_PROGRESS = "build_progress"
+    BUILD_COMPLETE = "build_complete"
+    BUILD_FAILED = "build_failed"
+    INTERRUPT = "interrupt"
+
+    # Phase 8: Run lifecycle events
+    RUN_CREATED = "run_created"
+    RUN_STARTED = "run_started"
+    RUN_WAITING_INPUT = "run_waiting_input"
+    RUN_RESUMED = "run_resumed"
+    RUN_COMPLETED = "run_completed"
+    RUN_FAILED = "run_failed"
+    RUN_CANCELLED = "run_cancelled"
+
+    # Phase 8: Verify events
+    VERIFY_START = "verify_start"
+    VERIFY_PASS = "verify_pass"
+    VERIFY_FAIL = "verify_fail"
+
+    # Phase 8: Tool policy events
+    TOOL_POLICY_BLOCKED = "tool_policy_blocked"
+    TOOL_POLICY_WARN = "tool_policy_warn"
+
 
 STRUCTURED_EVENT_TYPES = {event_type.value for event_type in EventType}
 STRUCTURED_EVENT_TYPES.update(
@@ -62,3 +98,19 @@ STRUCTURED_EVENT_TYPES.update(
 
 # Not persisted (streaming-only or internal)
 EXCLUDED_EVENT_TYPES = {"delta", "thinking", "ping"}
+
+
+RUN_SCOPED_EVENT_TYPES = {
+    EventType.RUN_CREATED.value,
+    EventType.RUN_STARTED.value,
+    EventType.RUN_WAITING_INPUT.value,
+    EventType.RUN_RESUMED.value,
+    EventType.RUN_COMPLETED.value,
+    EventType.RUN_FAILED.value,
+    EventType.RUN_CANCELLED.value,
+    EventType.VERIFY_START.value,
+    EventType.VERIFY_PASS.value,
+    EventType.VERIFY_FAIL.value,
+    EventType.TOOL_POLICY_BLOCKED.value,
+    EventType.TOOL_POLICY_WARN.value,
+}

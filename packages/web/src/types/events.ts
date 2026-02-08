@@ -1,3 +1,5 @@
+import type { AestheticScore } from './aesthetic'
+
 export type EventType =
   | 'agent_start'
   | 'agent_progress'
@@ -35,22 +37,203 @@ export type EventType =
   | 'version_created'
   | 'snapshot_created'
   | 'history_created'
+  | 'brief_start'
+  | 'brief_complete'
+  | 'style_extracted'
+  | 'registry_start'
+  | 'registry_complete'
+  | 'generate_start'
+  | 'generate_progress'
+  | 'generate_complete'
+  | 'refine_start'
+  | 'refine_complete'
+  | 'refine_waiting'
+  | 'build_start'
+  | 'build_progress'
+  | 'build_complete'
+  | 'build_failed'
+  | 'run_created'
+  | 'run_started'
+  | 'run_waiting_input'
+  | 'run_resumed'
+  | 'run_completed'
+  | 'run_failed'
+  | 'run_cancelled'
+  | 'verify_start'
+  | 'verify_pass'
+  | 'verify_fail'
+  | 'tool_policy_blocked'
+  | 'tool_policy_warn'
+  | 'interrupt'
+
+export type SceneType = 'ecommerce' | 'travel' | 'manual' | 'kanban' | 'landing'
+
+export type DataEventType =
+  | 'page_view'
+  | 'click'
+  | 'add_to_cart'
+  | 'remove_from_cart'
+  | 'checkout_start'
+  | 'order_submitted'
+  | 'payment_success'
+  | 'save_plan'
+  | 'share_link'
+  | 'add_bookmark'
+  | 'search'
+  | 'reading_progress'
+  | 'task_created'
+  | 'task_moved'
+  | 'task_completed'
+  | 'lead_submitted'
+  | 'cta_click'
+
+export const SCENE_LABELS: Record<SceneType, string> = {
+  ecommerce: '电商',
+  travel: '旅行',
+  manual: '说明书',
+  kanban: '看板',
+  landing: 'Landing',
+}
+
+export const SCENE_COLORS: Record<SceneType, string> = {
+  ecommerce: '#3B82F6',
+  travel: '#10B981',
+  manual: '#8B5CF6',
+  kanban: '#F59E0B',
+  landing: '#EC4899',
+}
+
+export const EVENT_CATEGORIES: Record<SceneType, DataEventType[]> = {
+  ecommerce: [
+    'add_to_cart',
+    'remove_from_cart',
+    'checkout_start',
+    'order_submitted',
+    'payment_success',
+  ],
+  travel: ['save_plan', 'share_link', 'add_bookmark'],
+  manual: ['page_view', 'search', 'reading_progress'],
+  kanban: ['task_created', 'task_moved', 'task_completed'],
+  landing: ['lead_submitted', 'cta_click'],
+}
+
+export const EVENT_LABELS: Record<DataEventType, { label: string; icon: string; color: string }> = {
+  page_view: { label: '页面浏览', icon: '👀', color: SCENE_COLORS.manual },
+  click: { label: '点击', icon: '🖱️', color: SCENE_COLORS.manual },
+  add_to_cart: { label: '加入购物车', icon: '🛒', color: SCENE_COLORS.ecommerce },
+  remove_from_cart: { label: '移除购物车', icon: '🧺', color: SCENE_COLORS.ecommerce },
+  checkout_start: { label: '开始结账', icon: '🧾', color: SCENE_COLORS.ecommerce },
+  order_submitted: { label: '订单提交', icon: '📦', color: SCENE_COLORS.ecommerce },
+  payment_success: { label: '支付成功', icon: '💳', color: SCENE_COLORS.ecommerce },
+  save_plan: { label: '保存行程', icon: '🧭', color: SCENE_COLORS.travel },
+  share_link: { label: '分享链接', icon: '🔗', color: SCENE_COLORS.travel },
+  add_bookmark: { label: '添加书签', icon: '🔖', color: SCENE_COLORS.travel },
+  search: { label: '搜索', icon: '🔍', color: SCENE_COLORS.manual },
+  reading_progress: { label: '阅读进度', icon: '📖', color: SCENE_COLORS.manual },
+  task_created: { label: '任务创建', icon: '✅', color: SCENE_COLORS.kanban },
+  task_moved: { label: '任务移动', icon: '📌', color: SCENE_COLORS.kanban },
+  task_completed: { label: '任务完成', icon: '🏁', color: SCENE_COLORS.kanban },
+  lead_submitted: { label: '线索提交', icon: '📧', color: SCENE_COLORS.landing },
+  cta_click: { label: 'CTA 点击', icon: '⚡', color: SCENE_COLORS.landing },
+}
+
+export type AgentType =
+  | 'interview'
+  | 'generation'
+  | 'refinement'
+  | 'validator'
+  | 'export'
+  | 'component_plan'
+  | 'component_build'
+  | 'sitemap'
+  | 'expander'
+  | 'product_doc'
+  | 'style_refiner'
+  | 'classifier'
+  | 'intent_classifier'
+  | string
 
 export type EventSource = 'session' | 'plan' | 'task'
 
 export interface BaseEvent {
   type: EventType
   timestamp: string
+  timestamp_ms?: number
   session_id?: string
+  run_id?: string
+  event_id?: string
   seq?: number
   source?: EventSource
+}
+
+export interface ProgressPayload {
+  step?: string
+  percent?: number
+  message?: string
+  page?: string
+}
+
+export interface ErrorPayload {
+  error: string
+  retry_count?: number
+}
+
+export interface WorkflowEvent extends BaseEvent {
+  type:
+    | 'brief_start'
+    | 'brief_complete'
+    | 'style_extracted'
+    | 'registry_start'
+    | 'registry_complete'
+    | 'generate_start'
+    | 'generate_progress'
+    | 'generate_complete'
+  | 'refine_start'
+  | 'refine_complete'
+  | 'refine_waiting'
+  | 'build_start'
+  | 'build_progress'
+  | 'build_complete'
+  | 'build_failed'
+  | 'interrupt'
+  payload?: ProgressPayload | ErrorPayload | Record<string, unknown>
+}
+
+export interface RunLifecycleEvent extends BaseEvent {
+  type:
+    | 'run_created'
+    | 'run_started'
+    | 'run_waiting_input'
+    | 'run_resumed'
+    | 'run_completed'
+    | 'run_failed'
+    | 'run_cancelled'
+  run_id: string
+  status?: string
+  message?: string
+  error?: string
+}
+
+export interface VerifyEvent extends BaseEvent {
+  type: 'verify_start' | 'verify_pass' | 'verify_fail'
+  run_id: string
+  stage?: string
+  message?: string
+}
+
+export interface ToolPolicyEvent extends BaseEvent {
+  type: 'tool_policy_blocked' | 'tool_policy_warn'
+  run_id: string
+  tool_name?: string
+  reason?: string
+  message?: string
 }
 
 export interface AgentStartEvent extends BaseEvent {
   type: 'agent_start'
   task_id?: string
   agent_id: string
-  agent_type: string
+  agent_type: AgentType
   agent_instance?: number
 }
 
@@ -74,7 +257,7 @@ export interface AgentCompleteEvent extends BaseEvent {
   type: 'agent_complete'
   task_id?: string
   agent_id?: string
-  agent_type?: string
+  agent_type?: AgentType
   status?: 'success' | 'failed'
   summary?: string
 }
@@ -243,7 +426,7 @@ export interface AestheticScoreEvent extends BaseEvent {
   type: 'aesthetic_score'
   page_id: string
   slug?: string
-  score: Record<string, unknown>
+  score: AestheticScore
   attempts?: Array<Record<string, unknown>>
 }
 
@@ -355,6 +538,8 @@ export interface SessionEvent {
   id: number
   session_id: string
   seq: number
+  run_id?: string | null
+  event_id?: string | null
   type: string
   payload: Record<string, unknown> | null
   source: EventSource
@@ -404,6 +589,10 @@ export type ExecutionEvent =
   | VersionCreatedEvent
   | SnapshotCreatedEvent
   | HistoryCreatedEvent
+  | RunLifecycleEvent
+  | VerifyEvent
+  | ToolPolicyEvent
+  | WorkflowEvent
 
 export function isAgentEvent(
   event: ExecutionEvent

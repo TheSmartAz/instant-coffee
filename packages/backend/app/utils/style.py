@@ -208,7 +208,12 @@ def build_global_style_css(global_style: Optional[dict], design_direction: Optio
     )
 
 
-def build_site_css(global_style: Optional[dict], design_direction: Optional[dict] = None) -> str:
+def build_site_css(
+    global_style: Optional[dict],
+    design_direction: Optional[dict] = None,
+    *,
+    include_nav: bool = True,
+) -> str:
     resolved = normalize_global_style(global_style, design_direction)
     primary = resolved.get("primary_color") or DEFAULT_PRIMARY
     secondary = resolved.get("secondary_color") or primary
@@ -254,34 +259,38 @@ def build_site_css(global_style: Optional[dict], design_direction: Optional[dict
         "  scrollbar-width: none;\n"
         "}\n\n"
         "/* Navigation */\n"
-        ".site-nav {\n"
-        "  position: sticky;\n"
-        "  bottom: 0;\n"
-        "  background: var(--primary-color);\n"
-        "  padding: 12px 16px;\n"
-        "  z-index: 100;\n"
-        "}\n\n"
-        ".nav-container {\n"
-        "  display: flex;\n"
-        "  gap: 16px;\n"
-        "  overflow-x: auto;\n"
-        "  -webkit-overflow-scrolling: touch;\n"
-        "}\n\n"
-        ".nav-link {\n"
-        "  color: white;\n"
-        "  text-decoration: none;\n"
-        "  white-space: nowrap;\n"
-        "  padding: 8px 16px;\n"
-        "  border-radius: var(--border-radius);\n"
-        "  transition: background 0.2s;\n"
-        "}\n\n"
-        ".nav-link:hover {\n"
-        "  background: rgba(255, 255, 255, 0.1);\n"
-        "}\n\n"
-        ".nav-link.active {\n"
-        "  background: rgba(255, 255, 255, 0.2);\n"
-        "}\n\n"
-        "/* Buttons */\n"
+        + (
+            ".site-nav {\n"
+            "  position: sticky;\n"
+            "  bottom: 0;\n"
+            "  background: var(--primary-color);\n"
+            "  padding: 12px 16px;\n"
+            "  z-index: 100;\n"
+            "}\n\n"
+            ".nav-container {\n"
+            "  display: flex;\n"
+            "  gap: 16px;\n"
+            "  overflow-x: auto;\n"
+            "  -webkit-overflow-scrolling: touch;\n"
+            "}\n\n"
+            ".nav-link {\n"
+            "  color: white;\n"
+            "  text-decoration: none;\n"
+            "  white-space: nowrap;\n"
+            "  padding: 8px 16px;\n"
+            "  border-radius: var(--border-radius);\n"
+            "  transition: background 0.2s;\n"
+            "}\n\n"
+            ".nav-link:hover {\n"
+            "  background: rgba(255, 255, 255, 0.1);\n"
+            "}\n\n"
+            ".nav-link.active {\n"
+            "  background: rgba(255, 255, 255, 0.2);\n"
+            "}\n\n"
+            if include_nav
+            else ""
+        )
+        + "/* Buttons */\n"
         "button, .btn {\n"
         "  min-height: var(--button-height);\n"
         "  padding: 0 24px;\n"

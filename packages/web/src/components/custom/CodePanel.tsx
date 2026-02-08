@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { useFileTree } from '../../hooks/useFileTree'
@@ -8,9 +8,10 @@ import { RefreshCw } from 'lucide-react'
 
 interface CodePanelProps {
   sessionId: string
+  active?: boolean
 }
 
-export function CodePanel({ sessionId }: CodePanelProps) {
+export function CodePanel({ sessionId, active = true }: CodePanelProps) {
   const { tree, selectedFile, selectFile, isLoading, isContentLoading, error, refresh } =
     useFileTree(sessionId)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -26,6 +27,11 @@ export function CodePanel({ sessionId }: CodePanelProps) {
       await selectFile(selectedPath)
     }
   }
+
+  useEffect(() => {
+    if (!active) return
+    void refresh()
+  }, [active, refresh])
 
   if (isLoading) {
     return (

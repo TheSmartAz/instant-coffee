@@ -20,6 +20,7 @@ class SettingsPayload(BaseModel):
     max_tokens: int | None = None
     output_dir: str | None = None
     auto_save: bool | None = None
+    aesthetic_scoring_enabled: bool | None = None
 
 
 def _get_db_session() -> Generator[DbSession, None, None]:
@@ -43,6 +44,7 @@ def _resolve_settings() -> dict:
         "max_tokens": settings.max_tokens,
         "output_dir": settings.output_dir,
         "auto_save": settings.auto_save,
+        "aesthetic_scoring_enabled": settings.aesthetic_scoring_enabled,
         "available_models": available_models,
     }
 
@@ -81,6 +83,8 @@ def update_settings(payload: SettingsPayload, db: DbSession = Depends(_get_db_se
         overrides["output_dir"] = data["output_dir"]
     if "auto_save" in data:
         overrides["auto_save"] = data["auto_save"]
+    if "aesthetic_scoring_enabled" in data:
+        overrides["aesthetic_scoring_enabled"] = data["aesthetic_scoring_enabled"]
 
     update_runtime_overrides(overrides)
     return _resolve_settings()

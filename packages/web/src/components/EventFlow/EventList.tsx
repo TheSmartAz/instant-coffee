@@ -27,6 +27,39 @@ interface EventListProps {
   onDisplayModeChange?: (mode: EventDisplayMode) => void
 }
 
+const PHASE_EVENT_TYPES: Set<string> = new Set([
+  'agent_start',
+  'agent_end',
+  'agent_complete',
+  'agent_error',
+  'plan_created',
+  'plan_updated',
+  'task_started',
+  'task_done',
+  'task_completed',
+  'task_failed',
+  'task_aborted',
+  'task_blocked',
+  'task_skipped',
+  'token_usage',
+  'done',
+  'error',
+  'interview_question',
+  'interview_answer',
+  'product_doc_generated',
+  'product_doc_updated',
+  'product_doc_confirmed',
+  'product_doc_outdated',
+  'multipage_decision_made',
+  'sitemap_proposed',
+  'page_created',
+  'page_version_created',
+  'page_preview_ready',
+  'version_created',
+  'snapshot_created',
+  'history_created',
+])
+
 /**
  * Filter events based on display mode
  * - Phase mode: Show only agent_start, agent_end, task events, plan events, token_usage, done
@@ -41,41 +74,7 @@ function filterEventsByMode(
     return sanitized
   }
 
-  // Phase mode: filter out progress updates and intermediate events
-  const phaseEventTypes: Set<string> = new Set([
-    'agent_start',
-    'agent_end',
-    'agent_complete',
-    'agent_error',
-    'plan_created',
-    'plan_updated',
-    'task_started',
-    'task_done',
-    'task_completed',
-    'task_failed',
-    'task_aborted',
-    'task_blocked',
-    'task_skipped',
-    'token_usage',
-    'done',
-    'error',
-    'interview_question',
-    'interview_answer',
-    'product_doc_generated',
-    'product_doc_updated',
-    'product_doc_confirmed',
-    'product_doc_outdated',
-    'multipage_decision_made',
-    'sitemap_proposed',
-    'page_created',
-    'page_version_created',
-    'page_preview_ready',
-    'version_created',
-    'snapshot_created',
-    'history_created',
-  ])
-
-  return sanitized.filter((event) => phaseEventTypes.has(event.type))
+  return sanitized.filter((event) => PHASE_EVENT_TYPES.has(event.type))
 }
 
 export function EventList({
@@ -136,7 +135,10 @@ export function EventList({
           ? now - 60 * 60 * 1000
           : now - 24 * 60 * 60 * 1000
     return byMode.filter((event) => {
-      const timestamp = Date.parse(event.timestamp ?? '')
+      const timestamp =
+        typeof event.timestamp_ms === 'number'
+          ? event.timestamp_ms
+          : Date.parse(event.timestamp ?? '')
       if (Number.isNaN(timestamp)) return true
       return timestamp >= cutoff
     })

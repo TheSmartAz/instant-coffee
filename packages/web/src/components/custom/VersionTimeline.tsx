@@ -1,3 +1,4 @@
+import * as React from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { Eye, Loader2, Pin, PinOff, RotateCcw } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -135,12 +136,27 @@ export function VersionTimeline({
   onPin,
   onUnpin,
 }: VersionTimelineProps) {
-  const pinnedItems = versions.filter((item) => getIsPinned(type, item))
-  const regularItems = versions.filter((item) => !getIsPinned(type, item))
-  const groups = [
-    { id: 'pinned', label: 'Pinned versions', items: pinnedItems },
-    { id: 'regular', label: 'Version history', items: regularItems },
-  ].filter((group) => group.items.length > 0)
+  const { pinnedItems, regularItems } = React.useMemo(() => {
+    const pinned: Array<PageVersion | ProjectSnapshot | ProductDocHistory> = []
+    const regular: Array<PageVersion | ProjectSnapshot | ProductDocHistory> = []
+    for (const item of versions) {
+      if (getIsPinned(type, item)) {
+        pinned.push(item)
+      } else {
+        regular.push(item)
+      }
+    }
+    return { pinnedItems: pinned, regularItems: regular }
+  }, [type, versions])
+
+  const groups = React.useMemo(
+    () =>
+      [
+        { id: 'pinned', label: 'Pinned versions', items: pinnedItems },
+        { id: 'regular', label: 'Version history', items: regularItems },
+      ].filter((group) => group.items.length > 0),
+    [pinnedItems, regularItems]
+  )
 
   const actionButtonClass =
     'h-7 rounded-full px-3 text-xs font-medium transition-colors'

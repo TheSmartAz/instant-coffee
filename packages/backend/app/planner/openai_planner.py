@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 import httpx
+from langsmith import traceable
 
 from ..config import get_settings
 from .base import (
@@ -67,12 +68,7 @@ class OpenAIPlanner(BasePlanner):
             }
             endpoint = "/responses"
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        response_json = await self._call_with_retry(payload=payload, headers=headers, endpoint=endpoint)
+        response_json = await self._call_with_retry(payload=payload, endpoint=endpoint)
         content = self._extract_content(response_json)
         data = self._extract_json(content)
         if not data:
@@ -83,11 +79,11 @@ class OpenAIPlanner(BasePlanner):
         normalized = str(self.api_mode).strip().lower()
         return normalized in {"chat", "chat_completions", "chat-completions", "completions"}
 
-    async def _call_with_retry(self, *, payload: dict, headers: dict, endpoint: str) -> dict:
+    async def _call_with_retry(self, *, payload: dict, endpoint: str) -> dict:
         last_error: Optional[Exception] = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                return await self._call_once(payload=payload, headers=headers, endpoint=endpoint)
+                return await self._call_once(payload=payload, endpoint=endpoint)
             except PlannerRateLimitError as exc:  # pragma: no cover - depends on API
                 last_error = exc
                 await self._backoff(attempt, "rate limit")
@@ -98,8 +94,15 @@ class OpenAIPlanner(BasePlanner):
             raise PlannerError("Unknown planner error")
         raise PlannerError(str(last_error))
 
-    async def _call_once(self, *, payload: dict, headers: dict, endpoint: str) -> dict:
-        response = await self._client.post(endpoint, json=payload, headers=headers)
+    def _auth_headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    @traceable(run_type="llm")
+    async def _call_once(self, *, payload: dict, endpoint: str) -> dict:
+        response = await self._client.post(endpoint, json=payload, headers=self._auth_headers())
         if response.status_code == 429:
             raise PlannerRateLimitError(response.text)
         if response.status_code >= 500:

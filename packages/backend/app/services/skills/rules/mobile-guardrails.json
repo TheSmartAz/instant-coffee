@@ -1,0 +1,97 @@
+{
+  "hard": [
+    {
+      "id": "viewport-meta",
+      "title": "Viewport meta",
+      "description": "Include <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">.",
+      "category": "layout",
+      "priority": "critical"
+    },
+    {
+      "id": "readable-font-size",
+      "title": "Readable base size",
+      "description": "Body text must be 16px or larger on mobile.",
+      "category": "typography",
+      "priority": "critical"
+    },
+    {
+      "id": "touch-target-size",
+      "title": "Touch target size",
+      "description": "Interactive targets must be at least 44x44px.",
+      "category": "interaction",
+      "priority": "critical"
+    },
+    {
+      "id": "color-contrast",
+      "title": "Text contrast",
+      "description": "Normal text must meet 4.5:1 contrast ratio.",
+      "category": "accessibility",
+      "priority": "critical"
+    },
+    {
+      "id": "horizontal-scroll",
+      "title": "No horizontal scroll",
+      "description": "Content must fit within the viewport width on mobile.",
+      "category": "layout",
+      "priority": "critical"
+    },
+    {
+      "id": "form-labels",
+      "title": "Form labels",
+      "description": "All form inputs must have associated label elements.",
+      "category": "accessibility",
+      "priority": "critical"
+    },
+    {
+      "id": "focus-states",
+      "title": "Visible focus",
+      "description": "Interactive elements must show visible focus styles.",
+      "category": "accessibility",
+      "priority": "critical"
+    }
+  ],
+  "soft": [
+    {
+      "id": "line-height",
+      "title": "Comfortable line height",
+      "description": "Body text line-height should be between 1.4 and 1.8.",
+      "category": "typography",
+      "priority": "medium"
+    },
+    {
+      "id": "line-length",
+      "title": "Readable line length",
+      "description": "Limit paragraphs to roughly 65-75 characters per line.",
+      "category": "typography",
+      "priority": "medium"
+    },
+    {
+      "id": "hover-vs-tap",
+      "title": "Tap-first interactions",
+      "description": "Primary actions should use click/tap, not hover-only behavior.",
+      "category": "interaction",
+      "priority": "medium"
+    },
+    {
+      "id": "loading-states",
+      "title": "Loading feedback",
+      "description": "Use a skeleton or spinner for async actions and disable buttons while pending.",
+      "category": "interaction",
+      "priority": "medium"
+    },
+    {
+      "id": "motion-duration",
+      "title": "Motion timing",
+      "description": "Keep micro-interactions within 150-300ms using transform/opacity.",
+      "category": "motion",
+      "priority": "medium"
+    },
+    {
+      "id": "reduced-motion",
+      "title": "Reduced motion",
+      "description": "Respect prefers-reduced-motion for animations.",
+      "category": "accessibility",
+      "priority": "medium"
+    }
+  ]
+}

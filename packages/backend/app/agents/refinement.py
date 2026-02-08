@@ -23,25 +23,11 @@ from ..services.filesystem import FilesystemService
 from ..services.page_version import PageVersionService
 from ..utils.html import (
     build_nav_html,
-    extract_nav_html,
-    extract_nav_slugs,
     normalize_internal_links,
-    replace_nav_html,
 )
 from ..utils.style import build_global_style_css
 
 logger = logging.getLogger(__name__)
-
-_NAV_KEYWORDS = {
-    "nav",
-    "navigation",
-    "navbar",
-    "menu",
-    "link",
-    "links",
-    "header",
-    "footer",
-}
 
 _GLOBAL_CHANGE_KEYWORDS = {
     "all pages",
@@ -164,16 +150,6 @@ class RefinementAgent(BaseAgent):
 
         resolved_pages = list(all_pages) if all_pages else [page]
         all_page_slugs = self._resolve_all_pages(resolved_pages, page)
-        nav_items = self._build_nav_items(resolved_pages)
-
-        html = self._apply_navigation_rules(
-            html=html,
-            current_html=resolved_current_html,
-            user_message=instructions,
-            nav_items=nav_items,
-            all_page_slugs=all_page_slugs,
-            current_slug=page.slug,
-        )
 
         html, link_warnings = normalize_internal_links(html, all_pages=all_page_slugs)
         if link_warnings:
@@ -481,43 +457,6 @@ class RefinementAgent(BaseAgent):
             return structured_value if isinstance(structured_value, dict) else {}
         structured_value = getattr(product_doc, "structured", None)
         return structured_value if isinstance(structured_value, dict) else {}
-
-    def _apply_navigation_rules(
-        self,
-        *,
-        html: str,
-        current_html: str,
-        user_message: str,
-        nav_items: list[dict],
-        all_page_slugs: list[str],
-        current_slug: str,
-    ) -> str:
-        existing_nav = extract_nav_html(current_html)
-        nav_change_requested = self._is_nav_change_request(user_message)
-        nav_needs_update = self._nav_needs_update(existing_nav, all_page_slugs)
-
-        forced_nav_html = ""
-        if nav_needs_update:
-            forced_nav_html = build_nav_html(nav_items, current_slug=current_slug, all_pages=all_page_slugs)
-        elif not nav_change_requested and existing_nav:
-            forced_nav_html = existing_nav
-
-        if forced_nav_html:
-            return replace_nav_html(html, forced_nav_html)
-
-        return html
-
-    def _is_nav_change_request(self, message: str) -> bool:
-        lower = (message or "").lower()
-        return any(keyword in lower for keyword in _NAV_KEYWORDS)
-
-    def _nav_needs_update(self, nav_html: str, all_page_slugs: list[str]) -> bool:
-        if not all_page_slugs:
-            return False
-        existing_slugs = extract_nav_slugs(nav_html)
-        if not existing_slugs:
-            return True
-        return set(existing_slugs) != set(all_page_slugs)
 
     def _build_nav_items(self, pages: Sequence[Page]) -> list[dict]:
         items: list[dict] = []

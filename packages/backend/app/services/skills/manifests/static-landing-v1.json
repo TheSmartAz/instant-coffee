@@ -1,0 +1,32 @@
+{
+  "id": "static-landing-v1",
+  "name": "Static - Landing",
+  "version": "1.0.0",
+  "product_types": ["landing"],
+  "complexity": ["checklist", "standard"],
+  "doc_tiers": ["checklist", "standard"],
+  "components": [
+    "Hero",
+    "FeatureList",
+    "SocialProof",
+    "CtaSection",
+    "Footer"
+  ],
+  "style_profiles": [
+    "clean-modern",
+    "soft-elegant",
+    "bold-tech",
+    "playful-color",
+    "editorial",
+    "minimal-mono"
+  ],
+  "guardrails": "rules/mobile-guardrails.json",
+  "page_roles": ["landing"],
+  "model_prefs": {
+    "classifier": "light",
+    "writer": "heavy",
+    "validator": "light",
+    "expander": "mid"
+  },
+  "priority": 100
+}

@@ -1,0 +1,31 @@
+{
+  "id": "flow-kanban-v1",
+  "name": "Flow App - Kanban",
+  "version": "1.0.0",
+  "product_types": ["kanban"],
+  "complexity": ["checklist", "standard", "extended"],
+  "doc_tiers": ["checklist", "standard", "extended"],
+  "components": [
+    "BoardHeader",
+    "Column",
+    "TaskCard",
+    "TaskDetail",
+    "AssigneeAvatar"
+  ],
+  "state_contract": "contracts/kanban.json",
+  "style_profiles": [
+    "clean-modern",
+    "bold-tech",
+    "editorial",
+    "minimal-mono"
+  ],
+  "guardrails": "rules/mobile-guardrails.json",
+  "page_roles": ["board", "detail"],
+  "model_prefs": {
+    "classifier": "light",
+    "writer": "heavy",
+    "validator": "light",
+    "expander": "mid"
+  },
+  "priority": 100
+}

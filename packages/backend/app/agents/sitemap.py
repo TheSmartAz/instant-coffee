@@ -11,7 +11,7 @@ from ..events.models import SitemapProposedEvent
 from ..llm.model_pool import ModelRole
 from ..schemas.sitemap import GlobalStyle, NavItem, SitemapPage, SitemapResult as SitemapSchema
 from ..utils.style import build_global_style, normalize_hex_color
-from ..utils.product_doc import extract_pages_from_markdown
+from ..utils.product_doc import extract_pages_from_markdown, is_valid_page_slug
 
 
 @dataclass
@@ -323,6 +323,8 @@ def _normalize_page(raw_page: dict, *, index: int) -> Optional[dict]:
     slug = _slugify(str(slug))
     if not slug:
         slug = f"page-{index + 1}"
+    if not is_valid_page_slug(slug):
+        return None
     purpose = str(raw_page.get("purpose") or raw_page.get("description") or "")
     sections = raw_page.get("sections") or []
     if not isinstance(sections, list):

@@ -109,7 +109,7 @@ const getStatusIcon = (status: Task['status']) => {
   }
 }
 
-export function TaskCard({ task, events, isActive }: TaskCardProps) {
+export const TaskCard = React.memo(function TaskCard({ task, events, isActive }: TaskCardProps) {
   const [isExpanded, setIsExpanded] = React.useState(isActive)
 
   React.useEffect(() => {
@@ -118,13 +118,16 @@ export function TaskCard({ task, events, isActive }: TaskCardProps) {
     }
   }, [isActive])
 
-  const taskEvents = React.useMemo(
-    () => events.filter((event) => 'task_id' in event && event.task_id === task.id),
-    [events, task.id]
-  )
+  const taskEvents = events
 
-  const agentEvents = taskEvents.filter((event) => isAgentEvent(event))
-  const toolEvents = taskEvents.filter((event) => isToolEvent(event))
+  const agentEvents = React.useMemo(
+    () => taskEvents.filter((event) => isAgentEvent(event)),
+    [taskEvents]
+  )
+  const toolEvents = React.useMemo(
+    () => taskEvents.filter((event) => isToolEvent(event)),
+    [taskEvents]
+  )
 
   return (
     <div
@@ -205,4 +208,9 @@ export function TaskCard({ task, events, isActive }: TaskCardProps) {
       ) : null}
     </div>
   )
-}
+}, (prev, next) => {
+  if (prev.isActive !== next.isActive) return false
+  if (prev.task !== next.task) return false
+  if (prev.events !== next.events) return false
+  return true
+})

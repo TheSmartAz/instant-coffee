@@ -1,0 +1,90 @@
+{
+  "default_profile": "clean-modern",
+  "rules": [
+    {
+      "profile": "soft-elegant",
+      "keywords": [
+        "elegant",
+        "luxury",
+        "premium",
+        "boutique",
+        "spa",
+        "wellness",
+        "beauty",
+        "refined",
+        "soft",
+        "优雅",
+        "轻奢",
+        "高端",
+        "精致",
+        "美容",
+        "婚礼",
+        "质感"
+      ]
+    },
+    {
+      "profile": "bold-tech",
+      "keywords": [
+        "tech",
+        "ai",
+        "saas",
+        "developer",
+        "cloud",
+        "analytics",
+        "fintech",
+        "data",
+        "科技",
+        "智能",
+        "系统",
+        "数据",
+        "开发者",
+        "平台"
+      ]
+    },
+    {
+      "profile": "playful-color",
+      "keywords": [
+        "playful",
+        "fun",
+        "colorful",
+        "youth",
+        "festival",
+        "kids",
+        "活动",
+        "可爱",
+        "年轻",
+        "活泼",
+        "节日",
+        "彩色"
+      ]
+    },
+    {
+      "profile": "editorial",
+      "keywords": [
+        "editorial",
+        "magazine",
+        "content",
+        "story",
+        "blog",
+        "媒体",
+        "杂志",
+        "内容",
+        "叙事"
+      ]
+    },
+    {
+      "profile": "minimal-mono",
+      "keywords": [
+        "minimal",
+        "mono",
+        "black and white",
+        "monochrome",
+        "simple",
+        "极简",
+        "黑白",
+        "简洁",
+        "克制"
+      ]
+    }
+  ]
+}

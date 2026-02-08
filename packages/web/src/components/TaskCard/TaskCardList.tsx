@@ -10,6 +10,8 @@ interface TaskCardListProps {
   events: ExecutionEvent[]
 }
 
+const EMPTY_EVENTS: ExecutionEvent[] = []
+
 const statusOrder: Record<string, number> = {
   in_progress: 0,
   retrying: 1,
@@ -30,6 +32,21 @@ export function TaskCardList({ tasks, events }: TaskCardListProps) {
       ),
     [tasks]
   )
+
+  const eventsByTask = React.useMemo(() => {
+    const grouped = new Map<string, ExecutionEvent[]>()
+    for (const event of events) {
+      const taskId = (event as { task_id?: string }).task_id
+      if (!taskId) continue
+      const existing = grouped.get(taskId)
+      if (existing) {
+        existing.push(event)
+      } else {
+        grouped.set(taskId, [event])
+      }
+    }
+    return grouped
+  }, [events])
 
   const activeTasks = React.useMemo(
     () =>
@@ -79,7 +96,7 @@ export function TaskCardList({ tasks, events }: TaskCardListProps) {
           <TaskCard
             key={task.id}
             task={task}
-            events={events}
+            events={eventsByTask.get(task.id) ?? EMPTY_EVENTS}
             isActive={activeTasks.has(task.id)}
           />
         ))}

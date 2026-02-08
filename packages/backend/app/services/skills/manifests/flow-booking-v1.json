@@ -1,0 +1,33 @@
+{
+  "id": "flow-booking-v1",
+  "name": "Flow App - Booking",
+  "version": "1.0.0",
+  "product_types": ["booking"],
+  "complexity": ["checklist", "standard", "extended"],
+  "doc_tiers": ["checklist", "standard", "extended"],
+  "components": [
+    "ServiceCard",
+    "TimeSlotPicker",
+    "BookingForm",
+    "BookingSummary",
+    "ConfirmationCard"
+  ],
+  "state_contract": "contracts/booking.json",
+  "style_profiles": [
+    "clean-modern",
+    "soft-elegant",
+    "bold-tech",
+    "playful-color",
+    "editorial",
+    "minimal-mono"
+  ],
+  "guardrails": "rules/mobile-guardrails.json",
+  "page_roles": ["services", "details", "schedule", "confirmation"],
+  "model_prefs": {
+    "classifier": "light",
+    "writer": "heavy",
+    "validator": "light",
+    "expander": "mid"
+  },
+  "priority": 100
+}

@@ -23,6 +23,7 @@ def _patch_generation_flow(monkeypatch):
         user_message,
         interview_context=None,
         history=None,
+        **kwargs,
     ):
         structured = {
             "project_name": "Test",

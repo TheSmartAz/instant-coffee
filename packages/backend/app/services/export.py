@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,12 +19,13 @@ from ..services.page import PageService
 from ..services.page_version import PageVersionService
 from ..services.product_doc import ProductDocService
 from ..services.version import VersionService
+from ..services.mobile_shell import ensure_mobile_shell
 from ..utils.html import ensure_css_link, rewrite_internal_links_for_export, strip_prompt_artifacts
 from ..utils.style import build_site_css, normalize_global_style
 
 logger = logging.getLogger(__name__)
 
-_FLOW_PRODUCT_TYPES = {"ecommerce", "booking", "dashboard"}
+_FLOW_PRODUCT_TYPES = {"ecommerce", "travel", "manual", "kanban", "booking", "dashboard"}
 _STATIC_PRODUCT_TYPES = {"landing", "card", "invitation"}
 
 
@@ -76,6 +78,7 @@ class ExportService:
         resolved_dir = Path(output_dir or settings.output_dir)
         fs = FilesystemService(str(resolved_dir))
         export_dir = fs.create_session_directory(session_id)
+        source_dir = Path(settings.output_dir) / session_id
 
         product_doc = self._product_doc_service.get_by_session_id(session_id)
         resolved_global_style, design_direction = self._resolve_style_inputs(
@@ -123,6 +126,7 @@ class ExportService:
             resolved_global_style=resolved_global_style,
             design_direction=design_direction,
         )
+        assets.extend(self._copy_components(export_dir=export_dir, source_dir=source_dir))
         assets.extend(self._write_data_protocol_assets(export_dir, session, product_doc))
 
         product_doc_included = self._write_product_doc(
@@ -186,6 +190,7 @@ class ExportService:
                 ", ".join(link_warnings),
             )
         html = ensure_css_link(html, css_path)
+        html = ensure_mobile_shell(html)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(html, encoding="utf-8")
@@ -246,6 +251,7 @@ class ExportService:
         html = version.html or ""
         html = self._strip_site_css(html)
         html = ensure_css_link(html, "assets/site.css")
+        html = ensure_mobile_shell(html)
 
         output_path = export_dir / "index.html"
         output_path.write_text(html, encoding="utf-8")
@@ -256,6 +262,9 @@ class ExportService:
             resolved_global_style=resolved_global_style,
             design_direction=design_direction,
         )
+        settings = get_settings()
+        source_dir = Path(settings.output_dir) / session.id
+        assets.extend(self._copy_components(export_dir=export_dir, source_dir=source_dir))
         assets.extend(self._write_data_protocol_assets(export_dir, session, product_doc))
 
         product_doc_included = self._write_product_doc(
@@ -312,6 +321,35 @@ class ExportService:
                 "size": site_css_path.stat().st_size,
             }
         ]
+
+    def _copy_components(self, *, export_dir: Path, source_dir: Path) -> List[dict]:
+        src_components = source_dir / "components"
+        if not src_components.exists():
+            return []
+        dest_components = export_dir / "components"
+        try:
+            if source_dir.resolve() != export_dir.resolve():
+                shutil.copytree(src_components, dest_components, dirs_exist_ok=True)
+        except Exception:
+            logger.exception("Failed to copy components directory")
+            return []
+        if not dest_components.exists():
+            return []
+        assets: List[dict] = []
+        for path in dest_components.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                rel_path = path.relative_to(export_dir).as_posix()
+            except ValueError:
+                rel_path = f"components/{path.name}"
+            assets.append(
+                {
+                    "path": rel_path,
+                    "size": path.stat().st_size,
+                }
+            )
+        return assets
 
     def _write_data_protocol_assets(
         self,

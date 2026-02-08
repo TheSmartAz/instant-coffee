@@ -230,5 +230,5 @@ def test_generate_multi_page_creates_version(tmp_path, monkeypatch) -> None:
         assert len(versions) == 1
         assert versions[0].version == 1
         assert result.version == 1
-        assert "site-nav" in result.html
+        assert "site-nav" not in result.html
         assert "pages/about.html" in result.html

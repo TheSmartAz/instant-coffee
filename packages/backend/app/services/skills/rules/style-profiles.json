@@ -1,0 +1,136 @@
+{
+  "profiles": {
+    "clean-modern": {
+      "name": "Clean Modern",
+      "description": "Neutral, airy, product-focused. Balanced typography and generous spacing.",
+      "tokens": {
+        "colors": {
+          "primary": "#1A1F2B",
+          "accent": "#2F6BFF",
+          "bg": "#F8FAFC",
+          "surface": "#FFFFFF",
+          "muted": "#64748B"
+        },
+        "typography": {
+          "heading": {"family": "Space Grotesk", "weight": 600},
+          "body": {"family": "DM Sans", "weight": 400},
+          "scale": "modern"
+        },
+        "radius": "medium",
+        "shadow": "soft",
+        "spacing": "airy",
+        "layout_patterns": ["hero-left", "card-grid", "split", "stacked"]
+      }
+    },
+    "soft-elegant": {
+      "name": "Soft Elegant",
+      "description": "Warm, refined, and gentle. Ideal for lifestyle and premium services.",
+      "tokens": {
+        "colors": {
+          "primary": "#2B2B2B",
+          "accent": "#C1946A",
+          "bg": "#FBF8F5",
+          "surface": "#FFFFFF",
+          "muted": "#7C6F64"
+        },
+        "typography": {
+          "heading": {"family": "Playfair Display", "weight": 600},
+          "body": {"family": "DM Sans", "weight": 400},
+          "scale": "classic"
+        },
+        "radius": "large",
+        "shadow": "soft",
+        "spacing": "relaxed",
+        "layout_patterns": ["hero-center", "stacked", "feature-list"]
+      }
+    },
+    "bold-tech": {
+      "name": "Bold Tech",
+      "description": "High contrast, confident, and crisp. Works for SaaS and AI products.",
+      "tokens": {
+        "colors": {
+          "primary": "#0F172A",
+          "accent": "#22D3EE",
+          "bg": "#F8FAFC",
+          "surface": "#FFFFFF",
+          "muted": "#475569"
+        },
+        "typography": {
+          "heading": {"family": "Sora", "weight": 600},
+          "body": {"family": "Manrope", "weight": 400},
+          "scale": "tech"
+        },
+        "radius": "medium",
+        "shadow": "crisp",
+        "spacing": "compact",
+        "layout_patterns": ["hero-split", "metric-cards", "stacked"]
+      }
+    },
+    "playful-color": {
+      "name": "Playful Color",
+      "description": "Bright, friendly, and energetic. Good for events and youth brands.",
+      "tokens": {
+        "colors": {
+          "primary": "#1E293B",
+          "accent": "#FF6B6B",
+          "bg": "#FFF7ED",
+          "surface": "#FFFFFF",
+          "muted": "#64748B"
+        },
+        "typography": {
+          "heading": {"family": "Fredoka", "weight": 600},
+          "body": {"family": "Nunito", "weight": 400},
+          "scale": "rounded"
+        },
+        "radius": "large",
+        "shadow": "soft",
+        "spacing": "airy",
+        "layout_patterns": ["hero-center", "card-grid", "highlight-band"]
+      }
+    },
+    "editorial": {
+      "name": "Editorial",
+      "description": "Structured, content-forward, and sophisticated.",
+      "tokens": {
+        "colors": {
+          "primary": "#111827",
+          "accent": "#B45309",
+          "bg": "#FFFDF9",
+          "surface": "#FFFFFF",
+          "muted": "#6B7280"
+        },
+        "typography": {
+          "heading": {"family": "Libre Baskerville", "weight": 600},
+          "body": {"family": "Source Serif 4", "weight": 400},
+          "scale": "editorial"
+        },
+        "radius": "small",
+        "shadow": "subtle",
+        "spacing": "balanced",
+        "layout_patterns": ["hero-editorial", "split", "text-first"]
+      }
+    },
+    "minimal-mono": {
+      "name": "Minimal Mono",
+      "description": "Minimal, monochrome, and restrained. High focus and clarity.",
+      "tokens": {
+        "colors": {
+          "primary": "#0B0F14",
+          "accent": "#0B0F14",
+          "bg": "#F7F7F7",
+          "surface": "#FFFFFF",
+          "muted": "#525252"
+        },
+        "typography": {
+          "heading": {"family": "Plus Jakarta Sans", "weight": 600},
+          "body": {"family": "Plus Jakarta Sans", "weight": 400},
+          "scale": "minimal"
+        },
+        "radius": "small",
+        "shadow": "none",
+        "spacing": "tight",
+        "layout_patterns": ["stacked", "single-column", "text-first"]
+      }
+    }
+  }
+}

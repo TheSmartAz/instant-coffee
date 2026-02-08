@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import unquote
 
@@ -11,6 +12,7 @@ from ..schemas.files import FileTreeNode
 from ..services.page import PageService
 from ..services.page_version import PageVersionService
 from ..services.product_doc import ProductDocService
+from ..services.state_store import StateStoreService
 from ..services.version import VersionService
 import re
 
@@ -68,14 +70,7 @@ class FileTreeService:
         pages = self._page_service.list_by_session(session_id)
         index_page = next((page for page in pages if page.slug == "index"), None)
         other_pages = [page for page in pages if page.slug != "index"]
-
-        index_html = ""
-        if index_page is not None:
-            index_html = self._get_page_html(index_page)
-        else:
-            legacy_html = self._get_legacy_index_html(session_id)
-            if legacy_html is not None:
-                index_html = legacy_html
+        index_html = self._resolve_index_html(session_id)
 
         tree: List[FileTreeNode] = [
             FileTreeNode(
@@ -173,6 +168,9 @@ class FileTreeService:
         page = self._page_service.get_by_slug(session_id, "index")
         if page is not None:
             return self._get_page_html(page)
+        dist_html = self._read_dist_page_html(session_id, "index")
+        if dist_html is not None:
+            return dist_html
         legacy_html = self._get_legacy_index_html(session_id)
         return legacy_html or ""
 
@@ -181,12 +179,65 @@ class FileTreeService:
         if version is None:
             versions = self._page_version_service.list_by_page(page.id)
             version = versions[0] if versions else None
-        if version is None:
-            return ""
-        html = version.html or ""
-        html = self._strip_site_css(html)
-        css_href = "assets/site.css" if page.slug == "index" else "../assets/site.css"
-        return ensure_css_link(html, css_href)
+        html = (version.html or "") if version is not None else ""
+        if html.strip():
+            html = self._strip_site_css(html)
+            css_href = "assets/site.css" if page.slug == "index" else "../assets/site.css"
+            return ensure_css_link(html, css_href)
+
+        dist_html = self._read_dist_page_html(page.session_id, page.slug)
+        if dist_html is not None:
+            return dist_html
+        return ""
+
+    def _read_dist_page_html(self, session_id: str, slug: str) -> Optional[str]:
+        dist_dir = self._resolve_dist_dir(session_id)
+        if dist_dir is None:
+            return None
+
+        candidates: list[Path] = []
+        if slug == "index":
+            candidates.append(dist_dir / "index.html")
+        else:
+            candidates.append(dist_dir / "pages" / slug / "index.html")
+            candidates.append(dist_dir / "pages" / f"{slug}.html")
+
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved != dist_dir and dist_dir not in resolved.parents:
+                continue
+            if not resolved.is_file():
+                continue
+            try:
+                return resolved.read_text(encoding="utf-8")
+            except OSError:
+                continue
+
+        return None
+
+    def _resolve_dist_dir(self, session_id: str) -> Optional[Path]:
+        metadata = StateStoreService(self.db).get_metadata(session_id)
+        candidate: Optional[Path] = None
+        artifacts = metadata.build_artifacts if metadata is not None else None
+        if isinstance(artifacts, dict):
+            dist_path = artifacts.get("dist_path")
+            if isinstance(dist_path, str) and dist_path.strip():
+                candidate = Path(dist_path).expanduser()
+
+        if candidate is None:
+            candidate = Path("~/.instant-coffee/sessions").expanduser() / session_id / "dist"
+
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+
+        if not resolved.is_dir():
+            return None
+        return resolved
 
     def _get_legacy_index_html(self, session_id: str) -> Optional[str]:
         session = self.db.get(SessionModel, session_id)

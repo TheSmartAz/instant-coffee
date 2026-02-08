@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html as html_lib
+import json
 import logging
 import re
 import time
@@ -10,18 +11,22 @@ from typing import Any, Callable, List, Optional, Sequence
 
 from .base import BaseAgent
 from .prompts import get_generation_prompt, get_generation_prompt_multipage
+from .style_refiner import StyleRefiner
 from ..llm.model_pool import ModelRole
 from ..llm.tool_handlers import MAX_WRITE_BYTES
 from ..llm.tools import get_filesystem_tools
 from ..schemas.sitemap import GlobalStyle, NavItem, SitemapPage
+from ..services.app_data_store import get_app_data_store
+from ..services.component_registry import ComponentRegistryService
 from ..services.data_protocol import DataProtocolGenerator
 from ..services.filesystem import FilesystemService
 from ..services.page_version import PageVersionService
+from ..utils.component_assembler import assemble_components
 from ..utils.html import (
     build_nav_html,
     ensure_css_link,
-    ensure_nav_html,
     inline_css,
+    ensure_dom_ids,
     normalize_internal_links,
     strip_prompt_artifacts,
 )
@@ -43,6 +48,8 @@ STRICT_HTML_RETRY_INSTRUCTIONS = (
     "Do not include markdown, code fences, or explanations. "
     "Wrap the HTML in <HTML_OUTPUT>...</HTML_OUTPUT>."
 )
+
+_STYLE_TAG_RE = re.compile(r"<style\b[^>]*>(.*?)</style>", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass
@@ -204,13 +211,6 @@ class GenerationAgent(BaseAgent):
                 warnings.extend(link_warnings)
                 logger.warning("GenerationAgent detected broken internal links: %s", ", ".join(link_warnings))
 
-            nav_html = build_nav_html(
-                nav or [],
-                current_slug=self._get_page_slug(page_spec),
-                all_pages=resolved_pages,
-            )
-            html = ensure_nav_html(html, nav_html)
-
             global_style_css = self._build_site_css(global_style, product_doc)
             if css_mode == "external":
                 css_href = self._resolve_css_href(page_spec)
@@ -223,6 +223,15 @@ class GenerationAgent(BaseAgent):
                 output_dir=output_dir,
                 page_slug=self._get_page_slug(page_spec),
             )
+            await self._provision_app_data_tables(product_doc=product_doc)
+            html = self._apply_component_registry(
+                html,
+                product_doc=product_doc,
+                output_dir=output_dir,
+                page_slug=self._get_page_slug(page_spec),
+            )
+            html = await self._ensure_page_styles(html, product_doc=product_doc)
+            html = ensure_dom_ids(html)
 
             filepath = ""
             preview_url = ""
@@ -266,6 +275,15 @@ class GenerationAgent(BaseAgent):
             output_dir=output_dir,
             page_slug="index",
         )
+        await self._provision_app_data_tables(product_doc=product_doc)
+        html = self._apply_component_registry(
+            html,
+            product_doc=product_doc,
+            output_dir=output_dir,
+            page_slug="index",
+        )
+        html = await self._ensure_page_styles(html, product_doc=product_doc)
+        html = ensure_dom_ids(html)
 
         filepath, preview_url = self._save_html(output_dir=output_dir, html=html)
         self._current_html = html
@@ -517,6 +535,52 @@ class GenerationAgent(BaseAgent):
         design = structured.get("design_direction") or structured.get("designDirection") or {}
         return design if isinstance(design, dict) else {}
 
+    def _resolve_product_type(self, product_doc: Any) -> Optional[str]:
+        if product_doc is None:
+            return None
+        structured = None
+        if isinstance(product_doc, dict):
+            structured = product_doc.get("structured")
+        else:
+            structured = getattr(product_doc, "structured", None)
+        if isinstance(structured, dict):
+            value = structured.get("product_type") or structured.get("productType")
+            if value:
+                return str(value).strip().lower()
+        return None
+
+    def _needs_page_css(self, html: str) -> bool:
+        if not html:
+            return True
+        matches = _STYLE_TAG_RE.findall(html)
+        if not matches:
+            return True
+        if len(matches) > 1:
+            return False
+        only = matches[0] or ""
+        return "Site-wide Design System" in only
+
+    async def _ensure_page_styles(self, html: str, *, product_doc: Any | None) -> str:
+        if not self._needs_page_css(html):
+            return html
+        try:
+            refiner = StyleRefiner(
+                self.db,
+                self.session_id,
+                self.settings,
+                event_emitter=self.event_emitter,
+                agent_id="style_refiner_css",
+                emit_lifecycle_events=False,
+            )
+            refined = await refiner.refine(
+                html,
+                product_type=self._resolve_product_type(product_doc),
+            )
+            return refined or html
+        except Exception:
+            logger.exception("Style refiner failed to add page CSS")
+            return html
+
     def _resolve_all_pages(
         self,
         *,
@@ -544,7 +608,7 @@ class GenerationAgent(BaseAgent):
 
     def _build_site_css(self, global_style: GlobalStyle | dict | None, product_doc: Any) -> str:
         design_direction = self._extract_design_direction(product_doc)
-        return build_site_css(self._coerce_mapping(global_style), design_direction)
+        return build_site_css(self._coerce_mapping(global_style), design_direction, include_nav=False)
 
     def _build_version_description(self, page_spec: SitemapPage | dict) -> str:
         title = self._get_page_field(page_spec, "title")
@@ -578,6 +642,9 @@ class GenerationAgent(BaseAgent):
         marker_start = re.search(r"<HTML_OUTPUT>", candidate, re.IGNORECASE)
         if marker_start:
             candidate = candidate[marker_start.end() :].strip()
+            # If the model didn't close the marker, fall back to raw segment.
+            if "</html>" not in candidate.lower() and "<html" not in candidate.lower():
+                return candidate.strip()
 
         lowered = candidate.lower()
         start = lowered.find("<!doctype html")
@@ -590,6 +657,9 @@ class GenerationAgent(BaseAgent):
         html_match = re.search(r"<html\b[\s\S]*?</html>", candidate, re.IGNORECASE)
         if html_match:
             return html_match.group(0).strip()
+        html_start = re.search(r"<html\b", candidate, re.IGNORECASE)
+        if html_start:
+            return candidate[html_start.start():].strip()
 
         logger.warning("GenerationAgent failed to extract HTML from response")
         return ""
@@ -603,6 +673,7 @@ class GenerationAgent(BaseAgent):
     ) -> tuple[str, Any]:
         response = initial_response
         html = self._extract_html(getattr(response, "content", "") or "")
+        last_html = html
         if html and self._is_html_complete(html):
             return html, response
 
@@ -625,6 +696,8 @@ class GenerationAgent(BaseAgent):
                 context=f"generation-strict-retry-{attempt}",
             )
             html = self._extract_html(getattr(response, "content", "") or "")
+            if html:
+                last_html = html
             if html and self._is_html_complete(html):
                 return html, response
             if html:
@@ -634,7 +707,7 @@ class GenerationAgent(BaseAgent):
 
         if stream:
             logger.warning("GenerationAgent failed to extract HTML after streaming retries")
-        return "", response
+        return last_html or "", response
 
     def _strip_prompt_artifacts(self, html: str) -> str:
         cleaned = strip_prompt_artifacts(html)
@@ -734,6 +807,100 @@ class GenerationAgent(BaseAgent):
             return generator.prepare_html(html, product_doc=product_doc, page_slug=page_slug)
         except Exception:
             logger.exception("GenerationAgent failed to apply data protocol injection")
+            return html
+
+    async def _provision_app_data_tables(self, *, product_doc: Any | None) -> None:
+        data_model = self._extract_data_model(product_doc)
+        entities = data_model.get("entities") if isinstance(data_model, dict) else None
+        if not isinstance(entities, dict) or not entities:
+            return
+
+        store = get_app_data_store()
+        if not store.enabled:
+            return
+
+        try:
+            schema = await store.create_schema(self.session_id)
+            summary = await store.create_tables(self.session_id, data_model)
+            logger.info(
+                "GenerationAgent app data schema provisioned: session_id=%s schema=%s summary=%s",
+                self.session_id,
+                schema,
+                summary,
+            )
+        except Exception:
+            logger.warning(
+                "GenerationAgent app data schema provisioning failed for session %s",
+                self.session_id,
+                exc_info=True,
+            )
+
+    def _extract_data_model(self, product_doc: Any | None) -> dict[str, Any]:
+        if product_doc is None:
+            return {}
+
+        structured: Any = None
+        if isinstance(product_doc, dict):
+            structured = product_doc.get("structured") if isinstance(product_doc.get("structured"), dict) else None
+            if structured is None:
+                structured = product_doc
+        else:
+            maybe_structured = getattr(product_doc, "structured", None)
+            if isinstance(maybe_structured, dict):
+                structured = maybe_structured
+
+        if not isinstance(structured, dict):
+            return {}
+
+        data_model = structured.get("data_model")
+        if hasattr(data_model, "model_dump"):
+            dumped = data_model.model_dump(by_alias=True, exclude_none=True)
+            return dumped if isinstance(dumped, dict) else {}
+        return data_model if isinstance(data_model, dict) else {}
+
+    def _apply_component_registry(
+        self,
+        html: str,
+        *,
+        product_doc: Any | None,
+        output_dir: Optional[str],
+        page_slug: Optional[str] = None,
+    ) -> str:
+        if not output_dir or not product_doc:
+            return html
+        structured = None
+        if isinstance(product_doc, dict):
+            structured = product_doc.get("structured")
+        else:
+            structured = getattr(product_doc, "structured", None)
+        if not isinstance(structured, dict):
+            return html
+        registry_info = structured.get("component_registry")
+        if hasattr(registry_info, "model_dump"):
+            registry_info = registry_info.model_dump()
+        if not isinstance(registry_info, dict):
+            return html
+        registry_path = registry_info.get("path")
+        if not registry_path:
+            return html
+        service = ComponentRegistryService(output_dir, self.session_id)
+        resolved = service.resolve_relative_path(str(registry_path))
+        if not resolved.exists():
+            return html
+        try:
+            registry = json.loads(resolved.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("Failed to load component registry")
+            return html
+        try:
+            return assemble_components(
+                html,
+                registry,
+                base_dir=service.session_dir,
+                page_slug=page_slug,
+            )
+        except Exception:
+            logger.exception("Component assembly failed; returning original HTML")
             return html
 
     def _resolve_safe_path(self, *, session_dir: Path, path: str) -> Path:

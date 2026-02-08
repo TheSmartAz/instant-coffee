@@ -13,10 +13,13 @@ from ..events.models import (
     ToolCallEvent,
     ToolResultEvent,
     TokenUsageEvent,
+    workflow_event,
 )
+from ..events.types import EventType
 from ..llm.model_pool import FallbackTrigger, ModelRole, get_model_pool_manager
 from ..llm.openai_client import LLMResponse, OpenAIClient
 from ..services.token_tracker import TokenTrackerService
+from ..services.tool_policy import PolicyResult, ToolPolicyContext, ToolPolicyService
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,7 @@ class BaseAgent:
         self.model_role = model_role or self._infer_model_role()
         self.product_type = product_type
         self.model_pool = model_pool or get_model_pool_manager(self.settings)
+        self._tool_policy = ToolPolicyService(self.settings)
 
     def _get_llm_client(self) -> OpenAIClient:
         if self._llm_client is None:
@@ -571,6 +575,29 @@ class BaseAgent:
                 self._log_value(tool_input),
             )
             self._emit_tool_call(tool_name, tool_input)
+
+            policy_context = self._build_tool_policy_context(tool_name=tool_name, tool_input=tool_input)
+            pre_findings = self._tool_policy.pre_tool_use(policy_context)
+            self._emit_tool_policy_findings(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                stage="pre",
+                findings=pre_findings,
+            )
+            blocked_pre = self._first_blocking_policy(pre_findings)
+            if blocked_pre is not None:
+                error_message = f"Tool blocked by policy ({blocked_pre.policy}): {blocked_pre.reason}"
+                logger.warning(
+                    "Tool blocked: name=%s agent_id=%s task_id=%s policy=%s reason=%s",
+                    tool_name,
+                    self.agent_id or "unknown",
+                    self.task_id,
+                    blocked_pre.policy,
+                    blocked_pre.reason,
+                )
+                self._emit_tool_result(tool_name, success=False, error=error_message)
+                return {"success": False, "output": None, "error": error_message}
+
             try:
                 result = handler(*args, **kwargs)
                 if inspect.isawaitable(result):
@@ -584,6 +611,28 @@ class BaseAgent:
                     self.agent_id or "unknown",
                     self.task_id,
                     error_message,
+                )
+                self._emit_tool_result(tool_name, success=False, error=error_message)
+                return {"success": False, "output": None, "error": error_message}
+
+            post_result = self._tool_policy.post_tool_use(policy_context, result_payload)
+            result_payload = post_result.result
+            self._emit_tool_policy_findings(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                stage="post",
+                findings=post_result.findings,
+            )
+            blocked_post = self._first_blocking_policy(post_result.findings)
+            if blocked_post is not None:
+                error_message = f"Tool blocked by policy ({blocked_post.policy}): {blocked_post.reason}"
+                logger.warning(
+                    "Tool blocked after execution: name=%s agent_id=%s task_id=%s policy=%s reason=%s",
+                    tool_name,
+                    self.agent_id or "unknown",
+                    self.task_id,
+                    blocked_post.policy,
+                    blocked_post.reason,
                 )
                 self._emit_tool_result(tool_name, success=False, error=error_message)
                 return {"success": False, "output": None, "error": error_message}
@@ -611,6 +660,66 @@ class BaseAgent:
             return result_payload
 
         return wrapped
+
+    def _build_tool_policy_context(self, *, tool_name: str, tool_input: Any) -> ToolPolicyContext:
+        run_id = None
+        if self.event_emitter is not None:
+            run_id = getattr(self.event_emitter, "run_id", None)
+        return ToolPolicyContext(
+            tool_name=tool_name,
+            arguments=self._json_safe(tool_input),
+            session_id=self.session_id,
+            run_id=run_id,
+        )
+
+    def _emit_tool_policy_findings(
+        self,
+        *,
+        tool_name: str,
+        tool_input: Any,
+        stage: str,
+        findings: list[PolicyResult],
+    ) -> None:
+        if not findings:
+            return
+        for finding in findings:
+            self._emit_tool_policy_event(
+                finding=finding,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                stage=stage,
+            )
+
+    def _emit_tool_policy_event(
+        self,
+        *,
+        finding: PolicyResult,
+        tool_name: str,
+        tool_input: Any,
+        stage: str,
+    ) -> None:
+        if not self.event_emitter:
+            return
+        if finding.action not in {"warn", "block"}:
+            return
+        event_type = (
+            EventType.TOOL_POLICY_BLOCKED if finding.action == "block" else EventType.TOOL_POLICY_WARN
+        )
+        payload = {
+            "tool": tool_name,
+            "policy": finding.policy,
+            "reason": finding.reason,
+            "stage": stage,
+            "details": self._json_safe(finding.details or {}),
+            "arguments": self._json_safe(self._redact_for_log(tool_input)),
+        }
+        self.event_emitter.emit(workflow_event(event_type, payload))
+
+    def _first_blocking_policy(self, findings: list[PolicyResult]) -> Optional[PolicyResult]:
+        for finding in findings:
+            if finding.action == "block":
+                return finding
+        return None
 
     def _format_tool_input(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         if kwargs:

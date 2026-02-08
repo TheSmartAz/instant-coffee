@@ -1,0 +1,18 @@
+{
+  "shared_state_key": "instant-coffee:state",
+  "records_key": "instant-coffee:records",
+  "events_key": "instant-coffee:events",
+  "events": [
+    "page_view",
+    "search",
+    "reading_progress"
+  ],
+  "schema": {
+    "manual": {},
+    "sections": [],
+    "pages": [],
+    "reading": {
+      "progress": {}
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import type { FileContent, FileTreeNode } from '../types'
+import type { ExecutionEvent } from '../types/events'
 
 interface UseFileTreeResult {
   tree: FileTreeNode[]
@@ -20,6 +21,14 @@ export function useFileTree(sessionId: string): UseFileTreeResult {
   const [error, setError] = useState<Error | null>(null)
   const [contentCache, setContentCache] = useState<Record<string, FileContent>>({})
 
+  useEffect(() => {
+    setTree([])
+    setSelectedFile(null)
+    setContentCache({})
+    setError(null)
+    setIsLoading(Boolean(sessionId))
+  }, [sessionId])
+
   const fetchTree = useCallback(async () => {
     try {
       setIsLoading(true)
@@ -33,6 +42,12 @@ export function useFileTree(sessionId: string): UseFileTreeResult {
       setIsLoading(false)
     }
   }, [sessionId])
+
+  const refreshTree = useCallback(async () => {
+    setContentCache({})
+    setSelectedFile(null)
+    await fetchTree()
+  }, [fetchTree])
 
   const selectFile = useCallback(
     async (path: string) => {
@@ -62,6 +77,25 @@ export function useFileTree(sessionId: string): UseFileTreeResult {
     fetchTree()
   }, [fetchTree])
 
+  useEffect(() => {
+    if (!sessionId) return
+
+    const handleBuildEvent = (event: Event) => {
+      const customEvent = event as CustomEvent<ExecutionEvent>
+      const detail = customEvent.detail
+      if (!detail || typeof detail !== 'object') return
+      if (detail.type !== 'build_complete') return
+
+      const eventSessionId = (detail as { session_id?: unknown }).session_id
+      if (typeof eventSessionId === 'string' && eventSessionId !== sessionId) return
+
+      void refreshTree()
+    }
+
+    window.addEventListener('build-event', handleBuildEvent)
+    return () => window.removeEventListener('build-event', handleBuildEvent)
+  }, [refreshTree, sessionId])
+
   return {
     tree,
     selectedFile,
@@ -69,6 +103,6 @@ export function useFileTree(sessionId: string): UseFileTreeResult {
     isLoading,
     isContentLoading,
     error,
-    refresh: fetchTree,
+    refresh: refreshTree,
   }
 }

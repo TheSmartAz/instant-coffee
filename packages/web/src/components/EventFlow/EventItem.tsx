@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import * as React from 'react'
 import { format } from 'date-fns'
 import type { ExecutionEvent, ToolCallEvent, ToolResultEvent } from '@/types/events'
 import {
@@ -102,6 +102,30 @@ const getEventTitle = (event: ExecutionEvent): string => {
       return 'Snapshot created'
     case 'history_created':
       return 'History created'
+    case 'run_created':
+      return 'Run created'
+    case 'run_started':
+      return 'Run started'
+    case 'run_waiting_input':
+      return 'Run waiting input'
+    case 'run_resumed':
+      return 'Run resumed'
+    case 'run_completed':
+      return 'Run completed'
+    case 'run_failed':
+      return event.error ?? 'Run failed'
+    case 'run_cancelled':
+      return 'Run cancelled'
+    case 'verify_start':
+      return 'Verify started'
+    case 'verify_pass':
+      return 'Verify passed'
+    case 'verify_fail':
+      return 'Verify failed'
+    case 'tool_policy_blocked':
+      return event.message ?? 'Tool policy blocked'
+    case 'tool_policy_warn':
+      return event.message ?? 'Tool policy warning'
     default:
       return event.type
   }
@@ -144,11 +168,23 @@ const getEventStatus = (event: ExecutionEvent): EventStatus => {
     case 'history_created':
     case 'interview_question':
     case 'interview_answer':
+    case 'run_created':
+    case 'run_started':
+    case 'run_waiting_input':
+    case 'run_resumed':
+    case 'run_completed':
+    case 'verify_start':
+    case 'verify_pass':
+    case 'tool_policy_warn':
       return 'done'
     case 'task_failed':
     case 'task_aborted':
     case 'error':
     case 'product_doc_outdated':
+    case 'run_failed':
+    case 'run_cancelled':
+    case 'verify_fail':
+    case 'tool_policy_blocked':
       return 'failed'
     case 'task_blocked':
       return 'pending'
@@ -179,10 +215,13 @@ const getBadge = (event: ExecutionEvent): string | undefined => {
   if (event.type === 'version_created') return 'Version'
   if (event.type === 'snapshot_created') return 'Snapshot'
   if (event.type === 'history_created') return 'History'
+  if (event.type.startsWith('run_')) return 'Run'
+  if (event.type.startsWith('verify_')) return 'Verify'
+  if (event.type.startsWith('tool_policy_')) return 'Policy'
   return undefined
 }
 
-const buildDetails = (event: ExecutionEvent): ReactNode | undefined => {
+const buildDetails = (event: ExecutionEvent): React.ReactNode | undefined => {
   // Tool events have their own specialized display components
   if (event.type === 'tool_call') {
     return <ToolCallEventDisplay event={event as ToolCallEvent} />
@@ -206,7 +245,10 @@ const buildDetails = (event: ExecutionEvent): ReactNode | undefined => {
     event.type === 'product_doc_updated' ||
     event.type === 'page_created' ||
     event.type === 'interview_question' ||
-    event.type === 'interview_answer'
+    event.type === 'interview_answer' ||
+    event.type.startsWith('run_') ||
+    event.type.startsWith('verify_') ||
+    event.type.startsWith('tool_policy_')
 
   if (!hasDetails) return undefined
 
@@ -217,7 +259,7 @@ const buildDetails = (event: ExecutionEvent): ReactNode | undefined => {
   )
 }
 
-export function EventItem({ event }: EventItemProps) {
+export const EventItem = React.memo(function EventItem({ event }: EventItemProps) {
   const status = getEventStatus(event)
   const title = getEventTitle(event)
   const timestamp = formatTimestamp(event.timestamp)
@@ -256,4 +298,4 @@ export function EventItem({ event }: EventItemProps) {
       isCollapsible={Boolean(details)}
     />
   )
-}
+}, (prev, next) => prev.event === next.event)

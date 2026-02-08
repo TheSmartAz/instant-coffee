@@ -1,7 +1,9 @@
 import * as React from 'react'
 import { api, API_BASE } from '@/api/client'
+import { uploadAsset as uploadAssetApi } from '@/api/assets'
 import { toast } from '@/hooks/use-toast'
 import { saveInterviewBatch, clearInterviewBatch } from '@/lib/interviewStorage'
+import { loadChatAssets, saveChatAssets } from '@/lib/assetStorage'
 import {
   clearPendingMessage,
   savePendingMessage,
@@ -20,6 +22,8 @@ import type {
   InterviewQuestion,
   Message,
   ChatAction,
+  ChatAsset,
+  AssetType,
 } from '@/types'
 import type { ExecutionEvent, ToolCallEvent, ToolResultEvent } from '@/types/events'
 
@@ -148,12 +152,16 @@ const buildToolLabel = (event: ToolCallEvent | ToolResultEvent) => {
 const isEventPayload = (payload: unknown): payload is ExecutionEvent =>
   Boolean(payload && typeof payload === 'object' && 'type' in payload)
 
-const isInterviewPayload = (payload: unknown): payload is {
+type InterviewPayloadLike = {
   phase?: string
   questions?: InterviewQuestion[]
   message?: string
   batch_id?: string
-} => Boolean(payload && typeof payload === 'object' && 'questions' in payload)
+  batchId?: string
+}
+
+const isInterviewPayload = (payload: unknown): payload is InterviewPayloadLike =>
+  Boolean(payload && typeof payload === 'object' && 'questions' in payload)
 
 
 const formatInterviewSummaryText = (answers: InterviewAnswer[]) => {
@@ -185,13 +193,27 @@ const buildInterviewPayload = (
   return `<INTERVIEW_ANSWERS>\n${JSON.stringify(payload)}\n</INTERVIEW_ANSWERS>${summary}`
 }
 
+const PRODUCT_DOC_ACTIONS = new Set([
+  'product_doc_generated',
+  'product_doc_updated',
+  'product_doc_confirmed',
+  'product_doc_outdated',
+])
+
+const ASSET_TYPE_LABELS: Record<AssetType, string> = {
+  logo: 'Logo',
+  style_ref: 'Style reference',
+  background: 'Background',
+  product_image: 'Product image',
+}
+
 export interface UseChatOptions {
   sessionId?: string
   initialMessages?: Message[]
   messages?: Message[]
   setMessages?: React.Dispatch<React.SetStateAction<Message[]>>
   onPreview?: (payload: { html?: string; previewUrl?: string | null }) => void
-  onTabChange?: (tab: 'preview' | 'code' | 'product-doc') => void
+  onTabChange?: (tab: 'preview' | 'code' | 'product-doc' | 'data') => void
   onPageSelect?: (slug: string) => void
   onSessionCreated?: (sessionId: string) => void
 }
@@ -202,6 +224,7 @@ export interface SendMessageOptions {
   attachments?: ChatAttachment[]
   targetPages?: string[]
   styleReference?: ChatStyleReference
+  resume?: Record<string, unknown>
 }
 
 export function useChat({
@@ -218,6 +241,9 @@ export function useChat({
   const [isStreaming, setIsStreaming] = React.useState(false)
   const [connectionState, setConnectionState] = React.useState<ConnectionState>('idle')
   const [error, setError] = React.useState<string | null>(null)
+  const [assets, setAssets] = React.useState<ChatAsset[]>(() =>
+    loadChatAssets(sessionId)
+  )
   const eventSourceRef = React.useRef<EventSource | null>(null)
   const fetchAbortRef = React.useRef<AbortController | null>(null)
   const streamMessageIdRef = React.useRef<string | null>(null)
@@ -228,8 +254,10 @@ export function useChat({
   const interviewTotalRef = React.useRef(0)
   const interviewAnswersRef = React.useRef<Record<string, InterviewAnswer>>({})
   const interviewModeRef = React.useRef(false)
+  const resumePendingRef = React.useRef(false)
   const sessionIdRef = React.useRef(sessionId)
   const createdSessionIdRef = React.useRef<string | null>(null)
+  const assetsRef = React.useRef<ChatAsset[]>(assets)
 
   const messages = controlledMessages ?? localMessages
   const setMessages = setControlledMessages ?? setLocalMessages
@@ -258,6 +286,21 @@ export function useChat({
     }
   }, [sessionId])
 
+  React.useEffect(() => {
+    if (!sessionId) {
+      setAssets([])
+      return
+    }
+    setAssets(loadChatAssets(sessionId))
+  }, [sessionId])
+
+  React.useEffect(() => {
+    assetsRef.current = assets
+    const activeSessionId = sessionIdRef.current
+    if (!activeSessionId) return
+    saveChatAssets(activeSessionId, assets)
+  }, [assets])
+
   const maybeNotifySessionCreated = React.useCallback(
     (value: unknown) => {
       if (typeof value !== 'string' || !value) return
@@ -268,6 +311,61 @@ export function useChat({
       onSessionCreated?.(value)
     },
     [onSessionCreated]
+  )
+
+  const requireSessionId = React.useCallback(() => {
+    const currentSessionId = sessionIdRef.current
+    if (!currentSessionId) {
+      throw new Error(
+        'Start a chat to create a session before uploading assets.'
+      )
+    }
+    return currentSessionId
+  }, [])
+
+  const addAsset = React.useCallback((asset: ChatAsset) => {
+    setAssets((prev) => {
+      const index = prev.findIndex((item) => item.id === asset.id)
+      if (index >= 0) {
+        const next = [...prev]
+        next[index] = { ...next[index], ...asset }
+        return next
+      }
+      return [...prev, asset]
+    })
+  }, [])
+
+  const removeAsset = React.useCallback((assetId: string) => {
+    setAssets((prev) => prev.filter((asset) => asset.id !== assetId))
+  }, [])
+
+  const getAssetById = React.useCallback((assetId: string) => {
+    return assetsRef.current.find((asset) => asset.id === assetId) ?? null
+  }, [])
+
+  const appendAssetMessage = React.useCallback(
+    (asset: ChatAsset) => {
+      setMessages((prev) => {
+        const alreadyAdded = prev.some(
+          (message) =>
+            message.assets?.some((item) => item.id === asset.id) ||
+            message.content.includes(asset.id)
+        )
+        if (alreadyAdded) return prev
+        const label = ASSET_TYPE_LABELS[asset.assetType] ?? asset.assetType
+        return [
+          ...prev,
+          {
+            id: createId(),
+            role: 'user',
+            content: `Uploaded ${label}`,
+            timestamp: new Date(),
+            assets: [asset],
+          },
+        ]
+      })
+    },
+    [setMessages]
   )
 
   React.useEffect(() => {
@@ -446,6 +544,29 @@ export function useChat({
     }
   }, [resetInterviewState, sessionId, setMessages, stopStream])
 
+  const uploadAsset = React.useCallback(
+    async (
+      file: File,
+      assetType: AssetType,
+      options?: { onProgress?: (progress: number) => void }
+    ) => {
+      const activeSessionId = requireSessionId()
+      const assetRef = await uploadAssetApi(activeSessionId, file, assetType, {
+        onProgress: options?.onProgress,
+      })
+      const chatAsset: ChatAsset = {
+        ...assetRef,
+        assetType,
+        name: file.name,
+        size: file.size,
+        createdAt: new Date().toISOString(),
+      }
+      addAsset(chatAsset)
+      appendAssetMessage(chatAsset)
+    },
+    [addAsset, appendAssetMessage, requireSessionId]
+  )
+
   const handleActionTabSwitch = React.useCallback(
     (action: ChatAction, activePageSlug?: string | null) => {
       switch (action) {
@@ -470,6 +591,16 @@ export function useChat({
     [onTabChange, onPageSelect]
   )
 
+  const dispatchProductDocEvent = React.useCallback((payload: {
+    type: string
+    doc_id?: string
+    change_summary?: string
+  }) => {
+    if (typeof window === 'undefined') return
+    if (!payload.type || !PRODUCT_DOC_ACTIONS.has(payload.type)) return
+    window.dispatchEvent(new CustomEvent('product-doc-event', { detail: payload }))
+  }, [])
+
   const fallbackSend = React.useCallback(
     async (content: string, options?: SendMessageOptions) => {
       if (!content.trim()) return
@@ -492,6 +623,9 @@ export function useChat({
         if (options?.styleReference) {
           payload.style_reference = options.styleReference
         }
+        if (options?.resume) {
+          payload.resume = options.resume
+        }
         const response = (await api.chat.send(payload)) as ChatResponse
         if (response?.session_id) {
           maybeNotifySessionCreated(response.session_id)
@@ -501,9 +635,9 @@ export function useChat({
           updateMessageById(messageId, (message) => ({
             ...message,
             content: response.message ?? message.content,
-            action: response.action,
-            affectedPages: response.affected_pages,
-            activePageSlug: response.active_page_slug,
+            action: response.action ?? undefined,
+            affectedPages: response.affected_pages ?? undefined,
+            activePageSlug: response.active_page_slug ?? undefined,
           }))
         }
         if (response?.preview_html || response?.preview_url) {
@@ -511,6 +645,12 @@ export function useChat({
             html: response.preview_html ?? undefined,
             previewUrl: response.preview_url ?? undefined,
           })
+        }
+
+        if (response.action && PRODUCT_DOC_ACTIONS.has(response.action)) {
+          dispatchProductDocEvent({ type: response.action })
+        } else if (response.product_doc_updated) {
+          dispatchProductDocEvent({ type: 'product_doc_updated' })
         }
 
         // Handle action-based tab switching
@@ -533,7 +673,76 @@ export function useChat({
         finishStream()
       }
     },
-    [finishStream, handleActionTabSwitch, maybeNotifySessionCreated, onPreview, updateMessageById]
+    [
+      dispatchProductDocEvent,
+      finishStream,
+      handleActionTabSwitch,
+      maybeNotifySessionCreated,
+      onPreview,
+      updateMessageById,
+    ]
+  )
+
+  const applyInterviewQuestions = React.useCallback(
+    (payload: InterviewPayloadLike) => {
+      if (!Array.isArray(payload.questions)) return false
+      const normalizedQuestions = normalizeInterviewQuestions(payload.questions)
+      if (normalizedQuestions.length === 0) return false
+      receivedEventRef.current = true
+      const messageId = streamMessageIdRef.current
+      if (!messageId) return false
+
+      const payloadBatchId = payload.batch_id ?? payload.batchId
+      const prompt = typeof payload.message === 'string' ? payload.message : undefined
+      let interviewBatch: InterviewBatch | null = null
+
+      updateMessageById(messageId, (message) => {
+        if (message.interview) {
+          if (
+            payloadBatchId &&
+            message.interview.id !== String(payloadBatchId)
+          ) {
+            const updated: InterviewBatch = {
+              ...message.interview,
+              id: String(payloadBatchId),
+              prompt: prompt ?? message.interview.prompt,
+              questions: normalizedQuestions.length
+                ? normalizedQuestions
+                : message.interview.questions,
+            }
+            interviewBatch = updated
+            return { ...message, interview: updated }
+          }
+          return message
+        }
+
+        const startIndex = interviewTotalRef.current + 1
+        const totalCount = interviewTotalRef.current + normalizedQuestions.length
+        interviewTotalRef.current = totalCount
+        const batchId = String(payloadBatchId ?? createId())
+        interviewBatch = {
+          id: batchId,
+          prompt,
+          questions: normalizedQuestions,
+          startIndex,
+          totalCount,
+          status: 'active',
+        }
+        return {
+          ...message,
+          content: '',
+          interview: interviewBatch,
+        }
+      })
+
+      if (!interviewBatch) return false
+      interviewModeRef.current = true
+      if (sessionId) {
+        saveInterviewBatch(sessionId, interviewBatch)
+      }
+      return true
+    },
+    [sessionId, updateMessageById]
   )
 
   const handleStreamData = React.useCallback(
@@ -550,6 +759,14 @@ export function useChat({
       }
       if (isEventPayload(payload)) {
         receivedEventRef.current = true
+        if (payload.type === 'interview_question') {
+          applyInterviewQuestions(payload as InterviewPayloadLike)
+          return
+        }
+        if (payload.type === 'refine_waiting' || payload.type === 'interrupt') {
+          resumePendingRef.current = true
+          interviewModeRef.current = false
+        }
         if (payload.type.startsWith('agent_')) {
           const label = buildAgentLabel(payload)
           const step: ChatStep = {
@@ -611,6 +828,19 @@ export function useChat({
             new CustomEvent('page-event', { detail: payload })
           )
         }
+        if (payload.type === 'aesthetic_score') {
+          window.dispatchEvent(
+            new CustomEvent('aesthetic-score-event', { detail: payload })
+          )
+        }
+        if (
+          payload.type === 'build_start' ||
+          payload.type === 'build_progress' ||
+          payload.type === 'build_complete' ||
+          payload.type === 'build_failed'
+        ) {
+          window.dispatchEvent(new CustomEvent('build-event', { detail: payload }))
+        }
         // Handle MultiPage decision events
         if (payload.type === 'multipage_decision_made') {
           window.dispatchEvent(
@@ -625,38 +855,8 @@ export function useChat({
         }
         return
       }
-      if (isInterviewPayload(payload) && Array.isArray(payload.questions)) {
-        const normalizedQuestions = normalizeInterviewQuestions(payload.questions)
-        if (normalizedQuestions.length > 0) {
-          receivedEventRef.current = true
-          const messageId = streamMessageIdRef.current
-          if (messageId) {
-            interviewModeRef.current = true
-            const startIndex = interviewTotalRef.current + 1
-            const totalCount = interviewTotalRef.current + normalizedQuestions.length
-            interviewTotalRef.current = totalCount
-            const batchId = String((payload as { batch_id?: string }).batch_id ?? createId())
-            const prompt =
-              typeof payload.message === 'string' ? payload.message : undefined
-            const interviewBatch: InterviewBatch = {
-              id: batchId,
-              prompt,
-              questions: normalizedQuestions,
-              startIndex,
-              totalCount,
-              status: 'active',
-            }
-            updateMessageById(messageId, (message) => ({
-              ...message,
-              content: '',
-              interview: interviewBatch,
-            }))
-            if (sessionId) {
-              saveInterviewBatch(sessionId, interviewBatch)
-            }
-          }
-          return
-        }
+      if (isInterviewPayload(payload) && applyInterviewQuestions(payload)) {
+        return
       }
       receivedEventRef.current = true
 
@@ -669,12 +869,26 @@ export function useChat({
         payload.delta ?? payload.token ?? payload.content ?? payload.message ?? payload.text
       const fullContent =
         payload.full_content ?? payload.fullContent ?? payload.output ?? payload.result
-      const done = payload.done || payload.type === 'done'
+      const done =
+        payload.done ||
+        payload.type === 'done' ||
+        payload.is_complete === true ||
+        payload.isComplete === true
 
       // Parse new response fields
       const action = payload.action as ChatAction | undefined
       const activePageSlug = payload.active_page_slug ?? payload.activePageSlug as string | undefined
       const affectedPages = payload.affected_pages ?? payload.affectedPages as string[] | undefined
+      const productDocUpdated =
+        typeof (payload as { product_doc_updated?: unknown }).product_doc_updated === 'boolean'
+          ? (payload as { product_doc_updated?: boolean }).product_doc_updated
+          : false
+
+      if (action && PRODUCT_DOC_ACTIONS.has(action)) {
+        dispatchProductDocEvent({ type: action })
+      } else if (productDocUpdated) {
+        dispatchProductDocEvent({ type: 'product_doc_updated' })
+      }
 
       const hasDelta =
         typeof (payload as { delta?: unknown }).delta === 'string' ||
@@ -731,10 +945,11 @@ export function useChat({
     },
     [
       appendStep,
+      applyInterviewQuestions,
+      dispatchProductDocEvent,
       handleActionTabSwitch,
       maybeNotifySessionCreated,
       onPreview,
-      sessionId,
       stopStream,
       updateMessageById,
     ]
@@ -814,6 +1029,9 @@ export function useChat({
       if (options?.styleReference) {
         payload.style_reference = options.styleReference
       }
+      if (options?.resume) {
+        payload.resume = options.resume
+      }
 
       try {
         const base = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE
@@ -862,6 +1080,9 @@ export function useChat({
             handleStreamData(data)
           }
         }
+        if (!controller.signal.aborted) {
+          stopStream()
+        }
       } catch {
         if (controller.signal.aborted) return
         setConnectionState('error')
@@ -905,7 +1126,8 @@ export function useChat({
       const requiresPostStream = Boolean(
         options?.attachments?.length ||
           options?.targetPages?.length ||
-          options?.styleReference
+          options?.styleReference ||
+          options?.resume
       )
 
       if (requiresPostStream) {
@@ -932,13 +1154,22 @@ export function useChat({
       if (!content.trim()) return
       setError(null)
 
-      const shouldTriggerInterview = options?.triggerInterview ?? interviewModeRef.current
-      const generateNow = options?.generateNow
       const trimmed = content.trim()
+      const resumePayload = resumePendingRef.current
+        ? { user_feedback: trimmed }
+        : options?.resume
+      if (resumePendingRef.current) {
+        resumePendingRef.current = false
+      }
+      const shouldTriggerInterview = resumePayload
+        ? false
+        : options?.triggerInterview ?? interviewModeRef.current
+      const generateNow = options?.generateNow
 
       const allAnswers = Object.values(interviewAnswersRef.current)
-      const rawContent =
-        allAnswers.length > 0
+      const rawContent = resumePayload
+        ? trimmed
+        : allAnswers.length > 0
           ? `${trimmed}\n\n${buildInterviewPayload('update', allAnswers, { includeSummary: false })}`
           : trimmed
 
@@ -962,6 +1193,7 @@ export function useChat({
         attachments: options?.attachments,
         targetPages: options?.targetPages,
         styleReference: options?.styleReference,
+        resume: resumePayload,
       })
     },
     [enqueueConversation]
@@ -1046,6 +1278,11 @@ export function useChat({
     isStreaming,
     connectionState,
     error,
+    assets,
+    addAsset,
+    removeAsset,
+    getAssetById,
+    uploadAsset,
     sendMessage,
     handleInterviewAction,
     stopStream,

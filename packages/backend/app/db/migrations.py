@@ -15,6 +15,7 @@ from .models import (
     Session,
     SessionEvent,
     SessionEventSequence,
+    SessionRun,
     VersionSource,
 )
 from ..services.page_version import PageVersionService
@@ -29,6 +30,9 @@ def init_db(database: Database | None = None) -> None:
     migrate_v05_version_models(db_instance)
     migrate_v06_indexes(db_instance)
     migrate_v06_session_metadata(db_instance)
+    migrate_v07_graph_state(db_instance)
+    migrate_v08_run_model(db_instance)
+    migrate_v08_event_run_columns(db_instance)
 
 
 def migrate_v04_product_doc_pages(database: Database | None = None) -> None:
@@ -117,6 +121,8 @@ def migrate_v06_indexes(database: Database | None = None) -> None:
     _ensure_index(engine, "tasks", "idx_tasks_plan_id", ["plan_id"])
     _ensure_index(engine, "tasks", "idx_tasks_status", ["status"])
     _ensure_index(engine, "page_versions", "idx_page_versions_page_created_at", ["page_id", "created_at"])
+
+
 def migrate_v06_session_metadata(database: Database | None = None) -> None:
     db_instance = database or get_database()
     engine = db_instance.engine
@@ -142,6 +148,102 @@ def migrate_v06_session_metadata(database: Database | None = None) -> None:
             if column in columns:
                 continue
             connection.execute(text(f"ALTER TABLE sessions ADD COLUMN {column} {ddl_type}"))
+
+
+def migrate_v07_graph_state(database: Database | None = None) -> None:
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    inspector = inspect(engine)
+    if "sessions" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("sessions")}
+    column_defs = {
+        "graph_state": "JSON",
+        "build_status": "VARCHAR(20) DEFAULT 'pending'",
+        "build_artifacts": "JSON",
+        "aesthetic_scores": "JSON",
+    }
+
+    with engine.begin() as connection:
+        for column, ddl_type in column_defs.items():
+            if column in columns:
+                continue
+            connection.execute(text(f"ALTER TABLE sessions ADD COLUMN {column} {ddl_type}"))
+        if "build_status" in column_defs:
+            connection.execute(
+                text("UPDATE sessions SET build_status = 'pending' WHERE build_status IS NULL")
+            )
+
+
+def migrate_v08_run_model(database: Database | None = None) -> None:
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    inspector = inspect(engine)
+
+    if "session_runs" not in inspector.get_table_names():
+        Base.metadata.create_all(bind=engine, tables=[SessionRun.__table__])
+
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("session_runs")}
+    column_defs = {
+        "parent_run_id": "VARCHAR",
+        "trigger_source": "VARCHAR(20) NOT NULL DEFAULT 'chat'",
+        "status": "VARCHAR(20) NOT NULL DEFAULT 'queued'",
+        "input_message": "TEXT",
+        "resume_payload": "JSON",
+        "checkpoint_thread": "VARCHAR",
+        "checkpoint_ns": "VARCHAR",
+        "latest_error": "JSON",
+        "metrics": "JSON",
+        "started_at": "DATETIME",
+        "finished_at": "DATETIME",
+        "created_at": "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    }
+
+    with engine.begin() as connection:
+        for column, ddl_type in column_defs.items():
+            if column in columns:
+                continue
+            connection.execute(text(f"ALTER TABLE session_runs ADD COLUMN {column} {ddl_type}"))
+
+    _ensure_index(
+        engine,
+        "session_runs",
+        "idx_session_runs_session_created",
+        ["session_id", "created_at"],
+    )
+    _ensure_index(engine, "session_runs", "idx_session_runs_status", ["status"])
+    _ensure_index(engine, "session_runs", "idx_session_runs_parent", ["parent_run_id"])
+
+
+def migrate_v08_event_run_columns(database: Database | None = None) -> None:
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    inspector = inspect(engine)
+
+    if "session_events" not in inspector.get_table_names():
+        Base.metadata.create_all(bind=engine, tables=[SessionEvent.__table__])
+
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("session_events")}
+    column_defs = {
+        "run_id": "VARCHAR",
+        "event_id": "VARCHAR",
+    }
+
+    with engine.begin() as connection:
+        for column, ddl_type in column_defs.items():
+            if column in columns:
+                continue
+            connection.execute(text(f"ALTER TABLE session_events ADD COLUMN {column} {ddl_type}"))
+
+    _ensure_index(
+        engine,
+        "session_events",
+        "idx_session_event_run_seq",
+        ["session_id", "run_id", "seq"],
+    )
 
 
 def _normalize_v05_sources(engine) -> None:
@@ -436,6 +538,7 @@ def _apply_v05_retention(database: Database) -> None:
             except Exception:
                 session.rollback()
 
+
 def downgrade_v04_product_doc_pages(database: Database | None = None) -> None:
     db_instance = database or get_database()
     Base.metadata.drop_all(
@@ -454,5 +557,8 @@ __all__ = [
     "migrate_v04_product_doc_pending_pages",
     "migrate_v05_version_models",
     "migrate_v06_session_metadata",
+    "migrate_v07_graph_state",
+    "migrate_v08_run_model",
+    "migrate_v08_event_run_columns",
     "downgrade_v04_product_doc_pages",
 ]

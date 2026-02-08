@@ -25,6 +25,7 @@ const normalizeTask = (task: Partial<Task> & { id: string; title: string }): Tas
 
 export function usePlan() {
   const [plan, setPlanState] = React.useState<Plan | null>(null)
+  const taskIndexRef = React.useRef<Map<string, number>>(new Map())
   const [tokenUsage, setTokenUsage] = React.useState<SessionTokenSummary>({
     total: {
       input_tokens: 0,
@@ -36,6 +37,9 @@ export function usePlan() {
   })
 
   const setPlan = React.useCallback((nextPlan: Plan) => {
+    taskIndexRef.current = new Map(
+      nextPlan.tasks.map((task, index) => [task.id, index])
+    )
     setPlanState(nextPlan)
   }, [])
 
@@ -43,12 +47,14 @@ export function usePlan() {
     (taskId: string, status: TaskStatus, extra?: Partial<Task>) => {
       setPlanState((prev) => {
         if (!prev) return prev
-        return {
-          ...prev,
-          tasks: prev.tasks.map((task) =>
-            task.id === taskId ? { ...task, status, ...extra } : task
-          ),
-        }
+        const index = taskIndexRef.current.get(taskId)
+        if (index === undefined) return prev
+        const current = prev.tasks[index]
+        const nextTask = { ...current, status, ...extra }
+        if (nextTask === current) return prev
+        const nextTasks = [...prev.tasks]
+        nextTasks[index] = nextTask
+        return { ...prev, tasks: nextTasks }
       })
     },
     []
@@ -89,32 +95,31 @@ export function usePlan() {
       })
 
       // Also update token usage for the specific task
-      if (event.task_id) {
+      const taskId = event.task_id
+      if (taskId) {
         setPlanState((prev) => {
           if (!prev) return prev
-          return {
-            ...prev,
-            tasks: prev.tasks.map((task) => {
-              if (task.id !== event.task_id) return task
-
-              const existing = task.token_usage ?? {
-                input_tokens: 0,
-                output_tokens: 0,
-                total_tokens: 0,
-                cost_usd: 0,
-              }
-
-              return {
-                ...task,
-                token_usage: {
-                  input_tokens: existing.input_tokens + event.input_tokens,
-                  output_tokens: existing.output_tokens + event.output_tokens,
-                  total_tokens: existing.total_tokens + event.total_tokens,
-                  cost_usd: existing.cost_usd + event.cost_usd,
-                },
-              }
-            }),
+          const index = taskIndexRef.current.get(taskId)
+          if (index === undefined) return prev
+          const task = prev.tasks[index]
+          const existing = task.token_usage ?? {
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            cost_usd: 0,
           }
+          const nextTask = {
+            ...task,
+            token_usage: {
+              input_tokens: existing.input_tokens + event.input_tokens,
+              output_tokens: existing.output_tokens + event.output_tokens,
+              total_tokens: existing.total_tokens + event.total_tokens,
+              cost_usd: existing.cost_usd + event.cost_usd,
+            },
+          }
+          const nextTasks = [...prev.tasks]
+          nextTasks[index] = nextTask
+          return { ...prev, tasks: nextTasks }
         })
       }
     } else if (event.type === 'done' && event.token_usage) {
@@ -140,6 +145,9 @@ export function usePlan() {
       })
     )
 
+    taskIndexRef.current = new Map(
+      tasks.map((task, index) => [task.id, index])
+    )
     setPlanState({
       id: event.plan.id,
       goal: event.plan.goal,
@@ -159,21 +167,20 @@ export function usePlan() {
         case 'plan_updated':
           setPlanState((prev) => {
             if (!prev) return prev
-            const tasks = prev.tasks.map((task) => {
-              const changes = event.changes.filter(
-                (change) => change.task_id === task.id
-              )
-              if (changes.length === 0) return task
-
-              const updates = changes.reduce<Partial<Task>>((acc, change) => {
-                const key = change.field as keyof Task
-                acc[key] = change.new_value as Task[keyof Task]
-                return acc
-              }, {})
-
-              return { ...task, ...updates }
-            })
-            return { ...prev, tasks }
+            const nextTasks = [...prev.tasks]
+            let changed = false
+            for (const change of event.changes) {
+              const index = taskIndexRef.current.get(change.task_id)
+              if (index === undefined) continue
+              const task = nextTasks[index]
+              const key = change.field as keyof Task
+              const nextValue = change.new_value as Task[keyof Task]
+              if (task[key] === nextValue) continue
+              nextTasks[index] = { ...task, [key]: nextValue }
+              changed = true
+            }
+            if (!changed) return prev
+            return { ...prev, tasks: nextTasks }
           })
           break
         case 'task_started':
@@ -197,7 +204,7 @@ export function usePlan() {
           })
           break
         case 'task_failed':
-          updateTaskStatus(event.task_id, event.error_type === 'timeout' ? 'timeout' : 'failed', {
+          updateTaskStatus(event.task_id, 'failed', {
             error_message: event.error_message,
             retry_count: event.retry_count,
           })

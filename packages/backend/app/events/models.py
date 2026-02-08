@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .types import EventType
 
@@ -13,6 +13,20 @@ class BaseEvent(BaseModel):
     type: EventType
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     session_id: Optional[str] = None
+    seq: Optional[int] = None
+    source: Optional[str] = None
+    run_id: Optional[str] = None
+    event_id: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_event_envelope(self) -> "BaseEvent":
+        if self.payload is None:
+            self.payload = {}
+        if not isinstance(self.payload, dict):
+            raise ValueError("payload must be an object")
+
+        return self
 
     def to_sse(self) -> str:
         """Convert event to SSE format."""
@@ -27,6 +41,10 @@ class BaseEvent(BaseModel):
                 timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             )
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+class WorkflowEvent(BaseEvent):
+    payload: Dict[str, Any] = Field(default_factory=dict)
 
 
 # Agent events
@@ -265,3 +283,102 @@ class DoneEvent(BaseEvent):
     type: EventType = EventType.DONE
     summary: Optional[str] = None
     token_usage: Optional[Dict[str, Any]] = None
+
+
+def _clean_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not payload:
+        return {}
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def workflow_event(event_type: EventType, payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return WorkflowEvent(type=event_type, payload=_clean_payload(payload))
+
+
+def brief_start_event() -> WorkflowEvent:
+    return workflow_event(EventType.BRIEF_START)
+
+
+def brief_complete_event() -> WorkflowEvent:
+    return workflow_event(EventType.BRIEF_COMPLETE)
+
+
+def style_extracted_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.STYLE_EXTRACTED, payload)
+
+
+def registry_start_event() -> WorkflowEvent:
+    return workflow_event(EventType.REGISTRY_START)
+
+
+def registry_complete_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.REGISTRY_COMPLETE, payload)
+
+
+def generate_start_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.GENERATE_START, payload)
+
+
+def generate_progress_event(
+    *,
+    step: Optional[str] = None,
+    percent: Optional[int] = None,
+    message: Optional[str] = None,
+    page: Optional[str] = None,
+) -> WorkflowEvent:
+    return workflow_event(
+        EventType.GENERATE_PROGRESS,
+        {"step": step, "percent": percent, "message": message, "page": page},
+    )
+
+
+def generate_complete_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.GENERATE_COMPLETE, payload)
+
+
+def refine_start_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.REFINE_START, payload)
+
+
+def refine_complete_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.REFINE_COMPLETE, payload)
+
+
+def refine_waiting_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.REFINE_WAITING, payload)
+
+
+def build_start_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.BUILD_START, payload)
+
+
+def build_progress_event(
+    *,
+    step: Optional[str] = None,
+    percent: Optional[int] = None,
+    message: Optional[str] = None,
+    page: Optional[str] = None,
+) -> WorkflowEvent:
+    return workflow_event(
+        EventType.BUILD_PROGRESS,
+        {"step": step, "percent": percent, "message": message, "page": page},
+    )
+
+
+def build_complete_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.BUILD_COMPLETE, payload)
+
+
+def build_failed_event(
+    *,
+    error: str,
+    retry_count: Optional[int] = None,
+) -> WorkflowEvent:
+    return workflow_event(
+        EventType.BUILD_FAILED,
+        {"error": error, "retry_count": retry_count},
+    )
+
+
+def interrupt_event(payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:
+    return workflow_event(EventType.INTERRUPT, payload)

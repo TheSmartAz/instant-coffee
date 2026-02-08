@@ -7,7 +7,7 @@ export type RequestError = Error & {
   data?: unknown
 }
 
-const buildUrl = (path: string) =>
+export const buildUrl = (path: string) =>
   path.startsWith('http') ? path : `${API_BASE}${path}`
 
 const buildQuery = (
@@ -61,6 +61,7 @@ export const api = {
   sessions: {
     list: () => request<{ sessions: unknown[]; total?: number }>('/api/sessions'),
     get: (id: string) => request<unknown>(`/api/sessions/${id}`),
+    getMetadata: (id: string) => request<unknown>(`/api/sessions/${id}/metadata`),
     create: (data: { title?: string }) =>
       request<unknown>('/api/sessions', {
         method: 'POST',
@@ -70,9 +71,11 @@ export const api = {
       request<{ deleted: boolean }>(`/api/sessions/${id}`, { method: 'DELETE' }),
     messages: (id: string) =>
       request<{ messages: unknown[] }>(`/api/sessions/${id}/messages`),
-    versions: (id: string) =>
+    versions: (id: string, options?: { includePreviewHtml?: boolean }) =>
       request<{ versions: unknown[]; current_version?: number }>(
-        `/api/sessions/${id}/versions`
+        `/api/sessions/${id}/versions${buildQuery({
+          include_preview_html: options?.includePreviewHtml,
+        })}`
       ),
     clearMessages: (id: string) =>
       request<{ deleted: number }>(`/api/sessions/${id}/messages`, {
@@ -100,6 +103,59 @@ export const api = {
         })
       }
     },
+  },
+  data: {
+    listTables: (sessionId: string) =>
+      request<{
+        schema?: string
+        tables?: Array<{
+          name: string
+          columns: Array<{
+            name: string
+            data_type?: string
+            udt_name?: string
+            nullable?: boolean
+            default?: unknown
+          }>
+        }>
+      }>(`/api/sessions/${sessionId}/data/tables`),
+    queryTable: (
+      sessionId: string,
+      table: string,
+      options?: {
+        limit?: number
+        offset?: number
+        orderBy?: string
+      }
+    ) =>
+      request<{
+        records?: Array<Record<string, unknown>>
+        total?: number
+        limit?: number
+        offset?: number
+        order_by?: { column?: string; direction?: string } | null
+      }>(
+        `/api/sessions/${sessionId}/data/${encodeURIComponent(table)}${buildQuery({
+          limit: options?.limit,
+          offset: options?.offset,
+          order_by: options?.orderBy,
+        })}`
+      ),
+    getTableStats: (sessionId: string, table: string) =>
+      request<{
+        table?: string
+        count?: number
+        numeric?: Record<
+          string,
+          {
+            sum?: number | string | null
+            avg?: number | string | null
+            min?: number | string | null
+            max?: number | string | null
+          }
+        >
+        boolean?: Record<string, Record<string, number>>
+      }>(`/api/sessions/${sessionId}/data/${encodeURIComponent(table)}/stats`),
   },
   chat: {
     send: (payload: ChatRequestPayload) =>
@@ -272,6 +328,46 @@ export const api = {
         manifest: import('../types').ExportManifest
         success: boolean
       }>(`/api/sessions/${sessionId}/export`, { method: 'POST' }),
+  },
+  build: {
+    status: (sessionId: string) =>
+      request<{
+        status: string
+        pages?: string[]
+        dist_path?: string | null
+        error?: string | null
+        started_at?: string | null
+        completed_at?: string | null
+      }>(`/api/sessions/${sessionId}/build/status`),
+    start: (sessionId: string) =>
+      request<{
+        status: string
+        pages?: string[]
+        dist_path?: string | null
+        error?: string | null
+        started_at?: string | null
+        completed_at?: string | null
+      }>(`/api/sessions/${sessionId}/build`, { method: 'POST' }),
+    cancel: (sessionId: string) =>
+      request<{
+        status: string
+        pages?: string[]
+        dist_path?: string | null
+        error?: string | null
+        started_at?: string | null
+        completed_at?: string | null
+      }>(`/api/sessions/${sessionId}/build`, { method: 'DELETE' }),
+    streamUrl: (sessionId: string, options?: { sinceSeq?: number }) =>
+      buildUrl(
+        `/api/sessions/${sessionId}/build/stream${buildQuery({
+          since_seq: options?.sinceSeq,
+        })}`
+      ),
+    previewUrl: (sessionId: string, path?: string) => {
+      const cleaned = path ? path.replace(/^\/+/, '') : ''
+      const suffix = cleaned ? `/${encodeURI(cleaned)}` : ''
+      return buildUrl(`/preview/${sessionId}${suffix}`)
+    },
   },
   events: {
     getSessionEvents: (sessionId: string, sinceSeq?: number, limit?: number) =>

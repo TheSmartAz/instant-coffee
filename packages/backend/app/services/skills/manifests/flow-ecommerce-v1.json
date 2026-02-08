@@ -1,0 +1,34 @@
+{
+  "id": "flow-ecommerce-v1",
+  "name": "Flow App - Ecommerce",
+  "version": "1.0.0",
+  "product_types": ["ecommerce"],
+  "complexity": ["checklist", "standard", "extended"],
+  "doc_tiers": ["checklist", "standard", "extended"],
+  "components": [
+    "ProductCard",
+    "ProductGrid",
+    "CartItem",
+    "OrderSummary",
+    "CheckoutForm",
+    "PromoBanner"
+  ],
+  "state_contract": "contracts/ecommerce.json",
+  "style_profiles": [
+    "clean-modern",
+    "soft-elegant",
+    "bold-tech",
+    "playful-color",
+    "editorial",
+    "minimal-mono"
+  ],
+  "guardrails": "rules/mobile-guardrails.json",
+  "page_roles": ["catalog", "product", "cart", "checkout", "confirmation"],
+  "model_prefs": {
+    "classifier": "light",
+    "writer": "heavy",
+    "validator": "light",
+    "expander": "mid"
+  },
+  "priority": 100
+}

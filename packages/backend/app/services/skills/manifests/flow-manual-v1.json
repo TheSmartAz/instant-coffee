@@ -1,0 +1,31 @@
+{
+  "id": "flow-manual-v1",
+  "name": "Flow App - Manual",
+  "version": "1.0.0",
+  "product_types": ["manual"],
+  "complexity": ["checklist", "standard", "extended"],
+  "doc_tiers": ["checklist", "standard", "extended"],
+  "components": [
+    "DocSidebar",
+    "DocBreadcrumbs",
+    "SectionList",
+    "PageContent",
+    "SearchBar"
+  ],
+  "state_contract": "contracts/manual.json",
+  "style_profiles": [
+    "clean-modern",
+    "editorial",
+    "minimal-mono",
+    "soft-elegant"
+  ],
+  "guardrails": "rules/mobile-guardrails.json",
+  "page_roles": ["index", "section", "page"],
+  "model_prefs": {
+    "classifier": "light",
+    "writer": "heavy",
+    "validator": "light",
+    "expander": "mid"
+  },
+  "priority": 100
+}

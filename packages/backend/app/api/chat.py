@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncGenerator, Generator, Optional
 
@@ -17,12 +18,14 @@ from ..db.models import Session as SessionModel
 from ..db.utils import get_db
 from ..db.database import get_database
 from ..events.emitter import EventEmitter
-from ..events.models import InterviewAnswerEvent
+from ..events.models import InterviewAnswerEvent, workflow_event
 from ..schemas.chat import ChatRequest, ChatResponse
 from ..services.message import MessageService
 from ..services.page import PageService
 from ..services.page_version import PageVersionService
 from ..services.product_doc import ProductDocService
+from ..events.types import EventType
+from ..services.run import RunNotFoundError, RunService, RunStateConflictError
 from ..services.session import SessionService
 from ..services.token_tracker import TokenTrackerService
 from ..services.image_storage import ImageStorageService
@@ -60,7 +63,7 @@ def _log_stream_task_result(task: "asyncio.Task[object]") -> None:
 
 async def _run_orchestrator_stream(
     *,
-    orchestrator: AgentOrchestrator,
+    orchestrator: object,
     queue: "asyncio.Queue[object]",
     done_event: "asyncio.Event",
     user_message: str,
@@ -70,8 +73,12 @@ async def _run_orchestrator_stream(
     generate_now: bool,
     style_reference: Optional[dict] = None,
     target_pages: Optional[list[str]] = None,
+    resume: Optional[dict] = None,
+    run_context: Optional["_ChatRunContext"] = None,
 ) -> None:
     final_message = ""
+    final_response: Optional[OrchestratorResponse] = None
+    stream_error: Optional[BaseException] = None
     try:
         async for response in orchestrator.stream_responses(
             user_message=user_message,
@@ -81,11 +88,14 @@ async def _run_orchestrator_stream(
             generate_now=generate_now,
             style_reference=style_reference,
             target_pages=target_pages,
+            resume=resume,
         ):
+            final_response = response
             if response.message:
                 final_message = response.message
             _enqueue_stream_item(queue, response)
     except Exception as exc:
+        stream_error = exc
         _enqueue_stream_item(queue, exc)
     finally:
         try:
@@ -93,6 +103,13 @@ async def _run_orchestrator_stream(
                 MessageService(orchestrator.db).add_message(
                     orchestrator.session.id, "assistant", final_message
                 )
+            _finalize_adapter_run(
+                db=orchestrator.db,
+                emitter=getattr(orchestrator, "event_emitter", None),
+                run_context=run_context,
+                final_response=final_response,
+                error=stream_error,
+            )
             orchestrator.db.commit()
         except Exception:
             orchestrator.db.rollback()
@@ -108,6 +125,262 @@ async def _run_orchestrator_stream(
 def _get_db_session() -> Generator[DbSession, None, None]:
     with get_db() as session:
         yield session
+
+
+def _create_orchestrator(
+    db: DbSession,
+    session: SessionModel,
+    emitter: EventEmitter,
+):
+    settings = get_settings()
+    if settings.use_langgraph:
+        try:
+            from ..graph.orchestrator import LangGraphOrchestrator
+
+            return LangGraphOrchestrator(db, session, event_emitter=emitter)
+        except Exception:
+            logger.exception("LangGraph orchestrator unavailable; falling back to legacy")
+    return AgentOrchestrator(db, session, event_emitter=emitter)
+
+
+def _resolve_resume_payload(
+    *,
+    db: DbSession,
+    session: SessionModel,
+    resume_payload: Optional[dict],
+) -> Optional[dict]:
+    if not resume_payload:
+        return None
+    payload = dict(resume_payload)
+    service = RunService(db)
+    run_id = payload.get("run_id")
+    try:
+        run = service.resolve_resume_run(
+            session_id=session.id,
+            run_id=str(run_id) if run_id is not None else None,
+        )
+    except Exception:
+        return payload
+    payload["run_id"] = run.id
+    return payload
+
+
+def _active_run_id(*, db: DbSession, session_id: str, resume_payload: Optional[dict]) -> Optional[str]:
+    if resume_payload and resume_payload.get("run_id"):
+        return str(resume_payload.get("run_id"))
+    service = RunService(db)
+    waiting = service.get_latest_waiting_run(session_id)
+    if waiting is not None:
+        return waiting.id
+    return None
+
+
+@dataclass
+class _ChatRunContext:
+    run_id: Optional[str]
+    resume_payload: Optional[dict]
+    checkpoint_thread: Optional[str]
+    adapter_active: bool
+    transition: Optional[str] = None
+
+
+def _log_chat_execution_mode(*, endpoint: str, settings) -> None:
+    if settings.chat_use_run_adapter and not settings.use_langgraph:
+        logger.info("[%s] chat run adapter path active", endpoint)
+        return
+    if settings.chat_use_run_adapter and settings.use_langgraph:
+        logger.info(
+            "[%s] chat_use_run_adapter enabled, but use_langgraph=true so run lifecycle stays orchestrator-managed",
+            endpoint,
+        )
+        return
+    logger.info("[%s] legacy chat path active", endpoint)
+
+
+def _prepare_chat_run_context(
+    *,
+    db: DbSession,
+    session: SessionModel,
+    settings,
+    message: str,
+    generate_now: bool,
+    style_reference: Optional[dict],
+    target_pages: list[str],
+    resume_payload: Optional[dict],
+) -> _ChatRunContext:
+    adapter_active = bool(settings.chat_use_run_adapter and not settings.use_langgraph)
+    if not adapter_active:
+        return _ChatRunContext(
+            run_id=_active_run_id(db=db, session_id=session.id, resume_payload=resume_payload),
+            resume_payload=resume_payload,
+            checkpoint_thread=None,
+            adapter_active=False,
+            transition=None,
+        )
+
+    run_service = RunService(db)
+    if resume_payload:
+        resolved_payload = dict(resume_payload)
+        requested_run_id = resolved_payload.get("run_id")
+        try:
+            run = run_service.resolve_resume_run(
+                session_id=session.id,
+                run_id=str(requested_run_id) if requested_run_id is not None else None,
+            )
+            resolved_payload["run_id"] = run.id
+            run_service.resume_run(run.id, resolved_payload)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+        except RunStateConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        db.commit()
+        return _ChatRunContext(
+            run_id=run.id,
+            resume_payload=resolved_payload,
+            checkpoint_thread=run.checkpoint_thread,
+            adapter_active=True,
+            transition="resumed",
+        )
+
+    try:
+        run = run_service.create_run(
+            session_id=session.id,
+            message=message,
+            generate_now=bool(generate_now),
+            style_reference=style_reference,
+            target_pages=target_pages,
+            trigger_source="chat",
+        )
+        run_service.start_run(run.id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "Session not found":
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+    db.commit()
+    return _ChatRunContext(
+        run_id=run.id,
+        resume_payload=resume_payload,
+        checkpoint_thread=run.checkpoint_thread,
+        adapter_active=True,
+        transition="created",
+    )
+
+
+def _emit_adapter_transition_events(*, emitter: EventEmitter, run_context: _ChatRunContext) -> None:
+    if not run_context.adapter_active or not run_context.run_id:
+        return
+    checkpoint_thread = run_context.checkpoint_thread
+    if run_context.transition == "created":
+        emitter.emit(
+            workflow_event(
+                EventType.RUN_CREATED,
+                {
+                    "status": "queued",
+                    "checkpoint_thread": checkpoint_thread,
+                },
+            )
+        )
+        emitter.emit(
+            workflow_event(
+                EventType.RUN_STARTED,
+                {
+                    "status": "running",
+                    "checkpoint_thread": checkpoint_thread,
+                },
+            )
+        )
+    elif run_context.transition == "resumed":
+        emitter.emit(
+            workflow_event(
+                EventType.RUN_RESUMED,
+                {
+                    "status": "running",
+                    "checkpoint_thread": checkpoint_thread,
+                },
+            )
+        )
+
+
+def _resolve_adapter_run_outcome(
+    *,
+    final_response: Optional[OrchestratorResponse],
+    error: Optional[BaseException],
+) -> tuple[str, dict, EventType, dict]:
+    if error is not None:
+        error_text = str(error) or "Chat orchestration failed"
+        return (
+            "failed",
+            {"latest_error": {"message": error_text}},
+            EventType.RUN_FAILED,
+            {"status": "failed", "error": error_text},
+        )
+
+    if final_response is None:
+        error_text = "No orchestrator response"
+        return (
+            "failed",
+            {"latest_error": {"message": error_text}},
+            EventType.RUN_FAILED,
+            {"status": "failed", "error": error_text},
+        )
+
+    action = (final_response.action or "").strip().lower()
+    if action == "error":
+        error_text = final_response.message or "Run failed"
+        return (
+            "failed",
+            {"latest_error": {"message": error_text}},
+            EventType.RUN_FAILED,
+            {"status": "failed", "error": error_text},
+        )
+
+    if action == "refine_waiting" or not bool(final_response.is_complete):
+        waiting_reason = final_response.message or "Waiting for user input"
+        return (
+            "waiting_input",
+            {"latest_error": {"waiting_reason": waiting_reason}},
+            EventType.RUN_WAITING_INPUT,
+            {"status": "waiting_input", "waiting_reason": waiting_reason},
+        )
+
+    return (
+        "completed",
+        {},
+        EventType.RUN_COMPLETED,
+        {"status": "completed"},
+    )
+
+
+def _finalize_adapter_run(
+    *,
+    db: DbSession,
+    emitter: Optional[EventEmitter],
+    run_context: Optional[_ChatRunContext],
+    final_response: Optional[OrchestratorResponse],
+    error: Optional[BaseException],
+) -> None:
+    if run_context is None or not run_context.adapter_active or not run_context.run_id:
+        return
+
+    run_service = RunService(db)
+    status, update_kwargs, event_type, event_payload = _resolve_adapter_run_outcome(
+        final_response=final_response,
+        error=error,
+    )
+
+    try:
+        run_service.persist_run_state(run_context.run_id, status, **update_kwargs)
+    except RunNotFoundError:
+        logger.warning("Run %s disappeared before finalization", run_context.run_id)
+        return
+    except RunStateConflictError:
+        logger.info("Run %s already transitioned before adapter finalization", run_context.run_id)
+        return
+
+    if emitter is not None:
+        emitter.emit(workflow_event(event_type, event_payload))
 
 
 def _accepts_sse(request: Request) -> bool:
@@ -319,6 +592,7 @@ async def chat(
         db.refresh(session)
 
     settings = get_settings()
+    _log_chat_execution_mode(endpoint="POST /api/chat", settings=settings)
     page_service = PageService(db)
     pages = page_service.list_by_session(session.id)
     page_lookup = {page.slug.lower(): page.slug for page in pages}
@@ -396,6 +670,19 @@ async def chat(
     interview_payload = _extract_interview_payload(payload.message)
     start_tokens = _token_total(db, session.id)
 
+    resolved_resume = _resolve_resume_payload(db=db, session=session, resume_payload=payload.resume)
+    run_context = _prepare_chat_run_context(
+        db=db,
+        session=session,
+        settings=settings,
+        message=payload.message,
+        generate_now=bool(payload.generate_now),
+        style_reference=style_reference_context,
+        target_pages=target_pages,
+        resume_payload=resolved_resume,
+    )
+    resolved_resume = run_context.resume_payload
+
     if _accepts_sse(request):
         stream_db = get_database().session()
         stream_session = stream_db.get(SessionModel, session.id)
@@ -404,8 +691,11 @@ async def chat(
             raise HTTPException(status_code=404, detail="Session not found")
 
         emitter = EventEmitter(
-            session_id=stream_session.id, event_store=EventStoreService(stream_db)
+            session_id=stream_session.id,
+            run_id=run_context.run_id,
+            event_store=EventStoreService(stream_db),
         )
+        _emit_adapter_transition_events(emitter=emitter, run_context=run_context)
         if interview_payload:
             emitter.emit(
                 InterviewAnswerEvent(
@@ -416,26 +706,28 @@ async def chat(
                     answers=interview_payload.get("answers"),
                 )
             )
-        orchestrator = AgentOrchestrator(stream_db, stream_session, event_emitter=emitter)
+        orchestrator = _create_orchestrator(stream_db, stream_session, emitter)
         async def event_stream() -> AsyncGenerator[str, None]:
             index = 0
             responses_done = False
             response_queue: asyncio.Queue[object] = asyncio.Queue(maxsize=256)
             done_event = asyncio.Event()
             stream_task = asyncio.create_task(
-                _run_orchestrator_stream(
-                    orchestrator=orchestrator,
-                    queue=response_queue,
-                    done_event=done_event,
-                    user_message=payload.message,
-                    output_dir=settings.output_dir,
-                    history=history,
-                    trigger_interview=trigger_interview,
-                    generate_now=bool(payload.generate_now),
-                    style_reference=style_reference_context,
-                    target_pages=target_pages,
+                    _run_orchestrator_stream(
+                        orchestrator=orchestrator,
+                        queue=response_queue,
+                        done_event=done_event,
+                        user_message=payload.message,
+                        output_dir=settings.output_dir,
+                        history=history,
+                        trigger_interview=trigger_interview,
+                        generate_now=bool(payload.generate_now),
+                        style_reference=style_reference_context,
+                        target_pages=target_pages,
+                        resume=resolved_resume,
+                        run_context=run_context,
+                    )
                 )
-            )
             stream_task.add_done_callback(_log_stream_task_result)
 
             try:
@@ -448,7 +740,8 @@ async def chat(
                         if hasattr(event, "to_sse"):
                             yield event.to_sse()
 
-                    if not responses_done:
+                    should_drain_responses = (not responses_done) or (not response_queue.empty())
+                    if should_drain_responses:
                         try:
                             item = await asyncio.wait_for(
                                 response_queue.get(), timeout=0.05
@@ -493,7 +786,12 @@ async def chat(
             yield "data: [DONE]\n\n"
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    emitter = EventEmitter(session_id=session.id, event_store=EventStoreService(db))
+    emitter = EventEmitter(
+        session_id=session.id,
+        run_id=run_context.run_id,
+        event_store=EventStoreService(db),
+    )
+    _emit_adapter_transition_events(emitter=emitter, run_context=run_context)
     if interview_payload:
         emitter.emit(
             InterviewAnswerEvent(
@@ -504,24 +802,51 @@ async def chat(
                 answers=interview_payload.get("answers"),
             )
         )
-    orchestrator = AgentOrchestrator(db, session, event_emitter=emitter)
+    orchestrator = _create_orchestrator(db, session, emitter)
 
-    responses = [
-        response
-        async for response in orchestrator.stream_responses(
-            user_message=payload.message,
-            output_dir=settings.output_dir,
-            history=history,
-            trigger_interview=trigger_interview,
-            generate_now=payload.generate_now,
-            style_reference=style_reference_context,
-            target_pages=target_pages,
+    try:
+        responses = [
+            response
+            async for response in orchestrator.stream_responses(
+                user_message=payload.message,
+                output_dir=settings.output_dir,
+                history=history,
+                trigger_interview=trigger_interview,
+                generate_now=payload.generate_now,
+                style_reference=style_reference_context,
+                target_pages=target_pages,
+                resume=resolved_resume,
+            )
+        ]
+    except Exception as exc:
+        _finalize_adapter_run(
+            db=db,
+            emitter=emitter,
+            run_context=run_context,
+            final_response=None,
+            error=exc,
         )
-    ]
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to persist run failure in chat adapter")
+        raise
+
     final = responses[-1] if responses else None
     assistant_message = final.message if final else ""
     if assistant_message:
         message_service.add_message(session.id, "assistant", assistant_message)
+
+    _finalize_adapter_run(
+        db=db,
+        emitter=emitter,
+        run_context=run_context,
+        final_response=final,
+        error=None,
+    )
+
+    if assistant_message or run_context.adapter_active:
         db.commit()
 
     if final is not None:
@@ -564,6 +889,7 @@ async def stream_post(
     db: DbSession = Depends(_get_db_session),
 ):
     settings = get_settings()
+    _log_chat_execution_mode(endpoint="POST /api/chat/stream", settings=settings)
     service = SessionService(db)
     session = db.get(SessionModel, payload.session_id) if payload.session_id else None
     if session is None:
@@ -645,6 +971,19 @@ async def stream_post(
     message_service.add_message(session.id, "user", payload.message)
     db.commit()
 
+    resolved_resume = _resolve_resume_payload(db=db, session=session, resume_payload=payload.resume)
+    run_context = _prepare_chat_run_context(
+        db=db,
+        session=session,
+        settings=settings,
+        message=payload.message,
+        generate_now=bool(payload.generate_now),
+        style_reference=style_reference_context,
+        target_pages=target_pages,
+        resume_payload=resolved_resume,
+    )
+    resolved_resume = run_context.resume_payload
+
     stream_db = get_database().session()
     stream_session = stream_db.get(SessionModel, session.id)
     if stream_session is None:
@@ -652,8 +991,11 @@ async def stream_post(
         raise HTTPException(status_code=404, detail="Session not found")
 
     emitter = EventEmitter(
-        session_id=stream_session.id, event_store=EventStoreService(stream_db)
+        session_id=stream_session.id,
+        run_id=run_context.run_id,
+        event_store=EventStoreService(stream_db),
     )
+    _emit_adapter_transition_events(emitter=emitter, run_context=run_context)
     interview_payload = _extract_interview_payload(payload.message)
     if interview_payload:
         emitter.emit(
@@ -665,7 +1007,7 @@ async def stream_post(
                 answers=interview_payload.get("answers"),
             )
         )
-    orchestrator = AgentOrchestrator(stream_db, stream_session, event_emitter=emitter)
+    orchestrator = _create_orchestrator(stream_db, stream_session, emitter)
     start_tokens = _token_total(db, session.id)
 
     async def event_stream() -> AsyncGenerator[str, None]:
@@ -685,6 +1027,8 @@ async def stream_post(
                 generate_now=bool(payload.generate_now),
                 style_reference=style_reference_context,
                 target_pages=target_pages,
+                resume=resolved_resume,
+                run_context=run_context,
             )
         )
         stream_task.add_done_callback(_log_stream_task_result)
@@ -699,7 +1043,8 @@ async def stream_post(
                     if hasattr(event, "to_sse"):
                         yield event.to_sse()
 
-                if not responses_done:
+                should_drain_responses = (not responses_done) or (not response_queue.empty())
+                if should_drain_responses:
                     try:
                         item = await asyncio.wait_for(
                             response_queue.get(), timeout=0.05
@@ -756,6 +1101,7 @@ async def stream(
     db: DbSession = Depends(_get_db_session),
 ):
     settings = get_settings()
+    _log_chat_execution_mode(endpoint="GET /api/chat/stream", settings=settings)
 
     if message:
         service = SessionService(db)
@@ -775,6 +1121,17 @@ async def stream(
         message_service.add_message(session.id, "user", message)
         db.commit()
 
+        run_context = _prepare_chat_run_context(
+            db=db,
+            session=session,
+            settings=settings,
+            message=message,
+            generate_now=bool(generate_now),
+            style_reference=None,
+            target_pages=[],
+            resume_payload=None,
+        )
+
         stream_db = get_database().session()
         stream_session = stream_db.get(SessionModel, session.id)
         if stream_session is None:
@@ -782,8 +1139,11 @@ async def stream(
             raise HTTPException(status_code=404, detail="Session not found")
 
         emitter = EventEmitter(
-            session_id=stream_session.id, event_store=EventStoreService(stream_db)
+            session_id=stream_session.id,
+            run_id=run_context.run_id,
+            event_store=EventStoreService(stream_db),
         )
+        _emit_adapter_transition_events(emitter=emitter, run_context=run_context)
         interview_payload = _extract_interview_payload(message)
         if interview_payload:
             emitter.emit(
@@ -795,7 +1155,7 @@ async def stream(
                     answers=interview_payload.get("answers"),
                 )
             )
-        orchestrator = AgentOrchestrator(stream_db, stream_session, event_emitter=emitter)
+        orchestrator = _create_orchestrator(stream_db, stream_session, emitter)
         start_tokens = _token_total(db, session.id)
 
         async def event_stream() -> AsyncGenerator[str, None]:
@@ -813,6 +1173,8 @@ async def stream(
                     history=history,
                     trigger_interview=trigger_interview,
                     generate_now=bool(generate_now),
+                    resume=run_context.resume_payload,
+                    run_context=run_context,
                 )
             )
             stream_task.add_done_callback(_log_stream_task_result)
@@ -827,7 +1189,8 @@ async def stream(
                         if hasattr(event, "to_sse"):
                             yield event.to_sse()
 
-                    if not responses_done:
+                    should_drain_responses = (not responses_done) or (not response_queue.empty())
+                    if should_drain_responses:
                         try:
                             item = await asyncio.wait_for(
                                 response_queue.get(), timeout=0.05
@@ -879,10 +1242,10 @@ async def stream(
     session = db.get(SessionModel, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    orchestrator = AgentOrchestrator(
+    orchestrator = _create_orchestrator(
         db,
         session,
-        event_emitter=EventEmitter(session_id=session.id, event_store=EventStoreService(db)),
+        EventEmitter(session_id=session.id, event_store=EventStoreService(db)),
     )
 
     async def event_stream() -> AsyncGenerator[str, None]:

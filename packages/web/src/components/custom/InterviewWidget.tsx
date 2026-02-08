@@ -88,7 +88,11 @@ const buildInterviewAnswers = (
 
     if (question.type === 'single') {
       const selected = Array.isArray(value) ? value[0] : value
-      const label = selected === OTHER_OPTION_ID ? other : optionsMap[selected]
+      const label = selected
+        ? selected === OTHER_OPTION_ID
+          ? other
+          : optionsMap[selected]
+        : other
       if (!label && !other) return
       result.push({
         id: question.id,
@@ -195,8 +199,8 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
 
   const readOnly = batch.status !== 'active'
   const question = batch.questions[currentIndex]
-  const globalIndex = batch.startIndex + currentIndex
-  const totalCount = batch.totalCount
+  const displayIndex = currentIndex + 1
+  const displayTotal = batch.questions.length || batch.totalCount
 
   if (!question) return null
 
@@ -244,7 +248,7 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
           Interview
         </div>
         <div className="text-xs text-muted-foreground">
-          {globalIndex}/{totalCount}
+          {displayIndex}/{displayTotal}
         </div>
       </div>
       {batch.prompt ? (

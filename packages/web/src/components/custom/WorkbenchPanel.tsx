@@ -1,16 +1,21 @@
 import * as React from 'react'
-import { Eye, Code, FileText } from 'lucide-react'
+import { Eye, Code, FileText, Database } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PreviewPanel, type PageInfo } from './PreviewPanel'
 import { CodePanel } from './CodePanel'
 import { ProductDocPanel } from './ProductDocPanel'
+import { DataTab } from './DataTab'
+import type { AestheticScore } from '@/types/aesthetic'
+import type { BuildState } from '@/types/build'
 
-export type WorkbenchTab = 'preview' | 'code' | 'product-doc'
+export type WorkbenchTab = 'preview' | 'code' | 'product-doc' | 'data'
 
 export interface WorkbenchPanelProps {
   sessionId: string
   appMode?: boolean
   onAppModeChange?: (next: boolean) => void
+  previewMode?: 'live' | 'build'
+  onPreviewModeChange?: (next: 'live' | 'build') => void
   onBuildFromDoc?: () => void
   buildDisabled?: boolean
   previewVersion?: number | null
@@ -26,11 +31,18 @@ export interface WorkbenchPanelProps {
   onSelectPage?: (pageId: string) => void
   previewHtml?: string | null
   previewUrl?: string | null
+  buildPreviewUrl?: string | null
   isRefreshing?: boolean
   isExporting?: boolean
   onRefresh?: () => void
   onRefreshPage?: (pageId: string) => void
   onExport?: () => void
+  aestheticScore?: AestheticScore | null
+  buildState?: BuildState | null
+  onBuildRetry?: () => void
+  onBuildCancel?: () => void
+  onBuildPageSelect?: (page: string) => void
+  selectedBuildPage?: string | null
 }
 
 interface TabInfo {
@@ -43,12 +55,15 @@ const TABS: TabInfo[] = [
   { id: 'preview', label: 'Preview', icon: Eye },
   { id: 'code', label: 'Code', icon: Code },
   { id: 'product-doc', label: 'Product doc', icon: FileText },
+  { id: 'data', label: 'Data', icon: Database },
 ]
 
 export function WorkbenchPanel({
   sessionId,
   appMode,
   onAppModeChange,
+  previewMode,
+  onPreviewModeChange,
   onBuildFromDoc,
   buildDisabled,
   previewVersion,
@@ -60,11 +75,18 @@ export function WorkbenchPanel({
   onSelectPage,
   previewHtml,
   previewUrl,
+  buildPreviewUrl,
   isRefreshing,
   isExporting,
   onRefresh,
   onRefreshPage,
   onExport,
+  aestheticScore,
+  buildState,
+  onBuildRetry,
+  onBuildCancel,
+  onBuildPageSelect,
+  selectedBuildPage,
 }: WorkbenchPanelProps) {
   const handleTabChange = (tab: WorkbenchTab) => {
     onTabChange(tab)
@@ -91,6 +113,7 @@ export function WorkbenchPanel({
             <button
               key={tab.id}
               type="button"
+              data-testid={`workbench-tab-${tab.id}`}
               className={cn(
                 'tab flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors',
                 'relative border-b-2 border-transparent',
@@ -120,8 +143,11 @@ export function WorkbenchPanel({
             sessionId={sessionId}
             appMode={appMode}
             onAppModeChange={onAppModeChange}
+            previewMode={previewMode}
+            onPreviewModeChange={onPreviewModeChange}
             htmlContent={previewHtml ?? undefined}
             previewUrl={previewUrl ?? undefined}
+            buildPreviewUrl={buildPreviewUrl ?? undefined}
             onRefresh={onRefresh}
             onRefreshPage={onRefreshPage}
             onExport={onExport}
@@ -130,12 +156,18 @@ export function WorkbenchPanel({
             pages={pages}
             selectedPageId={selectedPageId}
             onSelectPage={onSelectPage}
+            aestheticScore={aestheticScore}
+            buildState={buildState}
+            onBuildRetry={onBuildRetry}
+            onBuildCancel={onBuildCancel}
+            onBuildPageSelect={onBuildPageSelect}
+            selectedBuildPage={selectedBuildPage}
           />
         </div>
 
         <div className={cn('h-full', activeTab === 'code' ? 'block' : 'hidden')}>
           {sessionId ? (
-            <CodePanel sessionId={sessionId} />
+            <CodePanel sessionId={sessionId} active={activeTab === 'code'} />
           ) : (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
               Please create a project first
@@ -155,6 +187,10 @@ export function WorkbenchPanel({
               Please create a project first
             </div>
           )}
+        </div>
+
+        <div className={cn('h-full', activeTab === 'data' ? 'block' : 'hidden')}>
+          <DataTab sessionId={sessionId} key={sessionId || 'data-tab'} />
         </div>
       </div>
     </div>

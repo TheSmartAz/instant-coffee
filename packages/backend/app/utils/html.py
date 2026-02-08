@@ -15,6 +15,9 @@ _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 _PROMPT_BLOCK_RE = re.compile(
     r"(?m)^===\s*[^=]+?===[ \t]*(?:\n(?!\s*<|\s*===).*)*"
 )
+_ID_ATTR_RE = re.compile(r"\bid=[\"']([^\"']+)[\"']")
+_GET_ELEMENT_RE = re.compile(r"getElementById\((['\"])([^'\"]+)\1\)")
+_QUERY_SELECTOR_ID_RE = re.compile(r"querySelector(All)?\((['\"])#([^'\"]+)\2\)")
 
 _HIDE_SCROLLBAR_STYLE = (
     "<style id=\"ic-hide-scrollbar\">\n"
@@ -75,6 +78,25 @@ def inline_css(html: str, css: Optional[str], *, position: str = "append") -> st
         return f"{html[:insert_at]}{head_block}{html[insert_at:]}"
 
     return f"{style_block}{html}"
+
+
+def ensure_dom_ids(html: str) -> str:
+    if not html:
+        return html
+    existing_ids = {match.group(1) for match in _ID_ATTR_RE.finditer(html)}
+    referenced_ids = {match.group(2) for match in _GET_ELEMENT_RE.finditer(html)}
+    referenced_ids.update(match.group(3) for match in _QUERY_SELECTOR_ID_RE.finditer(html))
+
+    missing = [item for item in referenced_ids if item and item not in existing_ids]
+    if not missing:
+        return html
+
+    placeholders = "".join(f'<div id="{item}" style="display:none"></div>' for item in missing)
+    body_close_match = _BODY_CLOSE_RE.search(html)
+    if body_close_match:
+        insert_at = body_close_match.start()
+        return f"{html[:insert_at]}{placeholders}{html[insert_at:]}"
+    return f"{html}{placeholders}"
 
 
 def inject_hide_scrollbar_style(html: str) -> str:

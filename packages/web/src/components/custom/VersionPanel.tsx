@@ -34,7 +34,7 @@ import { VersionTimeline, type VersionTimelineActionState } from './VersionTimel
 import { PinnedLimitDialog, type PinnedLimitDialogItem } from './PinnedLimitDialog'
 import type { PageVersion, ProductDocHistory, ProductDocHistoryResponse, ProjectSnapshot } from '@/types'
 
-type VersionTab = 'preview' | 'code' | 'product-doc'
+type VersionTab = 'preview' | 'code' | 'product-doc' | 'data'
 
 interface PanelConfig {
   type: 'page' | 'snapshot' | 'product-doc'
@@ -156,41 +156,63 @@ export function VersionPanel({
     }
   }, [activeTab, selectedPageId, sessionId])
 
+  const pageVersionStats = React.useMemo(() => {
+    let pinnedCount = 0
+    let current: PageVersion | undefined
+    for (const version of pageVersions) {
+      if (version.isPinned) pinnedCount += 1
+      if (version.id === currentPageVersionId) current = version
+    }
+    return { pinnedCount, current }
+  }, [pageVersions, currentPageVersionId])
+
+  const snapshotStats = React.useMemo(() => {
+    let pinnedCount = 0
+    for (const snapshot of snapshots) {
+      if (snapshot.is_pinned) pinnedCount += 1
+    }
+    return { pinnedCount, latest: snapshots[0] }
+  }, [snapshots])
+
+  const productDocStats = React.useMemo(() => {
+    let pinnedCount = 0
+    for (const history of productDocHistory) {
+      if (history.is_pinned) pinnedCount += 1
+    }
+    return { pinnedCount, latest: productDocHistory[0] }
+  }, [productDocHistory])
+
   const panelStats = React.useMemo(() => {
     if (panelConfig.type === 'page') {
-      const current = pageVersions.find((version) => version.id === currentPageVersionId)
-      const pinnedCount = pageVersions.filter((version) => version.isPinned).length
       return [
-        { label: 'Current', value: current ? `v${current.version}` : '--' },
-        { label: 'Pinned', value: String(pinnedCount) },
+        { label: 'Current', value: pageVersionStats.current ? `v${pageVersionStats.current.version}` : '--' },
+        { label: 'Pinned', value: String(pageVersionStats.pinnedCount) },
         { label: 'Total', value: String(pageVersions.length) },
       ]
     }
     if (panelConfig.type === 'snapshot') {
-      const latest = snapshots[0]
-      const pinnedCount = snapshots.filter((snapshot) => snapshot.is_pinned).length
       return [
         {
           label: 'Latest',
-          value: latest ? `#${latest.snapshot_number}` : '--',
+          value: snapshotStats.latest ? `#${snapshotStats.latest.snapshot_number}` : '--',
         },
-        { label: 'Pinned', value: String(pinnedCount) },
+        { label: 'Pinned', value: String(snapshotStats.pinnedCount) },
         { label: 'Total', value: String(snapshots.length) },
       ]
     }
-    const latest = productDocHistory[0]
-    const pinnedCount = productDocHistory.filter((history) => history.is_pinned).length
     return [
-      { label: 'Latest', value: latest ? `v${latest.version}` : '--' },
-      { label: 'Pinned', value: String(pinnedCount) },
+      { label: 'Latest', value: productDocStats.latest ? `v${productDocStats.latest.version}` : '--' },
+      { label: 'Pinned', value: String(productDocStats.pinnedCount) },
       { label: 'Total', value: String(productDocHistory.length) },
     ]
   }, [
     panelConfig.type,
-    pageVersions,
-    currentPageVersionId,
-    snapshots,
-    productDocHistory,
+    pageVersions.length,
+    snapshots.length,
+    productDocHistory.length,
+    pageVersionStats,
+    snapshotStats,
+    productDocStats,
   ])
 
   const contextLabel =

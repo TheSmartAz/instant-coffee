@@ -88,6 +88,7 @@ export interface Message {
   activePageSlug?: string
   disambiguation?: Disambiguation
   hidden?: boolean
+  assets?: ChatAsset[]
 }
 
 export interface Version {
@@ -140,6 +141,7 @@ export type ChatAction =
   | 'pages_generated'
   | 'page_refined'
   | 'multipage_suggested'
+  | 'refine_waiting'
   | 'direct_reply'
 
 export interface ChatResponse {
@@ -175,6 +177,23 @@ export interface ChatAttachment {
   previewUrl?: string
 }
 
+export type AssetType = 'logo' | 'style_ref' | 'background' | 'product_image'
+
+export interface AssetRef {
+  id: string
+  url: string
+  type: string
+  width?: number
+  height?: number
+}
+
+export interface ChatAsset extends AssetRef {
+  assetType: AssetType
+  name?: string
+  size?: number
+  createdAt?: string
+}
+
 export type ChatStyleReferenceMode = 'full_mimic' | 'style_only'
 
 export interface ChatStyleReference {
@@ -190,6 +209,7 @@ export interface ChatRequestPayload {
   images?: string[]
   target_pages?: string[]
   style_reference?: ChatStyleReference
+  resume?: Record<string, unknown>
 }
 
 export interface TokenUsage {

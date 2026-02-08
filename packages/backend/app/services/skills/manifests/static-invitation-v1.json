@@ -1,0 +1,31 @@
+{
+  "id": "static-invitation-v1",
+  "name": "Static - Invitation",
+  "version": "1.0.0",
+  "product_types": ["invitation", "card"],
+  "complexity": ["checklist", "standard"],
+  "doc_tiers": ["checklist", "standard"],
+  "components": [
+    "EventHero",
+    "DetailsList",
+    "ScheduleTimeline",
+    "RsvpForm",
+    "LocationBlock"
+  ],
+  "style_profiles": [
+    "soft-elegant",
+    "playful-color",
+    "editorial",
+    "minimal-mono",
+    "clean-modern"
+  ],
+  "guardrails": "rules/mobile-guardrails.json",
+  "page_roles": ["invitation"],
+  "model_prefs": {
+    "classifier": "light",
+    "writer": "heavy",
+    "validator": "light",
+    "expander": "mid"
+  },
+  "priority": 100
+}

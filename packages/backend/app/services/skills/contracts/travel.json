@@ -1,0 +1,19 @@
+{
+  "shared_state_key": "instant-coffee:state",
+  "records_key": "instant-coffee:records",
+  "events_key": "instant-coffee:events",
+  "events": [
+    "save_plan",
+    "share_link",
+    "add_bookmark"
+  ],
+  "schema": {
+    "trip": {
+      "current": {}
+    },
+    "day_plans": [],
+    "activities": [],
+    "locations": [],
+    "bookmarks": []
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "id": "flow-travel-v1",
+  "name": "Flow App - Travel",
+  "version": "1.0.0",
+  "product_types": ["travel"],
+  "complexity": ["checklist", "standard", "extended"],
+  "doc_tiers": ["checklist", "standard", "extended"],
+  "components": [
+    "TripHero",
+    "Timeline",
+    "DayPlanCard",
+    "LocationCard",
+    "ShareBar"
+  ],
+  "state_contract": "contracts/travel.json",
+  "style_profiles": [
+    "clean-modern",
+    "soft-elegant",
+    "bold-tech",
+    "playful-color",
+    "editorial",
+    "minimal-mono"
+  ],
+  "guardrails": "rules/mobile-guardrails.json",
+  "page_roles": ["overview", "dayplan", "detail"],
+  "model_prefs": {
+    "classifier": "light",
+    "writer": "heavy",
+    "validator": "light",
+    "expander": "mid"
+  },
+  "priority": 100
+}

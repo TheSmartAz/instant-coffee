@@ -1,14 +1,14 @@
 # Instant Coffee 项目阶段性总结
 
-> **生成时间**: 2026-02-01
+> **生成时间**: 2026-02-05
 > **项目版本**: web 0.0.0 / cli 0.1.0 / backend 无独立版本标记
-> **项目状态**: v0.3 能力已落地，聊天/规划/事件/前端可运行；校验器、工具完善与 CLI 源码仍有缺口
+> **项目状态**: v0.7 能力已落地（多页 / Product Doc / 资产 / Build / Data Tab / Aesthetic Scoring / LangGraph skeleton）；默认仍走 legacy orchestrator；CLI 仍仅有 dist 产物
 
 ---
 
 ## 项目概述
 
-**Instant Coffee (速溶咖啡)** 是一个通过自然对话生成移动端优化 HTML 页面 的 AI 工具。项目采用 monorepo 架构，后端为 FastAPI + SQLite，前端为 Vite + React + Tailwind + shadcn，CLI 采用 Node（Commander）并当前仅保留 `dist/` 构建产物。
+**Instant Coffee (速溶咖啡)** 是一个通过自然对话生成 **移动端优先的多页 HTML/静态站点** 的 AI 工具。项目采用 monorepo 架构，后端为 FastAPI + SQLite + 多模型 LLM 调度，前端为 Vite + React + Tailwind + shadcn，CLI 采用 Node（Commander）并当前仅保留 `dist/` 构建产物。系统支持 Product Doc、Multi‑page Sitemap、页面版本与快照、资产管理、React SSG 构建与预览、SSE 事件流、Data Tab 交互数据回传，以及可选的 LangGraph 工作流骨架。
 
 ---
 
@@ -22,10 +22,12 @@
 | SQLAlchemy | ORM |
 | Pydantic | 数据验证 |
 | SQLite | 默认数据库 |
-| openai | Agent LLM 调用（AsyncOpenAI） |
-| httpx | Planner API 请求 |
+| LangGraph | 可选工作流编排骨架（USE_LANGGRAPH） |
+| openai | LLM 调用（Responses/Chat API 可切换） |
+| httpx | 规划器与视觉服务请求 |
 | Server-Sent Events | 实时事件流 |
 | python-dotenv | 可选环境变量加载 |
+| Pillow / BeautifulSoup4 | 图片与 HTML 处理 |
 
 ### 前端技术栈
 | 技术 | 版本/说明 |
@@ -35,10 +37,11 @@
 | Vite | 7.2.4 |
 | React Router | 7.13.0 |
 | Tailwind CSS | 4.1.18 |
-| Radix UI | 组件库 |
+| Radix UI + shadcn | 组件库 |
 | Sonner | Toast |
-| Lucide React | 图标 |
-| Playwright | 1.58.1（截图/验证脚本） |
+| React Resizable Panels | 分栏布局 |
+| react-markdown / diff | 文档/差异显示 |
+| Playwright | E2E 测试 |
 
 ### CLI 技术栈
 | 技术 | 版本/说明 |
@@ -55,183 +58,202 @@
 ```
 instant-coffee/
 ├── packages/
-│   ├── backend/                     # FastAPI 后端
+│   ├── backend/
 │   │   ├── app/
-│   │   │   ├── agents/              # Interview / Generation / Refinement
+│   │   │   ├── agents/              # Interview / ProductDoc / Generation / Refinement / ...
 │   │   │   ├── api/                 # REST/SSE 端点
-│   │   │   ├── db/                  # 数据库层
+│   │   │   ├── db/                  # 数据库层 + 迁移
 │   │   │   ├── events/              # 事件模型/发射器
 │   │   │   ├── executor/            # DAG 执行引擎
-│   │   │   ├── generators/          # HTML 验证器
-│   │   │   ├── llm/                 # LLM 客户端 + Tools
+│   │   │   ├── generators/          # HTML 验证
+│   │   │   ├── graph/               # LangGraph skeleton
+│   │   │   ├── llm/                 # LLM 客户端 + 模型池
 │   │   │   ├── planner/             # Planner（OpenAI/Anthropic）
-│   │   │   ├── services/            # 业务服务
-│   │   │   ├── config.py            # 配置
+│   │   │   ├── renderer/            # React SSG 构建器 + 模板
+│   │   │   ├── schemas/             # API/领域 Schema
+│   │   │   ├── services/            # 业务服务（产品文档/版本/资产/快照/…）
+│   │   │   ├── utils/               # HTML/样式/守卫/数据协议
 │   │   │   └── main.py              # 应用入口
-│   │   ├── tests/                   # 后端测试
-│   │   ├── instant-coffee.db        # 运行时数据库（本地）
-│   │   └── instant-coffee-output/   # 运行时输出（本地）
+│   │   ├── tests/                   # 后端测试 + e2e
+│   │   └── requirements.txt
 │   ├── web/                         # Vite + React 前端
 │   └── cli/                         # CLI 构建产物（dist/）
-├── docs/                            # 文档与规格
-├── README.md
-└── CLAUDE.md
+├── docs/                            # 规格 / 阶段文档 / 总结
+└── README.md
 ```
 
 ---
 
 ## 核心运行流程
 
-### 1) Chat（生成/精炼）
-1. `POST /api/chat` 或 `GET /api/chat/stream` 接收用户输入。
-2. Orchestrator 根据历史决定：
-   - 首次对话触发 Interview（可通过 `interview` 参数控制）。
-   - 若已有 HTML 且用户未要求“重新生成”，则走 Refinement。
-   - 否则进入 Generation。
-3. 生成的 HTML 写入 `OUTPUT_DIR/{session_id}/index.html` 并保存版本。
-4. SSE 通过事件与响应数据同步前端。
+### 1) Chat / Orchestration
+1. `POST /api/chat` 或 `GET /api/chat/stream` 接收用户输入（支持 style reference 图片/Token、指定页面、生成模式）。
+2. Orchestrator 决策路径：
+   - 首次对话触发 Interview；
+   - 基于意图/复杂度/场景检测生成或更新 Product Doc；
+   - Multi‑page 决策 → Sitemap → Page 创建；
+   - Generation / Refinement / Expander / Style Refiner / Validator 执行。
+3. 页面结果写入 PageVersion；必要时写入 Export/组件目录，并触发事件。
+4. SSE 事件与响应字段（preview_url / preview_html / affected_pages / action）同步前端。
 
-### 2) Plan + Task
-1. `POST /api/plan` 调 Planner 生成 DAG 任务并落库。
-2. `GET /api/plan/{plan_id}/status` 查询计划状态。
-3. `POST /api/task/{id}/retry|skip` 管理任务。
-4. `POST /api/session/{id}/abort` 中断会话内活跃计划。
+### 2) Plan + Task 执行
+1. Planner 生成 DAG 任务（Plan / Task），EventStore 持久化事件。
+2. ParallelExecutor 进行并行执行，支持 retry/skip/abort。
+3. 任务状态与进度通过 SSE 回推至前端，支持 UI 操作。
+
+### 3) Build / Preview（React SSG）
+1. `POST /api/sessions/{id}/build` 触发 React SSG 构建；输出到 `~/.instant-coffee/sessions/<id>/dist`。
+2. `GET /preview/{session_id}` 直接预览 build 产物（支持多页路径）。
+3. Build 过程写入 build.log 并通过 build SSE 事件流展示状态。
+
+### 4) Export / Files
+1. ExportService 将页面导出到 `OUTPUT_DIR/<session_id>`，生成 `index.html` / `pages/*.html` / `assets/site.css` / 组件/数据协议脚本。
+2. `/api/sessions/{id}/files` & `/files/{path}` 为 CodePanel 提供文件树/内容。
 
 ---
 
 ## 后端功能
 
-### 1. Agent 系统 (`app/agents/`)
+### 1) Agent / Orchestrator
 | Agent | 功能摘要 |
 |-------|----------|
-| BaseAgent | 统一 LLM 调用、Token 统计、Tool 事件封装 |
-| InterviewAgent | LLM 驱动问答；支持 `<INTERVIEW_ANSWERS>` 结构化输入 |
-| GenerationAgent | LLM 生成 HTML（含工具写文件）；失败回退模板 |
-| RefinementAgent | LLM 迭代已有 HTML（支持读写工具） |
-| AgentOrchestrator | 选择 Interview / Generation / Refinement 路径 |
+| InterviewAgent | 结构化问题采集（支持 `<INTERVIEW_ANSWERS>`） |
+| ProductDocAgent | 生成/更新产品文档与结构化字段 |
+| MultipageDecider / SitemapAgent | 多页决策与站点地图 |
+| GenerationAgent | 多页 HTML 生成 + 版本写入 |
+| RefinementAgent | 增量改写已有页面 |
+| ExpanderAgent | 结构扩展/补全 |
+| StyleRefiner / AestheticScorer | 视觉评分与优化（可选） |
+| Validator | HTML 校验与 fallback 摘要 |
+| ComponentPlanner / Builder / Registry | 组件库存与 schema 校验 |
+| AgentOrchestrator | 路由与任务编排（legacy） |
+| LangGraphOrchestrator | LangGraph skeleton（可选） |
 
-**关键行为**：
-- Interview 输出结构化问题/信心度，支持“跳过/直接生成”动作。
-- Generation/Refinement 自动抽取 HTML，写入 `index.html` 并保留版本副本。
-- BaseAgent 会发出 `agent_*`、`tool_*`、`token_usage` 事件。
+### 2) LLM 客户端与多模型调度
+- OpenAIClient 支持 Responses/Chat 双模式与 Token 统计。
+- ModelCatalog + ModelPool 支持多模型池、失败回退、角色级路由（classifier/writer/validator 等）。
+- 支持视觉能力检测（style reference / image input）。
 
-### 2. LLM 客户端 & Tools (`app/llm/`)
-| 组件 | 说明 |
-|------|------|
-| OpenAIClient | AsyncOpenAI + 重试 + 费用估算 |
-| tools.py | filesystem_read / filesystem_write / validate_html |
-| tool_handlers.py | 安全路径、大小限制、编码校验 |
-| retry.py | 指数退避重试 |
+### 3) Product Doc / Skills 体系
+- ProductDoc + History + Pin/Retention；支持 doc tier（checklist/standard/extended）。
+- SkillsRegistry 提供 manifests / guardrails / style profiles / state contracts。
+- Scenario Detector 与 Doc Tier/Complexity 路由。
 
-`validate_html` 调用 `generators/mobile_html.validate_mobile_html`（当前为占位实现）。
+### 4) 页面与版本管理
+- Page / PageVersion 多页模型，支持 pin/unpin 与 retention。
+- ProjectSnapshot 实现跨页回滚（替代旧的单页 rollback）。
+- Version/Session 兼容旧单页数据（v04 迁移）。
 
-### 3. API 端点 (`app/api/`)
+### 5) Build / Renderer
+- React SSG Builder 将 page schema + component registry + tokens 生成静态站。
+- 自动注入 Mobile Shell，保障移动端可用性。
+
+### 6) Data Protocol & App Mode
+- DataProtocolGenerator 注入 data-store/client 脚本与 state contract。
+- Preview 框架通过 postMessage 回传数据，用于 Data Tab 展示。
+
+### 7) 资产与文件
+- AssetRegistry 支持 logo/background/style_ref/product_image 上传与引用。
+- FileTreeService 输出代码面板所需文件树（pages + site.css + product doc）。
+
+### 8) 事件系统
+- EventEmitter + EventStore 将结构化事件持久化（session_events + seq）。
+- 事件类型覆盖：Agent/Tool/Plan/Task、ProductDoc、Page、Snapshot、Build、Aesthetic 等。
+
+---
+
+## API 端点（核心）
+
 | 端点 | 方法 | 功能 |
 |------|------|------|
-| `/api/chat` | POST | 聊天请求，支持 JSON 或 SSE |
-| `/api/chat/stream` | GET | SSE 流式 |
-| `/api/sessions` | GET/POST | 列出/创建会话 |
-| `/api/sessions/{id}` | GET | 会话详情（含预览） |
-| `/api/sessions/{id}/messages` | GET | 消息历史 |
-| `/api/sessions/{id}/versions` | GET | 版本列表 |
-| `/api/sessions/{id}/preview` | GET | HTML 预览 |
-| `/api/sessions/{id}/rollback` | POST | 回滚版本 |
-| `/api/sessions/{id}/versions/{version_id}/revert` | POST | 兼容版回滚 |
+| `/api/chat` | POST | 聊天请求（含 preview / action 字段） |
+| `/api/chat/stream` | GET/POST | SSE 流式响应 |
+| `/api/sessions` | GET/POST | 会话列表/创建 |
+| `/api/sessions/{id}` | GET/DELETE | 会话详情/删除 |
+| `/api/sessions/{id}/messages` | GET/DELETE | 消息读取/清空 |
+| `/api/sessions/{id}/versions` | GET | 版本列表（兼容旧版） |
+| `/api/sessions/{id}/preview` | GET | 预览 HTML |
+| `/api/sessions/{id}/metadata` | GET/PATCH/DELETE | Graph State / Build 状态 |
+| `/api/sessions/{id}/pages` | GET | 页面列表 |
+| `/api/pages/{id}` | GET | 页面详情 |
+| `/api/pages/{id}/versions` | GET | 页面版本 |
+| `/api/pages/{id}/preview` | GET | 页面预览 |
+| `/api/pages/{id}/versions/{ver}/preview` | GET | 版本预览 |
+| `/api/pages/{id}/versions/{ver}/pin` | POST | 版本 Pin/Unpin |
+| `/api/sessions/{id}/product-doc` | GET | 产品文档 |
+| `/api/sessions/{id}/product-doc/history` | GET | 文档历史 |
+| `/api/sessions/{id}/product-doc/history/{id}` | GET | 文档历史详情 |
+| `/api/sessions/{id}/product-doc/history/{id}/pin` | POST | 历史 Pin/Unpin |
+| `/api/sessions/{id}/snapshots` | GET/POST | 项目快照列表/创建 |
+| `/api/sessions/{id}/snapshots/{sid}` | GET | 快照详情 |
+| `/api/sessions/{id}/snapshots/{sid}/rollback` | POST | 快照回滚 |
+| `/api/sessions/{id}/assets` | GET/POST | 资产列表/上传 |
+| `/api/sessions/{id}/assets/{aid}` | GET/DELETE | 资产详情/删除 |
+| `/api/sessions/{id}/files` | GET | 文件树 |
+| `/api/sessions/{id}/files/{path}` | GET | 文件内容 |
+| `/api/sessions/{id}/schemas` | GET | 页面 Schema 列表 |
+| `/api/sessions/{id}/schemas/{slug}` | GET | 单页 Schema |
+| `/api/sessions/{id}/registry` | GET | 组件注册表 |
+| `/api/sessions/{id}/tokens` | GET | Style Tokens |
+| `/api/sessions/{id}/build` | POST/DELETE | 触发/取消 Build |
+| `/api/sessions/{id}/build/status` | GET | Build 状态 |
+| `/api/sessions/{id}/build/logs` | GET | Build 日志 |
+| `/api/sessions/{id}/build/stream` | GET | Build SSE |
 | `/api/plan` | POST | 生成计划 |
-| `/api/plan/{plan_id}/status` | GET | 计划状态 |
-| `/api/task/{id}/retry` | POST | 重试任务 |
-| `/api/task/{id}/skip` | POST | 跳过任务 |
-| `/api/session/{id}/abort` | POST | 中断会话计划 |
+| `/api/plan/{id}/status` | GET | 计划状态 |
+| `/api/task/{id}/retry` | POST | 任务重试 |
+| `/api/task/{id}/skip` | POST | 任务跳过 |
+| `/api/session/{id}/abort` | POST | 中断活跃计划 |
+| `/api/sessions/{id}/events` | GET | Session Event 拉取 |
 | `/api/settings` | GET/PUT | 运行时设置 |
+| `/api/migrations/v04` | POST | v04 数据迁移 |
+| `/preview/{session_id}` | GET | Build 预览入口 |
 | `/health` | GET | 健康检查 |
 
-### 4. 数据库模型 (`app/db/models.py`)
+---
+
+## 数据库模型（关键）
+
 | 模型 | 说明 |
 |------|------|
-| Session / Message / Version | 会话、消息、HTML 版本 |
-| TokenUsage | Token 记录与费用 |
+| Session / Message / Version | 会话、消息、旧版单页版本 |
+| Page / PageVersion | 多页与页面版本（pin/retention） |
+| ProductDoc / ProductDocHistory | 产品文档与历史版本 |
+| ProjectSnapshot / SnapshotPage | 跨页快照与回滚 |
 | Plan / Task | 计划与任务 |
-| PlanEvent / TaskEvent | 事件落库 |
+| SessionEvent / Sequence | 事件持久化与序号 |
+| TokenUsage | Token & 费用统计 |
 
 **状态枚举**：
 - Plan: `pending` / `in_progress` / `done` / `failed` / `aborted`
-- Task: `pending` / `in_progress` / `done` / `failed` / `blocked` / `skipped` / `retrying` / `aborted`
-
-### 5. 服务层 (`app/services/`)
-- Session / Message / Version / Plan / Task / EventStore / Export / Filesystem / TokenTracker
-
-### 6. 执行引擎 (`app/executor/`)
-| 组件 | 功能 |
-|------|------|
-| TaskScheduler | DAG 调度 + 循环依赖检测 |
-| ParallelExecutor | 并行任务执行 |
-| TaskExecutorFactory | Interview/Generation/Refinement/Export/Validator |
-| RetryPolicy | 指数退避 |
-
-> 执行引擎已实现，但目前未在 API 中提供“执行计划”入口（主要用于测试/后续集成）。
-
-### 7. 规划器 (`app/planner/`)
-| 组件 | 说明 |
-|------|------|
-| OpenAIPlanner | OpenAI JSON 规划 |
-| AnthropicPlanner | Anthropic JSON 规划 |
-| BasePlanner | JSON 抽取、任务标准化 |
-
-### 8. 事件系统 (`app/events/`)
-**事件类型**：
-- Agent: `agent_start`, `agent_progress`, `agent_end`
-- Tool: `tool_call`, `tool_result`
-- Token: `token_usage`
-- Plan/Task: `plan_created`, `plan_updated`, `task_*`
-- System: `error`, `done`
-
-`EventEmitter` 支持事件缓存与持久化（通过 `EventStoreService`）。
-
-### 9. 生成器/校验
-- `generators/mobile_html.validate_mobile_html` 目前为空实现（返回 `[]`）。
-- Validator 任务执行器已存在，但依赖真实校验逻辑。
+- Task: `pending` / `in_progress` / `done` / `failed` / `blocked` / `skipped` / `retrying` / `aborted` / `timeout`
+- ProductDoc: `draft` / `confirmed` / `outdated`
+- Build: `pending` / `building` / `success` / `failed`
 
 ---
 
 ## 前端功能
 
-### 1. API 客户端 (`src/api/client.ts`)
-覆盖 sessions/chat/settings/tasks 等核心接口，并提供 SSE URL 构造。
+### 1) 页面与布局
+- HomePage / ProjectPage / ExecutionPage / SettingsPage。
+- 三栏工作台：Chat + Workbench + 事件流/任务。
 
-### 2. 自定义 Hooks (`src/hooks/`)
-`useChat`, `useSession`, `usePlan`, `useSSE`, `useProjects`, `useSettings`,
-`useVirtualList`, `useOnlineStatus`, `use-toast`.
+### 2) Workbench 面板
+- Preview：支持 Live/Build 切换、Page Selector、移动端外框、Build 状态、Aesthetic Score。
+- Code：文件树 + 文件内容查看（index/pages/site.css/product-doc）。
+- Product Doc：文档展示、历史版本、diff 与 pin。
 
-### 3. 页面 (`src/pages/`)
-`HomePage`, `ProjectPage`, `ExecutionPage`, `SettingsPage`。
+### 3) Data Tab / App Mode
+- App Mode 将预览中的交互状态/事件/提交记录回传到 Data Tab。
+- 按场景（电商/旅行/说明书/看板/landing）过滤展示。
 
-### 4. 组件 (`src/components/`)
-**自定义组件**：
-- ChatPanel / ChatInput / ChatMessage
-- InterviewWidget（结构化问答）
-- PreviewPanel / PhoneFrame
-- VersionPanel / VersionTimeline
-- ProjectCard
-- TokenDisplay
+### 4) Chat 与资产
+- Interview Widget（结构化问答）。
+- Chat 支持资产上传、style reference、页面引用（@page）。
 
-**事件流**：
-- EventList / EventItem / CollapsibleEvent / ToolCallEvent / ToolResultEvent / ProgressBar / StatusIcon
-
-**任务视图**：
-- TaskCard / TaskCardList / AgentActivity / ToolCallLog
-
-**Todo**：
-- TodoPanel / TodoItem
-
-**shadcn/ui**：
-alert-dialog, avatar, badge, button, card, collapsible, dialog, dropdown-menu,
-input, label, resizable, scroll-area, select, separator, skeleton, slider,
-sonner, switch, tabs, textarea, toast, toaster, tooltip.
-
-### 5. 类型定义 (`src/types/`)
-- `events.ts`: 事件类型与类型守卫
-- `plan.ts`: Plan/Task 状态类型
-- `index.ts`: 会话、版本、Interview 结构与 Token Summary
+### 5) 事件与任务视图
+- EventList / ToolCall / ToolResult / Progress / Status。
+- TaskCard / AgentActivity / ToolCallLog。
 
 ---
 
@@ -241,38 +263,22 @@ sonner, switch, tabs, textarea, toast, toaster, tooltip.
 - `chat`：交互式对话（SSE 优先）
 - `history`：历史会话查看
 - `export`：导出内容
-- `rollback`：回滚版本
+- `rollback`：回滚版本（旧版单页）
 - `stats`：统计信息
 - `clean`：清理输出
+- `migrate-v04`：运行 v04 数据迁移
 
-**运行时配置**：
-`BACKEND_URL`, `OUTPUT_DIR`, `VERBOSE`
+**运行时配置**：`BACKEND_URL`, `OUTPUT_DIR`, `VERBOSE`
 
 > CLI 仅保留编译产物，TS 源码未在仓库中。
 
 ---
 
-## 测试覆盖 (`packages/backend/tests/`)
+## 测试覆盖
 
-- test_agent_prompts.py
-- test_chat_stream_compat.py
-- test_chat_stream_tool_events.py
-- test_event_protocol.py
-- test_event_store.py
-- test_events.py
-- test_generation_agent.py
-- test_interview_agent.py
-- test_llm_client.py
-- test_llm_retry.py
-- test_orchestrator_events.py
-- test_parallel_executor.py
-- test_plan_task_services.py
-- test_planner.py
-- test_refinement_agent.py
-- test_retry_policy.py
-- test_task_scheduler.py
-- test_tool_events.py
-- test_tools.py
+- **Backend 单元测试**：agents/orchestrator、planner、model pool、product doc、component registry、mobile shell、data protocol、files/pages API、event store 等。
+- **Backend E2E**：full generation、multi-model routing、product doc tiers、chat images、style reference、aesthetic scoring、data protocol 等。
+- **Web**：Playwright E2E（Data Tab、Image Upload、Preview Bridge 等）。
 
 ---
 
@@ -283,26 +289,19 @@ sonner, switch, tabs, textarea, toast, toaster, tooltip.
 |--------|----------|--------|
 | 数据库 | `DATABASE_URL` | `sqlite:///./instant-coffee.db` |
 | 输出目录 | `OUTPUT_DIR` | `instant-coffee-output` |
-| 规划器提供商 | `PLANNER_PROVIDER` | `openai` |
-| 规划器模型 | `PLANNER_MODEL` | `gpt-4o-mini` |
-| 规划器超时 | `PLANNER_TIMEOUT_SECONDS` | `30.0` |
-| OpenAI Key | `OPENAI_API_KEY` | - |
-| OpenAI Base | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
-| OpenAI 超时 | `OPENAI_TIMEOUT_SECONDS` | `60.0` |
-| OpenAI 最大重试 | `OPENAI_MAX_RETRIES` | `2` |
-| OpenAI 基础退避 | `OPENAI_BASE_DELAY` | `1.0` |
-| Anthropic Key | `ANTHROPIC_API_KEY` | - |
-| Anthropic Base | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` |
-| Anthropic Version | `ANTHROPIC_API_VERSION` | `2023-06-01` |
-| 默认 Base URL | `DEFAULT_BASE_URL` | - |
-| 默认 Key | `DEFAULT_KEY` | - |
-| 模型 | `MODEL` / `DEFAULT_MODEL` | `gpt-4o-mini` |
-| 温度 | `TEMPERATURE` | `0.7` |
-| 最大 Token | `MAX_TOKENS` | `8000` |
-| 自动保存 | `AUTO_SAVE` | `true` |
-| 最大并发 | `MAX_CONCURRENCY` | `3` |
-| Interview 超时 | `INTERVIEW_TIMEOUT_SECONDS` | `60.0` |
-| Product Doc 超时 | `PRODUCT_DOC_TIMEOUT_SECONDS` | `120.0` |
+| 规划器 | `PLANNER_PROVIDER` / `PLANNER_MODEL` | `openai` / `kimi-k2.5` |
+| OpenAI Key | `OPENAI_API_KEY` / `DEFAULT_KEY` / `DMX_API_KEY` | - |
+| OpenAI Base | `OPENAI_BASE_URL` | model catalog 默认值 |
+| OpenAI 模式 | `OPENAI_API_MODE` | `responses` |
+| Timeout/Retry | `OPENAI_TIMEOUT_SECONDS` / `OPENAI_MAX_RETRIES` / `OPENAI_BASE_DELAY` | 60 / 2 / 1.0 |
+| 模型 | `MODEL` / `MODEL_*` | model catalog 默认值 |
+| 模型池 | `MODEL_POOLS` / `MODEL_FAILURE_*` | 内置默认池 |
+| LangGraph | `USE_LANGGRAPH` | false |
+| Style Extractor | `ENABLE_STYLE_EXTRACTOR` | true |
+| Aesthetic | `ENABLE_AESTHETIC_SCORING` / `AESTHETIC_THRESHOLDS` | false / {} |
+| 并发与超时 | `MAX_CONCURRENCY` / `TASK_TIMEOUT_SECONDS` | 3 / 600 |
+| 迁移 | `MIGRATE_V04_ON_STARTUP` | false |
+| Interview / ProductDoc 超时 | `INTERVIEW_TIMEOUT_SECONDS` / `PRODUCT_DOC_TIMEOUT_SECONDS` | 60 / 120 |
 
 ### 前端运行时配置
 - `VITE_API_URL`（默认 `http://localhost:8000`）
@@ -312,27 +311,26 @@ sonner, switch, tabs, textarea, toast, toaster, tooltip.
 ## 当前完成度与待完善
 
 ### 已实现
-- ✅ Interview / Generation / Refinement Agent（LLM 驱动）
-- ✅ LLM Tools + Tool 事件（读写/校验工具）
-- ✅ SSE 事件流 + Token 统计
-- ✅ 会话/消息/版本管理
-- ✅ Plan/Task Schema 与 Planner
-- ✅ DAG 执行引擎（已实现）
-- ✅ 前端三栏视图 + 事件流 + 任务视图 + Token 展示
-- ✅ CLI 多命令入口
+- ✅ 多页生成 + PageVersion 管理
+- ✅ Product Doc + 历史版本 + Pin
+- ✅ Asset Registry + 预览/引用
+- ✅ React SSG Build + Preview + Mobile Shell
+- ✅ Data Tab / App Mode 交互数据回传
+- ✅ 多模型池与失败回退
+- ✅ SSE 事件流与持久化
+- ✅ LangGraph skeleton（可选）
 
 ### 待完善
-- ⚠️ `validate_mobile_html` 仍为空实现
-- ⚠️ Validator 任务依赖真实校验逻辑
-- ⚠️ CLI 仅有 `dist/`，缺少可维护源码
-- ⚠️ “计划执行”尚未在 API 暴露入口
-- ⚠️ E2E 与端到端验证仍缺失
+- ⚠️ LangGraph 仍为骨架流程，默认走 legacy orchestrator
+- ⚠️ Validator 规则仍偏基础，守卫规则需持续扩展
+- ⚠️ CLI 仅保留 dist 构建产物，缺少可维护源码
+- ⚠️ 更完整的端到端 CI/发布流程仍待补齐
 
 ---
 
 ## 文档资源
 
-- **产品规格**: `docs/spec/spec-01.md`
+- **产品规格**: `docs/spec/`
 - **路线与阶段**: `docs/phases/INDEX.md`
 - **设计系统**: `docs/design-system.md`
 

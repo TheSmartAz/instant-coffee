@@ -11,6 +11,7 @@ import httpx
 import openai
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageToolCall, ChatCompletionToolParam
+from langsmith import traceable
 
 from ..config import Settings, get_settings
 from .retry import with_retry
@@ -250,6 +251,13 @@ class OpenAIClient:
                 normalized.append(tool)
         return normalized
 
+    @traceable(run_type="llm")
+    async def _request_chat_completion(self, payload: Dict[str, Any]) -> Any:
+        try:
+            return await self._client.chat.completions.create(**payload)
+        except Exception as exc:  # pragma: no cover - relies on SDK
+            raise self._handle_error(exc) from exc
+
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -272,10 +280,7 @@ class OpenAIClient:
         payload.update(kwargs)
 
         async def _request() -> Any:
-            try:
-                return await self._client.chat.completions.create(**payload)
-            except Exception as exc:  # pragma: no cover - relies on SDK
-                raise self._handle_error(exc) from exc
+            return await self._request_chat_completion(payload)
 
         response = await with_retry(
             _request,
@@ -382,6 +387,14 @@ class OpenAIClient:
         payload.update(extra)
         return payload
 
+    @traceable(run_type="llm")
+    async def _request_responses(self, payload: Dict[str, Any]) -> Any:
+        responses = self._responses_client()
+        try:
+            return await responses.create(**payload)
+        except Exception as exc:  # pragma: no cover - relies on SDK
+            raise self._handle_error(exc) from exc
+
     async def responses_create(
         self,
         messages: List[Dict[str, str]],
@@ -404,13 +417,8 @@ class OpenAIClient:
             reasoning_effort=reasoning_effort,
             extra=dict(kwargs),
         )
-        responses = self._responses_client()
-
         async def _request() -> Any:
-            try:
-                return await responses.create(**payload)
-            except Exception as exc:  # pragma: no cover - relies on SDK
-                raise self._handle_error(exc) from exc
+            return await self._request_responses(payload)
 
         response = await with_retry(
             _request,
@@ -537,7 +545,6 @@ class OpenAIClient:
             reasoning_effort=reasoning_effort,
             extra=dict(kwargs),
         )
-        responses = self._responses_client()
         fallback_input = list(base_payload.get("input") or [])
 
         for _ in range(max_iterations):
@@ -547,10 +554,7 @@ class OpenAIClient:
                 payload["input"] = payload.get("input") or []
 
             async def _request() -> Any:
-                try:
-                    return await responses.create(**payload)
-                except Exception as exc:  # pragma: no cover - relies on SDK
-                    raise self._handle_error(exc) from exc
+                return await self._request_responses(payload)
 
             response = await with_retry(
                 _request,

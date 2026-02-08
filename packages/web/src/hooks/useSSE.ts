@@ -5,10 +5,15 @@ import type { ExecutionEvent, SessionEvent } from '@/types/events'
 type ConnectionState = 'idle' | 'connecting' | 'open' | 'error' | 'closed'
 
 const EXCLUDED_EVENT_TYPES = new Set(['delta', 'thinking', 'ping'])
+const DEFAULT_MAX_EVENTS = 2000
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object')
 
+const toTimestampMs = (timestamp?: string) => {
+  const parsed = Date.parse(timestamp ?? '')
+  return Number.isNaN(parsed) ? Date.now() : parsed
+}
 
 const normalizePayloadEvent = (
   payload: Record<string, unknown>
@@ -20,25 +25,46 @@ const normalizePayloadEvent = (
     typeof payload.timestamp === 'string'
       ? payload.timestamp
       : new Date().toISOString()
-  return { ...payload, type: rawType, timestamp } as ExecutionEvent
+  const timestampMs = toTimestampMs(timestamp)
+  return { ...payload, type: rawType, timestamp, timestamp_ms: timestampMs } as ExecutionEvent
 }
 
 const normalizeSessionEvent = (event: SessionEvent): ExecutionEvent | null => {
   if (!event.type || EXCLUDED_EVENT_TYPES.has(event.type)) return null
   const payload = isRecord(event.payload) ? event.payload : {}
+  const timestamp = event.created_at
   const base = {
     ...payload,
     type: event.type,
-    timestamp: event.created_at,
+    timestamp,
+    timestamp_ms: toTimestampMs(timestamp),
     session_id: event.session_id,
+    run_id: event.run_id ?? undefined,
+    event_id: event.event_id ?? undefined,
     seq: event.seq,
     source: event.source,
   } as ExecutionEvent
   return base
 }
 
+const dispatchBuildEvent = (event: ExecutionEvent) => {
+  if (typeof window === 'undefined') return
+  if (
+    event.type === 'build_start' ||
+    event.type === 'build_progress' ||
+    event.type === 'build_complete' ||
+    event.type === 'build_failed'
+  ) {
+    window.dispatchEvent(new CustomEvent('build-event', { detail: event }))
+  }
+}
+
 const buildEventKey = (event: ExecutionEvent) => {
+  const runId = (event as { run_id?: string }).run_id
   if (event.seq !== undefined && event.seq !== null) {
+    if (runId) {
+      return `run-seq:${runId}:${event.seq}`
+    }
     return `seq:${event.seq}`
   }
   const timestamp = event.timestamp ?? ''
@@ -55,13 +81,15 @@ const sortEvents = (a: ExecutionEvent, b: ExecutionEvent) => {
   }
   if (typeof aSeq === 'number') return -1
   if (typeof bSeq === 'number') return 1
-  const aTime = Date.parse(a.timestamp ?? '') || 0
-  const bTime = Date.parse(b.timestamp ?? '') || 0
+  const aTime =
+    typeof a.timestamp_ms === 'number' ? a.timestamp_ms : toTimestampMs(a.timestamp)
+  const bTime =
+    typeof b.timestamp_ms === 'number' ? b.timestamp_ms : toTimestampMs(b.timestamp)
   return aTime - bTime
 }
 
-const mergeEvents = (historical: ExecutionEvent[], realtime: ExecutionEvent[]) => {
-  const combined = [...historical, ...realtime].sort(sortEvents)
+const mergeEvents = (existing: ExecutionEvent[], incoming: ExecutionEvent[]) => {
+  const combined = [...existing, ...incoming].sort(sortEvents)
   const seen = new Set<string>()
   const result: ExecutionEvent[] = []
   for (const event of combined) {
@@ -85,6 +113,7 @@ export interface UseSSEOptions {
   loadHistory?: boolean
   historyLimit?: number
   replayHistory?: boolean
+  maxEvents?: number
 }
 
 export interface UseSSEReturn {
@@ -111,9 +140,9 @@ export function useSSE({
   loadHistory = true,
   historyLimit = 1000,
   replayHistory = true,
+  maxEvents = DEFAULT_MAX_EVENTS,
 }: UseSSEOptions): UseSSEReturn {
-  const [historicalEvents, setHistoricalEvents] = React.useState<ExecutionEvent[]>([])
-  const [realtimeEvents, setRealtimeEvents] = React.useState<ExecutionEvent[]>([])
+  const [events, setEvents] = React.useState<ExecutionEvent[]>([])
   const [isConnected, setIsConnected] = React.useState(false)
   const [isConnecting, setIsConnecting] = React.useState(false)
   const [isHistoryLoading, setIsHistoryLoading] = React.useState(false)
@@ -124,9 +153,13 @@ export function useSSE({
   const eventSourceRef = React.useRef<EventSource | null>(null)
   const reconnectTimeoutRef = React.useRef<number | null>(null)
   const seenEventKeysRef = React.useRef<Set<string>>(new Set())
+  const pendingEventsRef = React.useRef<ExecutionEvent[]>([])
+  const flushHandleRef = React.useRef<number | null>(null)
+  const flushUsesRafRef = React.useRef(false)
   const onEventRef = React.useRef<typeof onEvent>(onEvent)
   const onErrorRef = React.useRef<typeof onError>(onError)
   const onDoneRef = React.useRef<typeof onDone>(onDone)
+  const maxEventsResolved = Math.max(50, maxEvents)
 
   React.useEffect(() => {
     onEventRef.current = onEvent
@@ -139,6 +172,53 @@ export function useSSE({
   React.useEffect(() => {
     onDoneRef.current = onDone
   }, [onDone])
+
+  const clampEvents = React.useCallback(
+    (items: ExecutionEvent[]) => {
+      if (items.length <= maxEventsResolved) return items
+      const trimmed = items.slice(-maxEventsResolved)
+      seenEventKeysRef.current = new Set(
+        trimmed.map((event) => buildEventKey(event))
+      )
+      return trimmed
+    },
+    [maxEventsResolved]
+  )
+
+  const cancelFlush = React.useCallback(() => {
+    const handle = flushHandleRef.current
+    if (handle === null) return
+    if (flushUsesRafRef.current && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(handle)
+    } else {
+      window.clearTimeout(handle)
+    }
+    flushHandleRef.current = null
+    flushUsesRafRef.current = false
+  }, [])
+
+  const scheduleFlush = React.useCallback(() => {
+    if (flushHandleRef.current !== null) return
+    const useRaf =
+      typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+    flushUsesRafRef.current = useRaf
+    const handle = useRaf
+      ? window.requestAnimationFrame(() => {
+          flushHandleRef.current = null
+          const pending = pendingEventsRef.current
+          if (pending.length === 0) return
+          pendingEventsRef.current = []
+          setEvents((prev) => clampEvents([...prev, ...pending]))
+        })
+      : window.setTimeout(() => {
+          flushHandleRef.current = null
+          const pending = pendingEventsRef.current
+          if (pending.length === 0) return
+          pendingEventsRef.current = []
+          setEvents((prev) => clampEvents([...prev, ...pending]))
+        }, 16)
+    flushHandleRef.current = handle
+  }, [clampEvents])
 
   const clearReconnect = React.useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -194,8 +274,10 @@ export function useSSE({
         const key = buildEventKey(normalized)
         if (seenEventKeysRef.current.has(key)) return
         seenEventKeysRef.current.add(key)
-        setRealtimeEvents((prev) => [...prev, normalized])
+        pendingEventsRef.current.push(normalized)
+        scheduleFlush()
         onEventRef.current?.(normalized)
+        dispatchBuildEvent(normalized)
         if (normalized.type === 'done') {
           onDoneRef.current?.()
         }
@@ -224,17 +306,18 @@ export function useSSE({
         }, reconnectDelay)
       }
     }
-  }, [autoReconnect, clearReconnect, reconnectDelay, url])
+  }, [autoReconnect, clearReconnect, reconnectDelay, url, scheduleFlush])
 
   const clearEvents = React.useCallback(() => {
-    setHistoricalEvents([])
-    setRealtimeEvents([])
+    cancelFlush()
+    pendingEventsRef.current = []
+    setEvents([])
     seenEventKeysRef.current = new Set()
-  }, [])
+  }, [cancelFlush])
 
   React.useEffect(() => {
     if (!sessionId || !loadHistory) {
-      setHistoricalEvents([])
+      setEvents([])
       setIsHistoryLoading(false)
       return
     }
@@ -246,11 +329,12 @@ export function useSSE({
         let sinceSeq: number | undefined = undefined
         let hasMore = true
         let page = 0
-        while (hasMore && page < 5) {
+        const requestLimit = Math.min(historyLimit, maxEventsResolved)
+        while (hasMore && page < 5 && accumulated.length < maxEventsResolved) {
           const response = await api.events.getSessionEvents(
             sessionId,
             sinceSeq,
-            historyLimit
+            requestLimit
           )
           const payload = response as {
             events?: SessionEvent[]
@@ -270,12 +354,22 @@ export function useSSE({
           .map((event) => normalizeSessionEvent(event))
           .filter(Boolean) as ExecutionEvent[]
         normalized.sort(sortEvents)
-        seenEventKeysRef.current = new Set(
-          normalized.map((event) => buildEventKey(event))
-        )
-        setHistoricalEvents(normalized)
+        const trimmed = normalized.length > maxEventsResolved
+          ? normalized.slice(-maxEventsResolved)
+          : normalized
+        setEvents((prev) => {
+          const merged = mergeEvents(prev, trimmed)
+          const capped = clampEvents(merged)
+          seenEventKeysRef.current = new Set(
+            capped.map((event) => buildEventKey(event))
+          )
+          return capped
+        })
         if (replayHistory && onEventRef.current) {
-          normalized.forEach((event) => onEventRef.current?.(event))
+          trimmed.forEach((event) => {
+            onEventRef.current?.(event)
+            dispatchBuildEvent(event)
+          })
         }
       } catch (err) {
         if (!active) return
@@ -292,7 +386,7 @@ export function useSSE({
     return () => {
       active = false
     }
-  }, [historyLimit, loadHistory, replayHistory, sessionId])
+  }, [historyLimit, loadHistory, replayHistory, sessionId, maxEventsResolved, clampEvents])
 
   React.useEffect(() => {
     if (!autoConnect || !url) return
@@ -303,14 +397,11 @@ export function useSSE({
   }, [autoConnect, connect, disconnect, url])
 
   React.useEffect(() => {
-    setRealtimeEvents([])
+    cancelFlush()
+    pendingEventsRef.current = []
+    setEvents([])
     seenEventKeysRef.current = new Set()
-  }, [sessionId])
-
-  const events = React.useMemo(
-    () => mergeEvents(historicalEvents, realtimeEvents),
-    [historicalEvents, realtimeEvents]
-  )
+  }, [sessionId, cancelFlush])
 
   return {
     events,

@@ -1,10 +1,14 @@
 import * as React from 'react'
-import { RefreshCw, Download, Loader2 } from 'lucide-react'
+import { RefreshCw, Download, Loader2, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DataTab } from './DataTab'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { cn } from '@/lib/utils'
 import { PhoneFrame } from './PhoneFrame'
 import { PageSelector } from './PageSelector'
+import { AestheticScoreCard } from './AestheticScoreCard'
+import { BuildStatusIndicator } from './BuildStatusIndicator'
+import type { AestheticScore } from '@/types/aesthetic'
+import type { BuildState, BuildStatusType } from '@/types/build'
 
 const HIDE_SCROLLBAR_STYLE = `<style id="ic-hide-scrollbar">
 html, body {
@@ -338,6 +342,22 @@ const APP_MODE_SCRIPT = `<script id="ic-app-mode-runtime">
 })();
 </script>`;
 
+const BUILD_STATUS_LABELS: Record<BuildStatusType, string> = {
+  idle: 'Ready',
+  pending: 'Pending',
+  building: 'Building',
+  success: 'Complete',
+  failed: 'Failed',
+}
+
+const BUILD_STATUS_TONES: Record<BuildStatusType, string> = {
+  idle: 'bg-muted text-muted-foreground',
+  pending: 'bg-amber-100 text-amber-700',
+  building: 'bg-blue-100 text-blue-700',
+  success: 'bg-emerald-100 text-emerald-700',
+  failed: 'bg-rose-100 text-rose-700',
+}
+
 const injectAppModeRuntime = (html: string) => {
   if (!html) return html
   if (html.includes('id="ic-app-mode-runtime"')) return html
@@ -412,12 +432,21 @@ export interface PreviewPanelProps {
   sessionId?: string
   appMode?: boolean
   onAppModeChange?: (next: boolean) => void
+  previewMode?: 'live' | 'build'
+  onPreviewModeChange?: (next: 'live' | 'build') => void
   htmlContent?: string
   previewUrl?: string | null
+  buildPreviewUrl?: string | null
   onRefresh?: () => void
   onExport?: () => void
   isRefreshing?: boolean
   isExporting?: boolean
+  aestheticScore?: AestheticScore | null
+  buildState?: BuildState | null
+  onBuildRetry?: () => void
+  onBuildCancel?: () => void
+  onBuildPageSelect?: (page: string) => void
+  selectedBuildPage?: string | null
   // Multi-page props (optional)
   pages?: PageInfo[]
   selectedPageId?: string | null
@@ -425,18 +454,25 @@ export interface PreviewPanelProps {
   onRefreshPage?: (pageId: string) => void
 }
 
-type PreviewTab = 'preview' | 'data'
-
 export function PreviewPanel({
   sessionId,
   appMode = false,
   onAppModeChange,
+  previewMode = 'live',
+  onPreviewModeChange,
   htmlContent,
   previewUrl,
+  buildPreviewUrl,
   onRefresh,
   onExport,
   isRefreshing = false,
   isExporting = false,
+  aestheticScore,
+  buildState,
+  onBuildRetry,
+  onBuildCancel,
+  onBuildPageSelect,
+  selectedBuildPage,
   pages,
   selectedPageId,
   onSelectPage,
@@ -444,13 +480,53 @@ export function PreviewPanel({
 }: PreviewPanelProps) {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null)
-  const [activeTab, setActiveTab] = React.useState<PreviewTab>('preview')
   const [scale, setScale] = React.useState(1)
   const [currentHtml, setCurrentHtml] = React.useState<string | null>(htmlContent ?? null)
   const [currentUrl, setCurrentUrl] = React.useState<string | null>(previewUrl ?? null)
   const [appState, setAppState] = React.useState<Record<string, unknown>>({})
+  const scoreStorageKey = sessionId ? `instant-coffee:aesthetic-score:${sessionId}` : null
+  const [scoreExpanded, setScoreExpanded] = React.useState(false)
+  const buildStatus: BuildStatusType = buildState?.status ?? 'idle'
+  const showBuildStatus = Boolean(buildState) && Boolean(sessionId)
+  const isBuildActive = buildStatus === 'building' || buildStatus === 'pending'
+  const isBuildPreview = previewMode === 'build'
+  const effectiveAppMode = appMode && !isBuildPreview
 
   const storageKey = sessionId ? `instant-coffee:app-state:${sessionId}` : null
+
+  React.useEffect(() => {
+    if (!scoreStorageKey) {
+      setScoreExpanded(false)
+      return
+    }
+    try {
+      const raw = window.localStorage.getItem(scoreStorageKey)
+      if (!raw) {
+        setScoreExpanded(Boolean(aestheticScore))
+        return
+      }
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') {
+        setScoreExpanded(Boolean(aestheticScore))
+        return
+      }
+      setScoreExpanded(Boolean((parsed as { expanded?: boolean }).expanded))
+    } catch {
+      setScoreExpanded(Boolean(aestheticScore))
+    }
+  }, [scoreStorageKey, aestheticScore])
+
+  React.useEffect(() => {
+    if (!scoreStorageKey) return
+    try {
+      window.localStorage.setItem(
+        scoreStorageKey,
+        JSON.stringify({ expanded: scoreExpanded })
+      )
+    } catch {
+      // ignore storage failures
+    }
+  }, [scoreExpanded, scoreStorageKey])
 
   React.useEffect(() => {
     if (!storageKey) {
@@ -484,19 +560,25 @@ export function PreviewPanel({
   }, [appState, storageKey])
   const injectedHtml = React.useMemo(() => {
     if (!currentHtml) return ''
-    const withRuntime = appMode ? injectAppModeRuntime(currentHtml) : currentHtml
+    const withRuntime = effectiveAppMode ? injectAppModeRuntime(currentHtml) : currentHtml
     return injectHideScrollbarStyle(withRuntime)
-  }, [appMode, currentHtml])
+  }, [currentHtml, effectiveAppMode])
   const htmlValue = currentHtml?.trim() ? injectedHtml : EMPTY_PREVIEW_HTML
 
   // Update current preview when props change
   React.useEffect(() => {
+    if (isBuildPreview) {
+      setCurrentHtml(null)
+      setCurrentUrl(buildPreviewUrl ?? null)
+      return
+    }
     setCurrentHtml(htmlContent ?? null)
-  }, [htmlContent])
+  }, [buildPreviewUrl, htmlContent, isBuildPreview])
 
   React.useEffect(() => {
-    setCurrentUrl(appMode ? null : previewUrl ?? null)
-  }, [appMode, previewUrl])
+    if (isBuildPreview) return
+    setCurrentUrl(effectiveAppMode ? null : previewUrl ?? null)
+  }, [effectiveAppMode, isBuildPreview, previewUrl])
 
   // Reset scroll position when page changes
   React.useEffect(() => {
@@ -517,17 +599,17 @@ export function PreviewPanel({
   }, [isMultiPage, selectedPageId, onRefreshPage, onRefresh])
 
   const sendStateToIframe = React.useCallback(() => {
-    if (!appMode) return
+    if (!effectiveAppMode) return
     const frame = iframeRef.current
     if (!frame || !frame.contentWindow) return
     frame.contentWindow.postMessage(
       { source: APP_MODE_SOURCE, type: 'ic_state_init', state: appState },
       '*'
     )
-  }, [appMode, appState])
+  }, [appState, effectiveAppMode])
 
   React.useEffect(() => {
-    if (!appMode) return
+    if (!effectiveAppMode) return
     const handleMessage = (event: MessageEvent) => {
       const payload = event.data as { source?: string; type?: string; slug?: string; state?: unknown }
       if (!payload || payload.source !== APP_MODE_SOURCE) return
@@ -552,19 +634,18 @@ export function PreviewPanel({
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [appMode, onSelectPage, pages, sendStateToIframe])
+  }, [effectiveAppMode, onSelectPage, pages, sendStateToIframe])
 
   React.useEffect(() => {
-    if (!appMode) return
+    if (!effectiveAppMode) return
     sendStateToIframe()
-  }, [appMode, sendStateToIframe])
+  }, [effectiveAppMode, sendStateToIframe])
 
   React.useEffect(() => {
     if (!containerRef.current) return
 
     const updateScale = () => {
       if (!containerRef.current) return
-      if (activeTab !== 'preview') return
       const width = containerRef.current.clientWidth
       const nextScale = Math.min(1, Math.max(0.6, width / 460))
       setScale(nextScale)
@@ -574,34 +655,63 @@ export function PreviewPanel({
     const observer = new ResizeObserver(updateScale)
     observer.observe(containerRef.current)
     return () => observer.disconnect()
-  }, [activeTab])
+  }, [])
 
+  const previewBaseLabel = isBuildPreview ? 'Build output' : 'Preview'
   const previewLabel =
     isMultiPage && selectedPageId
-      ? `Preview: ${pages.find((p) => p.id === selectedPageId)?.title ?? 'Page'}`
-      : 'Preview'
+      ? `${previewBaseLabel}: ${pages.find((p) => p.id === selectedPageId)?.title ?? 'Page'}`
+      : previewBaseLabel
+  const showBuildPlaceholder = isBuildPreview && !currentUrl && !isBuildActive
 
   return (
-    <Tabs
-      value={activeTab}
-      onValueChange={(value) => setActiveTab(value as PreviewTab)}
-      className="flex h-full flex-col"
-    >
+    <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div className="flex items-center gap-4">
-          <TabsList className="h-8">
-            <TabsTrigger value="preview" className="text-xs">
-              Preview
-            </TabsTrigger>
-            <TabsTrigger value="data" className="text-xs">
-              Data
-            </TabsTrigger>
-          </TabsList>
-          <span className="text-sm font-semibold text-foreground">
-            {activeTab === 'preview' ? previewLabel : 'Preview data'}
-          </span>
+          <span className="text-sm font-semibold text-foreground">{previewLabel}</span>
+          {showBuildStatus ? (
+            <span
+              className={cn(
+                'rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                BUILD_STATUS_TONES[buildStatus]
+              )}
+            >
+              {BUILD_STATUS_LABELS[buildStatus]}
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
+          {onPreviewModeChange ? (
+            <div className="inline-flex items-center rounded-full border border-border bg-background p-0.5 text-[11px] font-semibold">
+              <button
+                type="button"
+                onClick={() => onPreviewModeChange('live')}
+                aria-pressed={!isBuildPreview}
+                className={cn(
+                  'h-7 rounded-full px-3 transition',
+                  !isBuildPreview
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                Live
+              </button>
+              <button
+                type="button"
+                onClick={() => onPreviewModeChange('build')}
+                aria-pressed={isBuildPreview}
+                title={!buildPreviewUrl ? 'Build output not ready yet' : undefined}
+                className={cn(
+                  'h-7 rounded-full px-3 transition',
+                  isBuildPreview
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                Build
+              </button>
+            </div>
+          ) : null}
           {onAppModeChange ? (
             <Button
               type="button"
@@ -609,6 +719,8 @@ export function PreviewPanel({
               variant={appMode ? 'default' : 'outline'}
               onClick={() => onAppModeChange(!appMode)}
               aria-pressed={appMode}
+              disabled={isBuildPreview}
+              title={isBuildPreview ? 'App mode is available for live preview only' : undefined}
               className="h-8 w-[96px] rounded-full text-[11px] font-semibold"
             >
               {appMode ? 'App Mode' : 'Static Mode'}
@@ -643,9 +755,25 @@ export function PreviewPanel({
         </div>
       </div>
 
-      <TabsContent value="preview" forceMount className="mt-0 flex-1">
+      <div className="mt-0 flex-1">
         <div className="flex h-full flex-col">
-          {/* Page Selector - only show when multi-page */}
+          {showBuildStatus ? (
+            <div className="border-b border-border bg-background px-6 py-4">
+              <BuildStatusIndicator
+                status={buildStatus}
+                progress={buildState?.progress}
+                pages={buildState?.pages}
+                error={buildState?.error}
+                startedAt={buildState?.startedAt}
+                completedAt={buildState?.completedAt}
+                onRetry={onBuildRetry}
+                onCancel={onBuildCancel}
+                onPageSelect={onBuildPageSelect}
+                selectedPage={selectedBuildPage ?? null}
+              />
+            </div>
+          ) : null}
+
           {isMultiPage && onSelectPage && (
             <PageSelector
               pages={pages}
@@ -659,23 +787,70 @@ export function PreviewPanel({
             className="flex flex-1 items-center justify-center bg-muted/30 p-6"
           >
             <PhoneFrame scale={scale}>
-              <iframe
-                ref={iframeRef}
-                key={`${selectedPageId ?? 'preview'}-${appMode ? 'app' : 'static'}`}
-                title="Preview"
-                className="h-full w-full border-0"
-                sandbox="allow-scripts allow-same-origin"
-                onLoad={sendStateToIframe}
-                {...(currentUrl && !appMode ? { src: currentUrl } : { srcDoc: htmlValue })}
-              />
+              {isBuildActive ? (
+                <div className="flex h-full w-full items-center justify-center bg-background">
+                  <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <span className="text-xs">
+                      {buildState?.progress?.step ??
+                        buildState?.progress?.message ??
+                        'Building preview...'}
+                    </span>
+                  </div>
+                </div>
+              ) : showBuildPlaceholder ? (
+                <div className="flex h-full w-full items-center justify-center bg-background">
+                  <div className="flex max-w-[240px] flex-col items-center gap-2 text-center text-muted-foreground">
+                    <span className="text-xs font-semibold text-foreground">
+                      Build output not available
+                    </span>
+                    <span className="text-xs">
+                      Run a build to generate the static preview.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <iframe
+                  ref={iframeRef}
+                  key={`${selectedPageId ?? 'preview'}-${previewMode}-${effectiveAppMode ? 'app' : 'static'}`}
+                  title="Preview"
+                  className="h-full w-full border-0"
+                  sandbox="allow-scripts allow-same-origin"
+                  onLoad={sendStateToIframe}
+                  {...(currentUrl ? { src: currentUrl } : { srcDoc: htmlValue })}
+                />
+              )}
             </PhoneFrame>
           </div>
-        </div>
-      </TabsContent>
 
-      <TabsContent value="data" forceMount className="mt-0 flex-1">
-        <DataTab iframeRef={iframeRef} key={sessionId ?? 'preview-data'} />
-      </TabsContent>
-    </Tabs>
+          {aestheticScore ? (
+            <div className="border-t border-border bg-background">
+              <Collapsible open={scoreExpanded} onOpenChange={setScoreExpanded}>
+                <div className="flex items-center justify-between px-6 py-3">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">
+                      Aesthetic score
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      Overall {Math.round(aestheticScore.overall)} / 100
+                    </span>
+                  </div>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <ChevronDown
+                        className={`h-4 w-4 transition-transform ${scoreExpanded ? 'rotate-180' : ''}`}
+                      />
+                    </Button>
+                  </CollapsibleTrigger>
+                </div>
+                <CollapsibleContent className="px-6 pb-6">
+                  <AestheticScoreCard score={aestheticScore} expanded />
+                </CollapsibleContent>
+              </Collapsible>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
   )
 }

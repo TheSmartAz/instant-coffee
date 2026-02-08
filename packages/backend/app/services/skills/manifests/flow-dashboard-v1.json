@@ -1,0 +1,31 @@
+{
+  "id": "flow-dashboard-v1",
+  "name": "Flow App - Dashboard",
+  "version": "1.0.0",
+  "product_types": ["dashboard"],
+  "complexity": ["checklist", "standard", "extended"],
+  "doc_tiers": ["checklist", "standard", "extended"],
+  "components": [
+    "KpiCard",
+    "StatGrid",
+    "FilterBar",
+    "ActivityList",
+    "TrendChart"
+  ],
+  "state_contract": "contracts/dashboard.json",
+  "style_profiles": [
+    "clean-modern",
+    "bold-tech",
+    "editorial",
+    "minimal-mono"
+  ],
+  "guardrails": "rules/mobile-guardrails.json",
+  "page_roles": ["overview", "details", "filters", "activity"],
+  "model_prefs": {
+    "classifier": "light",
+    "writer": "heavy",
+    "validator": "light",
+    "expander": "mid"
+  },
+  "priority": 100
+}

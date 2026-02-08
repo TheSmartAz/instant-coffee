@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Generator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -14,13 +16,17 @@ from ..services.message import MessageService
 from ..services.page import PageService
 from ..services.page_version import PageVersionService
 from ..services.product_doc import ProductDocService
+from ..services.app_data_store import get_app_data_store
 from ..services.session import SessionService
+from ..services.state_store import StateStoreService
+from ..schemas.session_metadata import SessionMetadata, SessionMetadataUpdate
 from ..services.version import VersionService
 from ..utils.html import inject_hide_scrollbar_style, strip_prompt_artifacts
 from ..utils.style import build_global_style_css
 from .utils import build_preview_url
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+logger = logging.getLogger(__name__)
 
 
 class CreateSessionRequest(BaseModel):
@@ -119,6 +125,7 @@ def _session_payload(
         "model_expander": record.model_expander,
         "model_validator": record.model_validator,
         "model_style_refiner": record.model_style_refiner,
+        "build_status": record.build_status,
         "message_count": message_count,
         "version_count": version_count,
     }
@@ -257,13 +264,62 @@ def delete_session(
     deleted = service.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    app_data_store = get_app_data_store()
+    if app_data_store.enabled:
+        try:
+            asyncio.run(app_data_store.drop_schema(session_id))
+            logger.info("App data schema cleanup complete for session %s", session_id)
+        except Exception:
+            logger.warning("App data schema cleanup failed for session %s", session_id, exc_info=True)
+
     db.commit()
     return {"deleted": True}
+
+
+@router.get("/{session_id}/metadata", response_model=SessionMetadata)
+def get_session_metadata(
+    session_id: str,
+    db: DbSession = Depends(_get_db_session),
+) -> SessionMetadata:
+    service = StateStoreService(db)
+    metadata = service.get_metadata(session_id)
+    if metadata is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return metadata
+
+
+@router.patch("/{session_id}/metadata", response_model=SessionMetadata)
+def update_session_metadata(
+    session_id: str,
+    payload: SessionMetadataUpdate,
+    db: DbSession = Depends(_get_db_session),
+) -> SessionMetadata:
+    service = StateStoreService(db)
+    metadata = service.update_metadata(session_id, payload)
+    if metadata is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.commit()
+    return metadata
+
+
+@router.delete("/{session_id}/metadata")
+def clear_session_metadata(
+    session_id: str,
+    db: DbSession = Depends(_get_db_session),
+) -> dict:
+    service = StateStoreService(db)
+    cleared = service.clear_metadata(session_id)
+    if not cleared:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.commit()
+    return {"cleared": True}
 
 
 @router.get("/{session_id}/versions")
 def get_versions(
     session_id: str,
+    include_preview_html: bool = Query(True),
     db: DbSession = Depends(_get_db_session),
 ) -> dict:
     session = db.get(SessionModel, session_id)
@@ -281,7 +337,11 @@ def get_versions(
                     "version": version.version,
                     "description": version.description,
                     "created_at": version.created_at,
-                    "preview_html": strip_prompt_artifacts(version.html),
+                    **(
+                        {"preview_html": strip_prompt_artifacts(version.html)}
+                        if include_preview_html
+                        else {}
+                    ),
                 }
                 for version in versions
             ],
@@ -296,7 +356,11 @@ def get_versions(
                 "version": version.version,
                 "description": version.description,
                 "created_at": version.created_at,
-                "preview_html": strip_prompt_artifacts(version.html),
+                **(
+                    {"preview_html": strip_prompt_artifacts(version.html)}
+                    if include_preview_html
+                    else {}
+                ),
             }
             for version in versions
         ],

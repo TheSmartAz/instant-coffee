@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import AsyncGenerator, List, Optional, Union, TYPE_CHECKING
 
@@ -40,6 +42,7 @@ from .models import (
     ToolResultEvent,
     TokenUsageEvent,
     VersionCreatedEvent,
+    WorkflowEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +54,7 @@ EventUnion = Union[
     ToolCallEvent,
     ToolResultEvent,
     TokenUsageEvent,
+    WorkflowEvent,
     PlanCreatedEvent,
     PlanUpdatedEvent,
     PageCreatedEvent,
@@ -84,12 +88,14 @@ class EventEmitter:
         self,
         *,
         session_id: str | None = None,
+        run_id: str | None = None,
         event_store: Optional[EventStoreService] = None,
         max_events: int | None = None,
     ) -> None:
         self._events: List[EventUnion] = []
         self._offset = 0
         self.session_id = session_id
+        self.run_id = run_id
         self._event_store = event_store
         if max_events is None and event_store is not None:
             max_events = 2000
@@ -99,6 +105,10 @@ class EventEmitter:
         """Emit an event."""
         if getattr(event, "session_id", None) is None and self.session_id:
             event.session_id = self.session_id
+        if getattr(event, "run_id", None) is None and self.run_id:
+            event.run_id = self.run_id
+        if getattr(event, "event_id", None) is None:
+            event.event_id = uuid.uuid4().hex
         if not event.timestamp:
             event.timestamp = datetime.now(timezone.utc)
         self._events.append(event)
@@ -109,9 +119,25 @@ class EventEmitter:
                 self._offset += overflow
         if self._event_store:
             try:
-                self._event_store.record_event(event)
-            except Exception:
-                logger.exception("Failed to persist event")
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            def _record() -> None:
+                try:
+                    self._event_store.record_event(event)
+                except Exception:
+                    logger.exception("Failed to persist event")
+
+            use_executor = bool(
+                loop
+                and loop.is_running()
+                and getattr(self._event_store, "_use_separate_session", True)
+            )
+            if use_executor:
+                loop.run_in_executor(None, _record)
+            else:
+                _record()
         logger.debug("Event emitted: %s", getattr(event.type, "value", event.type))
 
     def get_events(self) -> List[EventUnion]:
