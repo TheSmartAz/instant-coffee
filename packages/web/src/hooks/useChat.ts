@@ -44,6 +44,44 @@ const safeJsonParse = (value: string) => {
   }
 }
 
+const toOptionalString = (
+  value: unknown,
+  options?: { trim?: boolean }
+): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  const trim = options?.trim ?? true
+  const normalized = trim ? value.trim() : value
+  if (normalized.trim().length === 0) return undefined
+  return normalized
+}
+
+type ProductDocUpdatePayloadLike = {
+  change_summary?: unknown
+  changeSummary?: unknown
+  section_name?: unknown
+  sectionName?: unknown
+  section_content?: unknown
+  sectionContent?: unknown
+}
+
+const extractProductDocUpdateFields = (payload: ProductDocUpdatePayloadLike) => {
+  const changeSummary =
+    toOptionalString(payload.change_summary) ??
+    toOptionalString(payload.changeSummary)
+  const sectionName =
+    toOptionalString(payload.section_name) ??
+    toOptionalString(payload.sectionName)
+  const sectionContent =
+    toOptionalString(payload.section_content, { trim: false }) ??
+    toOptionalString(payload.sectionContent, { trim: false })
+
+  return {
+    changeSummary,
+    sectionName,
+    sectionContent,
+  }
+}
+
 const TOOL_SUMMARY_KEYS = [
   'path',
   'paths',
@@ -595,6 +633,8 @@ export function useChat({
     type: string
     doc_id?: string
     change_summary?: string
+    section_name?: string
+    section_content?: string
   }) => {
     if (typeof window === 'undefined') return
     if (!payload.type || !PRODUCT_DOC_ACTIONS.has(payload.type)) return
@@ -632,12 +672,32 @@ export function useChat({
         }
         const messageId = streamMessageIdRef.current
         if (response?.message && messageId) {
+          const productDocChangeSummary =
+            toOptionalString(response.change_summary) ??
+            toOptionalString(response.changeSummary)
+          const productDocSectionName =
+            toOptionalString(response.section_name) ??
+            toOptionalString(response.sectionName)
+          const productDocSectionContent =
+            toOptionalString(response.section_content, { trim: false }) ??
+            toOptionalString(response.sectionContent, { trim: false })
+          const productDocUpdated =
+            response.product_doc_updated === true ||
+            response.action === 'product_doc_updated'
+
           updateMessageById(messageId, (message) => ({
             ...message,
             content: response.message ?? message.content,
-            action: response.action ?? undefined,
-            affectedPages: response.affected_pages ?? undefined,
-            activePageSlug: response.active_page_slug ?? undefined,
+            action: response.action ?? message.action,
+            productDocUpdated: productDocUpdated || message.productDocUpdated,
+            productDocChangeSummary:
+              productDocChangeSummary ?? message.productDocChangeSummary,
+            productDocSectionName:
+              productDocSectionName ?? message.productDocSectionName,
+            productDocSectionContent:
+              productDocSectionContent ?? message.productDocSectionContent,
+            affectedPages: response.affected_pages ?? message.affectedPages,
+            activePageSlug: response.active_page_slug ?? message.activePageSlug,
           }))
         }
         if (response?.preview_html || response?.preview_url) {
@@ -647,10 +707,30 @@ export function useChat({
           })
         }
 
+        const productDocChangeSummary =
+          toOptionalString(response.change_summary) ??
+          toOptionalString(response.changeSummary)
+        const productDocSectionName =
+          toOptionalString(response.section_name) ??
+          toOptionalString(response.sectionName)
+        const productDocSectionContent =
+          toOptionalString(response.section_content, { trim: false }) ??
+          toOptionalString(response.sectionContent, { trim: false })
+
         if (response.action && PRODUCT_DOC_ACTIONS.has(response.action)) {
-          dispatchProductDocEvent({ type: response.action })
+          dispatchProductDocEvent({
+            type: response.action,
+            change_summary: productDocChangeSummary,
+            section_name: productDocSectionName,
+            section_content: productDocSectionContent,
+          })
         } else if (response.product_doc_updated) {
-          dispatchProductDocEvent({ type: 'product_doc_updated' })
+          dispatchProductDocEvent({
+            type: 'product_doc_updated',
+            change_summary: productDocChangeSummary,
+            section_name: productDocSectionName,
+            section_content: productDocSectionContent,
+          })
         }
 
         // Handle action-based tab switching
@@ -711,9 +791,9 @@ export function useChat({
                 : message.interview.questions,
             }
             interviewBatch = updated
-            return { ...message, interview: updated }
+            return { ...message, content: '', interview: updated }
           }
-          return message
+          return { ...message, content: '' }
         }
 
         const startIndex = interviewTotalRef.current + 1
@@ -814,6 +894,29 @@ export function useChat({
           payload.type === 'product_doc_confirmed' ||
           payload.type === 'product_doc_outdated'
         ) {
+          if (payload.type === 'product_doc_updated') {
+            const messageId = streamMessageIdRef.current
+            if (messageId) {
+              const {
+                changeSummary: productDocChangeSummary,
+                sectionName: productDocSectionName,
+                sectionContent: productDocSectionContent,
+              } = extractProductDocUpdateFields(payload)
+
+              updateMessageById(messageId, (message) => ({
+                ...message,
+                action: message.action ?? 'product_doc_updated',
+                productDocUpdated: true,
+                productDocChangeSummary:
+                  productDocChangeSummary ?? message.productDocChangeSummary,
+                productDocSectionName:
+                  productDocSectionName ?? message.productDocSectionName,
+                productDocSectionContent:
+                  productDocSectionContent ?? message.productDocSectionContent,
+              }))
+            }
+          }
+
           window.dispatchEvent(
             new CustomEvent('product-doc-event', { detail: payload })
           )
@@ -877,17 +980,37 @@ export function useChat({
 
       // Parse new response fields
       const action = payload.action as ChatAction | undefined
-      const activePageSlug = payload.active_page_slug ?? payload.activePageSlug as string | undefined
-      const affectedPages = payload.affected_pages ?? payload.affectedPages as string[] | undefined
-      const productDocUpdated =
-        typeof (payload as { product_doc_updated?: unknown }).product_doc_updated === 'boolean'
-          ? (payload as { product_doc_updated?: boolean }).product_doc_updated
+      const activePageSlug =
+        (payload.active_page_slug ?? payload.activePageSlug) as string | undefined
+      const affectedPages =
+        (payload.affected_pages ?? payload.affectedPages) as string[] | undefined
+      const {
+        changeSummary: productDocChangeSummary,
+        sectionName: productDocSectionName,
+        sectionContent: productDocSectionContent,
+      } = extractProductDocUpdateFields(payload)
+      const productDocUpdatedFromFlag =
+        typeof (payload as { product_doc_updated?: unknown }).product_doc_updated ===
+        'boolean'
+          ? (payload as { product_doc_updated?: boolean }).product_doc_updated === true
           : false
+      const productDocUpdated =
+        productDocUpdatedFromFlag || action === 'product_doc_updated'
 
       if (action && PRODUCT_DOC_ACTIONS.has(action)) {
-        dispatchProductDocEvent({ type: action })
+        dispatchProductDocEvent({
+          type: action,
+          change_summary: productDocChangeSummary,
+          section_name: productDocSectionName,
+          section_content: productDocSectionContent,
+        })
       } else if (productDocUpdated) {
-        dispatchProductDocEvent({ type: 'product_doc_updated' })
+        dispatchProductDocEvent({
+          type: 'product_doc_updated',
+          change_summary: productDocChangeSummary,
+          section_name: productDocSectionName,
+          section_content: productDocSectionContent,
+        })
       }
 
       const hasDelta =
@@ -898,10 +1021,17 @@ export function useChat({
         receivedDeltaRef.current = false
         updateMessageById(messageId, (message) => ({
           ...message,
-          content: fullContent,
-          action,
-          affectedPages,
-          activePageSlug,
+          content: message.interview ? '' : fullContent,
+          action: action ?? message.action,
+          productDocUpdated: productDocUpdated || message.productDocUpdated,
+          productDocChangeSummary:
+            productDocChangeSummary ?? message.productDocChangeSummary,
+          productDocSectionName:
+            productDocSectionName ?? message.productDocSectionName,
+          productDocSectionContent:
+            productDocSectionContent ?? message.productDocSectionContent,
+          affectedPages: affectedPages ?? message.affectedPages,
+          activePageSlug: activePageSlug ?? message.activePageSlug,
         }))
       } else if (typeof contentDelta === 'string' && messageId) {
         const fullMessage = (payload as { message?: unknown }).message
@@ -909,18 +1039,32 @@ export function useChat({
           receivedDeltaRef.current = false
           updateMessageById(messageId, (message) => ({
             ...message,
-            content: fullMessage,
-            action,
-            affectedPages,
-            activePageSlug,
+            content: message.interview ? '' : fullMessage,
+            action: action ?? message.action,
+            productDocUpdated: productDocUpdated || message.productDocUpdated,
+            productDocChangeSummary:
+              productDocChangeSummary ?? message.productDocChangeSummary,
+            productDocSectionName:
+              productDocSectionName ?? message.productDocSectionName,
+            productDocSectionContent:
+              productDocSectionContent ?? message.productDocSectionContent,
+            affectedPages: affectedPages ?? message.affectedPages,
+            activePageSlug: activePageSlug ?? message.activePageSlug,
           }))
         } else {
           updateMessageById(messageId, (message) => ({
             ...message,
-            content: `${message.content}${contentDelta}`,
-            action,
-            affectedPages,
-            activePageSlug,
+            content: message.interview ? '' : `${message.content}${contentDelta}`,
+            action: action ?? message.action,
+            productDocUpdated: productDocUpdated || message.productDocUpdated,
+            productDocChangeSummary:
+              productDocChangeSummary ?? message.productDocChangeSummary,
+            productDocSectionName:
+              productDocSectionName ?? message.productDocSectionName,
+            productDocSectionContent:
+              productDocSectionContent ?? message.productDocSectionContent,
+            affectedPages: affectedPages ?? message.affectedPages,
+            activePageSlug: activePageSlug ?? message.activePageSlug,
           }))
           if (hasDelta) {
             receivedDeltaRef.current = true

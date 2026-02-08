@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Generator
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
+from ..config import get_settings
 from ..db.models import ProductDocHistory, ProductDocStatus, VersionSource
 from ..db.utils import get_db
 from ..exceptions import PinnedLimitExceeded
@@ -64,6 +68,46 @@ def _history_detail_payload(record: ProductDocHistory) -> ProductDocHistoryRespo
     )
 
 
+def _normalize_disk_sections(payload: object) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    source = payload.get("sections") if isinstance(payload.get("sections"), dict) else payload
+    if not isinstance(source, dict):
+        return {}
+    sections: dict[str, str] = {}
+    for key, value in source.items():
+        if isinstance(value, (str, int, float, bool)):
+            sections[str(key)] = str(value)
+    return sections
+
+
+def _load_disk_product_doc(session_id: str) -> tuple[str, dict[str, str], datetime] | None:
+    settings = get_settings()
+    doc_path = Path(settings.output_dir) / session_id / "product-doc.json"
+    if not doc_path.is_file():
+        return None
+
+    try:
+        payload = json.loads(doc_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    sections = _normalize_disk_sections(payload)
+    if not sections:
+        return None
+
+    content = "\n\n".join(
+        f"## {key.replace('_', ' ').strip().title()}\n{value.strip()}"
+        for key, value in sections.items()
+        if value.strip()
+    )
+    if not content:
+        return None
+
+    timestamp = datetime.fromtimestamp(doc_path.stat().st_mtime, tz=timezone.utc)
+    return content, sections, timestamp
+
+
 @router.get("/{session_id}/product-doc", response_model=ProductDocResponse)
 def get_product_doc(
     session_id: str,
@@ -72,7 +116,20 @@ def get_product_doc(
     service = ProductDocService(db)
     record = service.get_by_session_id(session_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="ProductDoc not found")
+        disk_doc = _load_disk_product_doc(session_id)
+        if disk_doc is None:
+            raise HTTPException(status_code=404, detail="ProductDoc not found")
+        content, sections, timestamp = disk_doc
+        return ProductDocResponse(
+            id=f"disk:{session_id}",
+            session_id=session_id,
+            content=content,
+            structured={"sections": sections},
+            version=1,
+            status=_status_value(ProductDocStatus.DRAFT),
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
     return ProductDocResponse(
         id=record.id,
         session_id=record.session_id,
@@ -99,6 +156,12 @@ def get_product_doc_history(
     service = ProductDocService(db)
     doc = service.get_by_session_id(session_id)
     if doc is None:
+        if _load_disk_product_doc(session_id) is not None:
+            return ProductDocHistoryListResponse(
+                history=[],
+                total=0,
+                pinned_count=0,
+            )
         raise HTTPException(status_code=404, detail="ProductDoc not found")
     total_query = (
         db.query(func.count(ProductDocHistory.id))

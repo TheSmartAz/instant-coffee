@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -23,6 +24,7 @@ __pycache__/
 # Build outputs
 dist/
 build/
+packages/web/test-results/
 *.egg-info/
 .pytest_cache/
 .coverage
@@ -47,6 +49,7 @@ yarn-error.log*
 instant-coffee-output/
 output/
 temp/
+code-analysis/
 
 # OS
 Thumbs.db

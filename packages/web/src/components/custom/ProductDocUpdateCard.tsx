@@ -1,0 +1,69 @@
+import * as React from 'react'
+import { ChevronDown, ChevronRight, ArrowRight } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+
+export interface ProductDocUpdateCardProps {
+  sectionName: string
+  sectionContent: string
+  onNavigateToDoc: () => void
+}
+
+const FALLBACK_SECTION_NAME = 'Product Doc'
+const FALLBACK_SECTION_CONTENT = 'No section preview was provided for this update.'
+
+export function ProductDocUpdateCard({
+  sectionName,
+  sectionContent,
+  onNavigateToDoc,
+}: ProductDocUpdateCardProps) {
+  const [expanded, setExpanded] = React.useState(false)
+
+  const safeSectionName = sectionName.trim() || FALLBACK_SECTION_NAME
+  const safeSectionContent = sectionContent.trim() || FALLBACK_SECTION_CONTENT
+
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 text-left"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+      >
+        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+          {expanded ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          )}
+          <span>Product Doc updated: {safeSectionName} section</span>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          {expanded ? 'Collapse' : 'Expand'}
+        </span>
+      </button>
+
+      <div className={cn('grid transition-all', expanded ? 'grid-rows-[1fr] mt-3' : 'grid-rows-[0fr] mt-0')}>
+        <div className="overflow-hidden">
+          <div className="rounded-md border border-border/60 bg-background/80 p-3">
+            <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground">
+              {safeSectionContent}
+            </pre>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 px-0 text-xs"
+          onClick={onNavigateToDoc}
+        >
+          View full Product Doc
+          <ArrowRight className="h-3 w-3" />
+        </Button>
+      </div>
+    </div>
+  )
+}

@@ -39,6 +39,16 @@ type ApiMessage = {
   role?: string
   content?: string
   message?: string
+  action?: string | null
+  product_doc_updated?: boolean
+  change_summary?: string | null
+  changeSummary?: string | null
+  section_name?: string | null
+  sectionName?: string | null
+  section_content?: string | null
+  sectionContent?: string | null
+  affected_pages?: string[]
+  active_page_slug?: string | null
   created_at?: string
   timestamp?: string
 }
@@ -335,6 +345,30 @@ const mapInterviewActionToStatus = (
   }
 }
 
+const normalizeInterviewBatchActivity = (batches: InterviewBatch[]) => {
+  if (batches.length === 0) return batches
+
+  const latestBatch = batches[batches.length - 1]
+  if (!latestBatch) return batches
+
+  if (latestBatch.status === 'active') {
+    for (let index = 0; index < batches.length - 1; index += 1) {
+      if (batches[index].status === 'active') {
+        batches[index].status = 'submitted'
+      }
+    }
+    return batches
+  }
+
+  for (const batch of batches) {
+    if (batch.status === 'active') {
+      batch.status = 'submitted'
+    }
+  }
+
+  return batches
+}
+
 const buildInterviewBatchesFromEvents = (events: SessionEvent[]): InterviewBatch[] => {
   const sorted = [...events].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
   const batches: InterviewBatch[] = []
@@ -411,17 +445,7 @@ const buildInterviewBatchesFromEvents = (events: SessionEvent[]): InterviewBatch
     }
   }
 
-  const lastActiveIndex = [...batches].reverse().findIndex((batch) => batch.status === 'active')
-  if (lastActiveIndex > 0) {
-    const cutoff = batches.length - 1 - lastActiveIndex
-    for (let index = 0; index < cutoff; index += 1) {
-      if (batches[index].status === 'active') {
-        batches[index].status = 'submitted'
-      }
-    }
-  }
-
-  return batches
+  return normalizeInterviewBatchActivity(batches)
 }
 
 const extractMessagesList = (messagesResponse: unknown): ApiMessage[] =>
@@ -479,17 +503,9 @@ const attachInterviewBatches = (
     }
 
     if (targetIndex < 0) {
-      for (let index = next.length - 1; index >= 0; index -= 1) {
-        const message = next[index]
-        if (usedIndexes.has(index)) continue
-        if (message.role !== 'assistant') continue
-        if (message.interview) continue
-        targetIndex = index
-        break
+      if (batch.status !== 'active') {
+        continue
       }
-    }
-
-    if (targetIndex < 0) {
       next.push({
         id: `interview-${batch.id}`,
         role: 'assistant',
@@ -521,12 +537,46 @@ const attachInterviewBatches = (
 const mapMessage = (message: ApiMessage, index: number): Message => {
   const rawContent = message.content ?? message.message ?? ''
   const parsedInterview = parseInterviewFromContent(rawContent)
+  const action =
+    typeof message.action === 'string'
+      ? (message.action as Message['action'])
+      : undefined
+  const productDocUpdated =
+    message.product_doc_updated === true || action === 'product_doc_updated'
+
   return {
     id: message.id ?? `m-${index}-${Date.now()}`,
     role: message.role === 'user' ? 'user' : 'assistant',
     content: parsedInterview.cleanContent,
     timestamp: toDate(message.created_at ?? message.timestamp),
     interviewSummary: parsedInterview.interviewSummary,
+    action,
+    productDocUpdated,
+    productDocChangeSummary:
+      typeof message.change_summary === 'string'
+        ? message.change_summary
+        : typeof message.changeSummary === 'string'
+          ? message.changeSummary
+          : undefined,
+    productDocSectionName:
+      typeof message.section_name === 'string'
+        ? message.section_name
+        : typeof message.sectionName === 'string'
+          ? message.sectionName
+          : undefined,
+    productDocSectionContent:
+      typeof message.section_content === 'string'
+        ? message.section_content
+        : typeof message.sectionContent === 'string'
+          ? message.sectionContent
+          : undefined,
+    affectedPages: Array.isArray(message.affected_pages)
+      ? message.affected_pages
+      : undefined,
+    activePageSlug:
+      typeof message.active_page_slug === 'string'
+        ? message.active_page_slug
+        : undefined,
     hidden:
       message.role === 'user' &&
       parsedInterview.isInterviewOnly &&

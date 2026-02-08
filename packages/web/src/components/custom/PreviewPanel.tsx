@@ -6,7 +6,6 @@ import { cn } from '@/lib/utils'
 import { PhoneFrame } from './PhoneFrame'
 import { PageSelector } from './PageSelector'
 import { AestheticScoreCard } from './AestheticScoreCard'
-import { BuildStatusIndicator } from './BuildStatusIndicator'
 import type { AestheticScore } from '@/types/aesthetic'
 import type { BuildState, BuildStatusType } from '@/types/build'
 
@@ -469,10 +468,6 @@ export function PreviewPanel({
   isExporting = false,
   aestheticScore,
   buildState,
-  onBuildRetry,
-  onBuildCancel,
-  onBuildPageSelect,
-  selectedBuildPage,
   pages,
   selectedPageId,
   onSelectPage,
@@ -757,23 +752,6 @@ export function PreviewPanel({
 
       <div className="mt-0 flex-1">
         <div className="flex h-full flex-col">
-          {showBuildStatus ? (
-            <div className="border-b border-border bg-background px-6 py-4">
-              <BuildStatusIndicator
-                status={buildStatus}
-                progress={buildState?.progress}
-                pages={buildState?.pages}
-                error={buildState?.error}
-                startedAt={buildState?.startedAt}
-                completedAt={buildState?.completedAt}
-                onRetry={onBuildRetry}
-                onCancel={onBuildCancel}
-                onPageSelect={onBuildPageSelect}
-                selectedPage={selectedBuildPage ?? null}
-              />
-            </div>
-          ) : null}
-
           {isMultiPage && onSelectPage && (
             <PageSelector
               pages={pages}

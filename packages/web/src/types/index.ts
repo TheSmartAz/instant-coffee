@@ -84,6 +84,10 @@ export interface Message {
   interview?: InterviewBatch
   interviewSummary?: InterviewSummary
   action?: ChatAction
+  productDocUpdated?: boolean
+  productDocChangeSummary?: string
+  productDocSectionName?: string
+  productDocSectionContent?: string
   affectedPages?: string[]
   activePageSlug?: string
   disambiguation?: Disambiguation
@@ -155,6 +159,12 @@ export interface ChatResponse {
 
   // ProductDoc state
   product_doc_updated?: boolean
+  change_summary?: string | null
+  changeSummary?: string | null
+  section_name?: string | null
+  sectionName?: string | null
+  section_content?: string | null
+  sectionContent?: string | null
   affected_pages?: string[]
 
   // Action

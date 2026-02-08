@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { InterviewWidget } from './InterviewWidget'
 import { AssetThumbnail } from './AssetThumbnail'
+import { ProductDocUpdateCard } from './ProductDocUpdateCard'
 import type {
   ChatAction,
   ChatAsset,
@@ -26,6 +27,10 @@ export interface ChatMessageProps {
   interview?: InterviewBatch
   interviewSummary?: InterviewSummary
   action?: ChatAction
+  productDocUpdated?: boolean
+  productDocChangeSummary?: string
+  productDocSectionName?: string
+  productDocSectionContent?: string
   affectedPages?: string[]
   disambiguation?: Disambiguation
   assets?: ChatAsset[]
@@ -44,6 +49,10 @@ export const ChatMessage = memo(function ChatMessage({
   interview,
   interviewSummary,
   action,
+  productDocUpdated,
+  productDocChangeSummary,
+  productDocSectionName,
+  productDocSectionContent,
   affectedPages,
   disambiguation,
   assets,
@@ -58,6 +67,17 @@ export const ChatMessage = memo(function ChatMessage({
   const hasInterview = Boolean(interview) && !hasSummary
   const hasDisambiguation = Boolean(disambiguation && disambiguation.options.length > 0)
   const hasAssets = Boolean(assets && assets.length > 0)
+  const shouldShowProductDocUpdateCard =
+    isAssistant &&
+    (action === 'product_doc_updated' || productDocUpdated === true)
+
+  const productDocCardSectionName =
+    productDocSectionName ??
+    (productDocChangeSummary ? 'Summary' : 'Product Doc')
+  const productDocCardSectionContent =
+    productDocSectionContent ??
+    productDocChangeSummary ??
+    'No section preview is available yet. Open the Product Doc tab to review the full update.'
 
   const renderAssets = (align: 'left' | 'right') => (
     <div className={cn('flex flex-wrap gap-2', align === 'right' ? 'justify-end' : '')}>
@@ -74,7 +94,7 @@ export const ChatMessage = memo(function ChatMessage({
   // Determine if we should show ProductDoc link
   const showProductDocLink =
     action === 'product_doc_generated' ||
-    action === 'product_doc_updated'
+    (action === 'product_doc_updated' && !shouldShowProductDocUpdateCard)
 
   // Determine if we should show Preview link
   const showPreviewLink =
@@ -187,6 +207,13 @@ export const ChatMessage = memo(function ChatMessage({
                   ))}
                 </div>
               </div>
+            ) : null}
+            {shouldShowProductDocUpdateCard ? (
+              <ProductDocUpdateCard
+                sectionName={productDocCardSectionName}
+                sectionContent={productDocCardSectionContent}
+                onNavigateToDoc={() => onTabChange?.('product-doc')}
+              />
             ) : null}
             {showProductDocLink ? (
               <Button

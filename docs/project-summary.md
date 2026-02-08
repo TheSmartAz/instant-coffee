@@ -1,8 +1,8 @@
 # Instant Coffee 项目阶段性总结
 
-> **生成时间**: 2026-02-05
+> **生成时间**: 2026-02-08
 > **项目版本**: web 0.0.0 / cli 0.1.0 / backend 无独立版本标记
-> **项目状态**: v0.7 能力已落地（多页 / Product Doc / 资产 / Build / Data Tab / Aesthetic Scoring / LangGraph skeleton）；默认仍走 legacy orchestrator；CLI 仍仅有 dist 产物
+> **项目状态**: v0.7 能力已落地（多页 / Product Doc / 资产 / Build / Data Tab / Aesthetic Scoring / LangGraph skeleton）；默认仍走 legacy orchestrator；已补齐 Product Doc API 的磁盘 fallback（避免 DB 记录缺失时 404）；CLI 仍仅有 dist 产物
 
 ---
 
@@ -180,8 +180,8 @@ instant-coffee/
 | `/api/pages/{id}/preview` | GET | 页面预览 |
 | `/api/pages/{id}/versions/{ver}/preview` | GET | 版本预览 |
 | `/api/pages/{id}/versions/{ver}/pin` | POST | 版本 Pin/Unpin |
-| `/api/sessions/{id}/product-doc` | GET | 产品文档 |
-| `/api/sessions/{id}/product-doc/history` | GET | 文档历史 |
+| `/api/sessions/{id}/product-doc` | GET | 产品文档（DB 缺失时回退读取 `OUTPUT_DIR/<session_id>/product-doc.json`） |
+| `/api/sessions/{id}/product-doc/history` | GET | 文档历史（DB 缺失且磁盘有 doc 时返回空历史） |
 | `/api/sessions/{id}/product-doc/history/{id}` | GET | 文档历史详情 |
 | `/api/sessions/{id}/product-doc/history/{id}/pin` | POST | 历史 Pin/Unpin |
 | `/api/sessions/{id}/snapshots` | GET/POST | 项目快照列表/创建 |
@@ -301,7 +301,7 @@ instant-coffee/
 | Aesthetic | `ENABLE_AESTHETIC_SCORING` / `AESTHETIC_THRESHOLDS` | false / {} |
 | 并发与超时 | `MAX_CONCURRENCY` / `TASK_TIMEOUT_SECONDS` | 3 / 600 |
 | 迁移 | `MIGRATE_V04_ON_STARTUP` | false |
-| Interview / ProductDoc 超时 | `INTERVIEW_TIMEOUT_SECONDS` / `PRODUCT_DOC_TIMEOUT_SECONDS` | 60 / 120 |
+| Interview / ProductDoc 超时 | `INTERVIEW_TIMEOUT_SECONDS` / `PRODUCT_DOC_TIMEOUT_SECONDS` | 180 / 180 |
 
 ### 前端运行时配置
 - `VITE_API_URL`（默认 `http://localhost:8000`）
@@ -313,6 +313,7 @@ instant-coffee/
 ### 已实现
 - ✅ 多页生成 + PageVersion 管理
 - ✅ Product Doc + 历史版本 + Pin
+- ✅ Product Doc API 磁盘 fallback（DB 缺失时读取产物并返回）
 - ✅ Asset Registry + 预览/引用
 - ✅ React SSG Build + Preview + Mobile Shell
 - ✅ Data Tab / App Mode 交互数据回传
