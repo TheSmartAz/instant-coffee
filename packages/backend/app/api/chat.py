@@ -133,6 +133,13 @@ def _create_orchestrator(
     emitter: EventEmitter,
 ):
     settings = get_settings()
+    if settings.use_engine:
+        try:
+            from ..engine.orchestrator import EngineOrchestrator
+
+            return EngineOrchestrator(db, session, event_emitter=emitter)
+        except Exception:
+            logger.exception("Engine orchestrator unavailable; falling back to legacy")
     if settings.use_langgraph:
         try:
             from ..graph.orchestrator import LangGraphOrchestrator
@@ -706,6 +713,25 @@ async def chat(
                     answers=interview_payload.get("answers"),
                 )
             )
+        # --- Engine answer routing ---
+        # If there's a pending engine with an ask_user question for this
+        # session, route the user's message as an answer instead of
+        # creating a new orchestrator run.
+        _engine_answer_resolved = False
+        if settings.use_engine:
+            from ..engine.registry import engine_registry
+
+            if engine_registry.has_pending_question(session.id):
+                pending_orch = engine_registry.get(session.id)
+                if pending_orch is not None:
+                    answer_data = interview_payload or {"text": payload.message}
+                    _engine_answer_resolved = pending_orch.resolve_answer(answer_data)
+                    if _engine_answer_resolved:
+                        logger.info(
+                            "Routed answer to pending engine for session %s",
+                            session.id,
+                        )
+
         orchestrator = _create_orchestrator(stream_db, stream_session, emitter)
         async def event_stream() -> AsyncGenerator[str, None]:
             index = 0
