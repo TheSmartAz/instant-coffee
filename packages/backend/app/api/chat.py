@@ -133,20 +133,18 @@ def _create_orchestrator(
     emitter: EventEmitter,
 ):
     settings = get_settings()
-    if settings.use_engine:
-        try:
-            from ..engine.orchestrator import EngineOrchestrator
+    # Engine is the primary orchestrator.  The legacy AgentOrchestrator is
+    # only used as a fallback when the ic agent package is not installed or
+    # USE_ENGINE is explicitly set to false.
+    if not settings.use_engine:
+        logger.info("Engine disabled via USE_ENGINE=false, using legacy orchestrator")
+        return AgentOrchestrator(db, session, event_emitter=emitter)
+    try:
+        from ..engine.orchestrator import EngineOrchestrator
 
-            return EngineOrchestrator(db, session, event_emitter=emitter)
-        except Exception:
-            logger.exception("Engine orchestrator unavailable; falling back to legacy")
-    if settings.use_langgraph:
-        try:
-            from ..graph.orchestrator import LangGraphOrchestrator
-
-            return LangGraphOrchestrator(db, session, event_emitter=emitter)
-        except Exception:
-            logger.exception("LangGraph orchestrator unavailable; falling back to legacy")
+        return EngineOrchestrator(db, session, event_emitter=emitter)
+    except Exception:
+        logger.exception("Engine orchestrator unavailable; falling back to legacy")
     return AgentOrchestrator(db, session, event_emitter=emitter)
 
 
@@ -718,17 +716,16 @@ async def chat(
         # session, route the user's message as an answer instead of
         # creating a new orchestrator run.
         _engine_answer_resolved = False
-        if settings.use_engine:
-            from ..engine.registry import engine_registry
+        from ..engine.registry import engine_registry
 
-            if engine_registry.has_pending_question(session.id):
-                pending_orch = engine_registry.get(session.id)
-                if pending_orch is not None:
-                    answer_data = interview_payload or {"text": payload.message}
-                    _engine_answer_resolved = pending_orch.resolve_answer(answer_data)
-                    if _engine_answer_resolved:
-                        logger.info(
-                            "Routed answer to pending engine for session %s",
+        if engine_registry.has_pending_question(session.id):
+            pending_orch = engine_registry.get(session.id)
+            if pending_orch is not None:
+                answer_data = interview_payload or {"text": payload.message}
+                _engine_answer_resolved = pending_orch.resolve_answer(answer_data)
+                if _engine_answer_resolved:
+                    logger.info(
+                        "Routed answer to pending engine for session %s",
                             session.id,
                         )
 

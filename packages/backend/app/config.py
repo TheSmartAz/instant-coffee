@@ -213,7 +213,7 @@ class Settings:
         default_factory=lambda: _get_bool("USE_LANGGRAPH", _get_bool("FF_USE_LANGGRAPH", False))
     )
     use_engine: bool = field(
-        default_factory=lambda: _get_bool("USE_ENGINE", False)
+        default_factory=lambda: _get_bool("USE_ENGINE", True)
     )
     langgraph_checkpointer: str = field(
         default_factory=lambda: _get_env("LANGGRAPH_CHECKPOINTER", "sqlite") or "sqlite"
