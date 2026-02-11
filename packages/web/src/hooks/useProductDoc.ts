@@ -20,6 +20,8 @@ const normalizeProductDoc = (data: unknown): ProductDoc | null => {
   const doc = data as ApiProductDoc
 
   if (!doc.id) return null
+  // version 0 is a backend placeholder for "no product doc yet"
+  if (doc.version === 0) return null
 
   return {
     id: doc.id,

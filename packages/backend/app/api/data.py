@@ -72,7 +72,9 @@ async def list_data_tables(
     db: DbSession = Depends(_get_db_session),
 ) -> dict[str, Any]:
     _require_session(db, session_id)
-    store = _get_store_or_409()
+    store = get_app_data_store()
+    if not store.enabled:
+        return {"schema": None, "tables": []}
     try:
         result = await store.list_tables(session_id)
     except Exception as exc:  # pragma: no cover - defensive mapping

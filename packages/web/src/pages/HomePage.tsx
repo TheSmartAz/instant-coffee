@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -23,7 +23,10 @@ export function HomePage() {
   const [isManaging, setIsManaging] = React.useState(false)
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false)
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const [sortOrder, setSortOrder] = React.useState<'desc' | 'asc'>('desc')
   const [pendingDeleteIds, setPendingDeleteIds] = React.useState<string[]>([])
+  const [isDeleting, setIsDeleting] = React.useState(false)
   const [pinnedIds, setPinnedIds] = React.useState<string[]>(() => {
     if (typeof window === 'undefined') return []
     try {
@@ -80,10 +83,21 @@ export function HomePage() {
     () => projects.filter((project) => pinnedSet.has(project.id)),
     [projects, pinnedSet]
   )
-  const unpinnedProjects = React.useMemo(
-    () => projects.filter((project) => !pinnedSet.has(project.id)),
-    [projects, pinnedSet]
-  )
+  const unpinnedProjects = React.useMemo(() => {
+    let filtered = projects.filter((project) => !pinnedSet.has(project.id))
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase()
+      filtered = filtered.filter((project) =>
+        project.name.toLowerCase().includes(q)
+      )
+    }
+    filtered.sort((a, b) =>
+      sortOrder === 'desc'
+        ? b.updatedAt.getTime() - a.updatedAt.getTime()
+        : a.updatedAt.getTime() - b.updatedAt.getTime()
+    )
+    return filtered
+  }, [projects, pinnedSet, searchQuery, sortOrder])
   const selectedCount = selectedIds.size
   const selectedPinnedCount = React.useMemo(() => {
     let count = 0
@@ -114,11 +128,16 @@ export function HomePage() {
 
   const handleConfirmDelete = async () => {
     if (pendingDeleteIds.length === 0) return
-    await deleteProjects(pendingDeleteIds)
-    setPinnedIds((prev) => prev.filter((id) => !pendingDeleteIds.includes(id)))
-    setSelectedIds(new Set())
-    setPendingDeleteIds([])
-    setDeleteDialogOpen(false)
+    setIsDeleting(true)
+    try {
+      await deleteProjects(pendingDeleteIds)
+      setPinnedIds((prev) => prev.filter((id) => !pendingDeleteIds.includes(id)))
+      setSelectedIds(new Set())
+      setPendingDeleteIds([])
+      setDeleteDialogOpen(false)
+    } finally {
+      setIsDeleting(false)
+    }
   }
 
   const handleCancelDelete = () => {
@@ -202,6 +221,23 @@ export function HomePage() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-lg font-semibold text-foreground">Your Projects</div>
             <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search projects..."
+                  className="h-8 w-48 pl-8 text-xs"
+                />
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs"
+                onClick={() => setSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
+              >
+                {sortOrder === 'desc' ? 'Newest first' : 'Oldest first'}
+              </Button>
               <Button
                 variant={isManaging ? 'secondary' : 'outline'}
                 size="sm"
@@ -276,9 +312,17 @@ export function HomePage() {
             <AlertDialogCancel onClick={handleCancelDelete}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDelete}
+              disabled={isDeleting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {isDeleting ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Deleting
+                </span>
+              ) : (
+                'Delete'
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

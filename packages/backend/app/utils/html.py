@@ -36,6 +36,57 @@ _HIDE_SCROLLBAR_STYLE = (
     "</style>"
 )
 
+EMPTY_PREVIEW_HTML = (
+    "<!doctype html>\n"
+    "<html>\n"
+    "  <head>\n"
+    '    <meta charset="utf-8" />\n'
+    '    <meta name="viewport" content="width=device-width, initial-scale=1" />\n'
+    "    <style>\n"
+    "      :root { color-scheme: light; }\n"
+    "      html, body { height: 100%; margin: 0; }\n"
+    "      body {\n"
+    "        display: flex;\n"
+    "        align-items: center;\n"
+    "        justify-content: center;\n"
+    '        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n'
+    "        background: #ffffff;\n"
+    "        color: #111827;\n"
+    "      }\n"
+    "      .wrap {\n"
+    "        display: flex;\n"
+    "        flex-direction: column;\n"
+    "        align-items: center;\n"
+    "        gap: 10px;\n"
+    "      }\n"
+    "      .logo {\n"
+    "        width: 40px;\n"
+    "        height: 40px;\n"
+    "        color: #d97706;\n"
+    "      }\n"
+    "      .text {\n"
+    "        font-size: 16px;\n"
+    "        font-weight: 600;\n"
+    "        letter-spacing: 0.2px;\n"
+    "      }\n"
+    "    </style>\n"
+    "  </head>\n"
+    "  <body>\n"
+    '    <div class="wrap">\n'
+    '      <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor"\n'
+    '           stroke-width="2" stroke-linecap="round" stroke-linejoin="round"\n'
+    '           aria-hidden="true">\n'
+    '        <path d="M10 2v2" />\n'
+    '        <path d="M14 2v2" />\n'
+    '        <path d="M6 8h11a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8" />\n'
+    '        <path d="M5 8h12v5a6 6 0 0 1-6 6H8a6 6 0 0 1-6-6V8z" />\n'
+    "      </svg>\n"
+    '      <div class="text">Instant Coffee</div>\n'
+    "    </div>\n"
+    "  </body>\n"
+    "</html>"
+)
+
 
 def inline_css(html: str, css: Optional[str], *, position: str = "append") -> str:
     """Inline CSS into HTML by injecting a <style> tag.
@@ -496,6 +547,7 @@ def _normalize_href(value: str, allowed_pages: Iterable[str]) -> Tuple[str, Opti
 
 
 __all__ = [
+    "EMPTY_PREVIEW_HTML",
     "inline_css",
     "inject_hide_scrollbar_style",
     "build_nav_html",

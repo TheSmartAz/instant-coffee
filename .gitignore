@@ -49,7 +49,7 @@ yarn-error.log*
 instant-coffee-output/
 output/
 temp/
-code-analysis/
+db-p1/
 
 # OS
 Thumbs.db

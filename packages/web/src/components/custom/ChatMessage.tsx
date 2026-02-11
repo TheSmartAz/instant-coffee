@@ -1,22 +1,23 @@
-import { memo } from 'react'
-import { ArrowRight } from 'lucide-react'
+import { memo, useState } from 'react'
+import { ChevronRight, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { formatDistanceToNow } from 'date-fns'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { InterviewWidget } from './InterviewWidget'
-import { AssetThumbnail } from './AssetThumbnail'
 import { ProductDocUpdateCard } from './ProductDocUpdateCard'
+import { FileChangeCard } from './FileChangeCard'
+import { PlanChecklist } from './PlanChecklist'
+import { AgentStatusPanel } from './AgentStatusPanel'
 import type {
   ChatAction,
-  ChatAsset,
   ChatStep,
-  Disambiguation,
   InterviewActionPayload,
+  InterviewAnswer,
   InterviewBatch,
   InterviewSummary,
+  SubAgentInfo,
 } from '@/types'
+import type { FileChange, PlanStep } from '@/types/events'
 
 export interface ChatMessageProps {
   role: 'user' | 'assistant'
@@ -32,294 +33,204 @@ export interface ChatMessageProps {
   productDocSectionName?: string
   productDocSectionContent?: string
   affectedPages?: string[]
-  disambiguation?: Disambiguation
-  assets?: ChatAsset[]
-  onAssetRemove?: (assetId: string) => void
+  fileChanges?: FileChange[]
+  plan?: PlanStep[]
+  subAgents?: SubAgentInfo[]
   onInterviewAction?: (payload: InterviewActionPayload) => void
   onTabChange?: (tab: 'preview' | 'code' | 'product-doc' | 'data') => void
-  onDisambiguationSelect?: (option: { id: string; slug: string; title: string }) => void
 }
+
+/* ── Tool summary (collapsed by default) ── */
+
+function ToolSummary({ steps }: { steps: ChatStep[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const doneCount = steps.filter((s) => s.status === 'done').length
+  const inProgress = steps.some((s) => s.status === 'in_progress')
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 transition-transform',
+            expanded && 'rotate-90'
+          )}
+        />
+        {inProgress ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : null}
+        <span>
+          {doneCount} tool{doneCount !== 1 ? 's' : ''} used
+        </span>
+      </button>
+      {expanded ? (
+        <div className="mt-1.5 space-y-1 pl-4 border-l border-border/50">
+          {steps.map((step) => (
+            <div
+              key={step.id}
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+            >
+              {step.status === 'in_progress' ? (
+                <Loader2 className="h-3 w-3 animate-spin text-primary" />
+              ) : step.status === 'failed' ? (
+                <span className="h-3 w-3 text-center text-destructive">x</span>
+              ) : (
+                <span className="h-3 w-3 text-center text-emerald-500">+</span>
+              )}
+              <span>{step.label}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/* ── Streaming cursor ── */
+
+function StreamingCursor() {
+  return (
+    <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-foreground align-text-bottom" />
+  )
+}
+
+/* ── Thinking spinner ── */
+
+function ThinkingIndicator() {
+  return (
+    <div className="flex items-center gap-2 py-1">
+      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <span className="text-sm text-muted-foreground">Thinking...</span>
+    </div>
+  )
+}
+
+/* ── Interview answer summary (Q&A pairs) ── */
+
+function InterviewSummaryDisplay({ items }: { items: InterviewAnswer[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="mt-2 space-y-1.5">
+      {items.map((item) => {
+        const answer =
+          item.labels?.join(', ') ?? item.label ?? String(item.value)
+        return (
+          <div key={item.id} className="text-sm">
+            <span className="text-muted-foreground">{item.question}</span>
+            <span className="text-muted-foreground"> — </span>
+            <span className="font-semibold text-foreground">{answer}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ── Main component ── */
 
 export const ChatMessage = memo(function ChatMessage({
   role,
   content,
-  timestamp,
   isStreaming,
   steps,
   interview,
   interviewSummary,
-  action,
   productDocUpdated,
-  productDocChangeSummary,
   productDocSectionName,
   productDocSectionContent,
-  affectedPages,
-  disambiguation,
-  assets,
-  onAssetRemove,
+  fileChanges,
+  plan,
+  subAgents,
   onInterviewAction,
-  onTabChange,
-  onDisambiguationSelect,
 }: ChatMessageProps) {
-  const isAssistant = role === 'assistant'
-  const hasSteps = Boolean(steps && steps.length > 0)
-  const hasSummary = Boolean(interviewSummary && interviewSummary.items.length > 0)
-  const hasInterview = Boolean(interview) && !hasSummary
-  const hasDisambiguation = Boolean(disambiguation && disambiguation.options.length > 0)
-  const hasAssets = Boolean(assets && assets.length > 0)
-  const shouldShowProductDocUpdateCard =
-    isAssistant &&
-    (action === 'product_doc_updated' || productDocUpdated === true)
+  const isUser = role === 'user'
+  const hasContent = content.trim().length > 0
+  const hasSteps = steps && steps.length > 0
+  const showThinking = isStreaming && !hasContent && !interview
 
-  const productDocCardSectionName =
-    productDocSectionName ??
-    (productDocChangeSummary ? 'Summary' : 'Product Doc')
-  const productDocCardSectionContent =
-    productDocSectionContent ??
-    productDocChangeSummary ??
-    'No section preview is available yet. Open the Product Doc tab to review the full update.'
+  /* ── User bubble ── */
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-primary-foreground">
+          {content}
+        </div>
+      </div>
+    )
+  }
 
-  const renderAssets = (align: 'left' | 'right') => (
-    <div className={cn('flex flex-wrap gap-2', align === 'right' ? 'justify-end' : '')}>
-      {assets?.map((asset) => (
-        <AssetThumbnail
-          key={asset.id}
-          asset={asset}
-          onRemove={onAssetRemove ? () => onAssetRemove(asset.id) : undefined}
-        />
-      ))}
-    </div>
-  )
-
-  // Determine if we should show ProductDoc link
-  const showProductDocLink =
-    action === 'product_doc_generated' ||
-    (action === 'product_doc_updated' && !shouldShowProductDocUpdateCard)
-
-  // Determine if we should show Preview link
-  const showPreviewLink =
-    action === 'pages_generated' ||
-    action === 'page_refined'
-
+  /* ── Assistant flat layout ── */
   return (
-    <div className="w-full animate-in fade-in slide-in-from-bottom-2">
-      {isAssistant ? (
-        <div className="w-full">
-          <div className="mx-auto w-full max-w-3xl space-y-3 text-sm leading-relaxed text-foreground">
-            {hasAssets ? renderAssets('left') : null}
-            {content ? (
-              <div className="max-w-none">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    code({ className, children, ...props }) {
-                      const isBlock = className?.includes('language-')
-                      if (isBlock) {
-                        return (
-                          <pre className="overflow-x-auto rounded-lg bg-muted p-3 text-sm">
-                            <code {...props}>{children}</code>
-                          </pre>
-                        )
-                      }
-                      return (
-                        <code
-                          className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground"
-                          {...props}
-                        >
-                          {children}
-                        </code>
-                      )
-                    },
-                  }}
-                >
-                  {content}
-                </ReactMarkdown>
-                {isStreaming ? (
-                  <span className="inline-flex items-center gap-1 pl-1 text-muted-foreground">
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.2s]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.1s]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-            {!content && isStreaming ? (
-              <span className="inline-flex items-center gap-1 text-muted-foreground">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.2s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.1s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
-              </span>
-            ) : null}
-            {hasInterview ? (
-              <InterviewWidget
-                batch={interview as InterviewBatch}
-                onAction={(payload) => onInterviewAction?.(payload)}
-              />
-            ) : null}
-            {hasSummary ? (
-              <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
-                <div className="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  <span>Answer summary</span>
-                  <span>{interviewSummary?.items.length ?? 0} items</span>
-                </div>
-                <div className="space-y-2">
-                  {(interviewSummary?.items ?? []).map((item, index) => (
-                    <div
-                      key={`${item.id}-${index}`}
-                      className="rounded-md border border-border/60 bg-background/80 px-3 py-2"
-                    >
-                      <div className="text-[11px] text-muted-foreground">
-                        Question {item.index ?? index + 1}: {item.question}
-                      </div>
-                      <div className="mt-1 text-sm font-medium text-foreground">
-                        {item.labels?.join(', ') ?? item.label ?? String(item.value)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {hasDisambiguation ? (
-              <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  {disambiguation?.prompt || 'Select a page'}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {disambiguation?.options.map((option) => (
-                    <Button
-                      key={option.id}
-                      variant="outline"
-                      size="sm"
-                      className="h-auto justify-start text-xs"
-                      onClick={() => onDisambiguationSelect?.({
-                        id: option.id,
-                        slug: option.slug,
-                        title: option.title,
-                      })}
-                    >
-                      <div className="text-left">
-                        <div className="font-medium">{option.title}</div>
-                        {option.description ? (
-                          <div className="text-muted-foreground">{option.description}</div>
-                        ) : null}
-                      </div>
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {shouldShowProductDocUpdateCard ? (
-              <ProductDocUpdateCard
-                sectionName={productDocCardSectionName}
-                sectionContent={productDocCardSectionContent}
-                onNavigateToDoc={() => onTabChange?.('product-doc')}
-              />
-            ) : null}
-            {showProductDocLink ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1 text-xs"
-                onClick={() => onTabChange?.('product-doc')}
-              >
-                Open the Product Doc tab
-                <ArrowRight className="h-3 w-3" />
-              </Button>
-            ) : null}
-            {showPreviewLink ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1 text-xs"
-                onClick={() => onTabChange?.('preview')}
-              >
-                View preview
-                <ArrowRight className="h-3 w-3" />
-              </Button>
-            ) : null}
-            {affectedPages && affectedPages.length > 0 ? (
-              <div className="rounded-md border border-border/60 bg-muted/40 px-3 py-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Affected pages ({affectedPages.length})
-                </div>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {affectedPages.map((page, index) => (
-                    <span
-                      key={`${page}-${index}`}
-                      className="inline-flex items-center rounded-full bg-background px-2 py-0.5 text-xs"
-                    >
-                      {page}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {hasSteps ? (
-              <div className="space-y-1 rounded-md border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-                {steps?.map((step) => {
-                  const statusClass =
-                    step.status === 'done'
-                      ? 'bg-emerald-500'
-                      : step.status === 'failed'
-                        ? 'bg-rose-500'
-                        : 'bg-amber-500'
-                  return (
-                    <div key={step.id} className="flex items-start gap-2">
-                      <span
-                        className={cn('mt-1 h-1.5 w-1.5 rounded-full', statusClass)}
-                      />
-                      <span className="flex-1 leading-4">{step.label}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : null}
-            {timestamp ? (
-              <div className="text-xs text-muted-foreground">
-                {formatDistanceToNow(timestamp, { addSuffix: true })}
-              </div>
-            ) : null}
-          </div>
+    <div className="mx-auto w-full max-w-[95%]">
+      {/* Interview widget */}
+      {interview && onInterviewAction ? (
+        <div className="mb-2">
+          <InterviewWidget batch={interview} onAction={onInterviewAction} />
         </div>
-      ) : (
-        <div className="flex w-full justify-end">
-          <div className="flex max-w-[70%] flex-col items-end gap-1">
-            {hasAssets ? renderAssets('right') : null}
-            <div className="w-full rounded-2xl bg-primary px-4 py-2 text-sm leading-relaxed text-primary-foreground shadow-sm">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  code({ className, children, ...props }) {
-                    const isBlock = className?.includes('language-')
-                    if (isBlock) {
-                      return (
-                        <pre className="overflow-x-auto rounded-lg bg-primary-foreground/10 p-3 text-sm text-primary-foreground">
-                          <code {...props}>{children}</code>
-                        </pre>
-                      )
-                    }
-                    return (
-                      <code
-                        className="rounded bg-primary-foreground/20 px-1.5 py-0.5 text-xs text-primary-foreground"
-                        {...props}
-                      >
-                        {children}
-                      </code>
-                    )
-                  },
-                }}
-              >
-                {content}
-              </ReactMarkdown>
-            </div>
-            {timestamp ? (
-              <div className="text-xs text-muted-foreground">
-                {formatDistanceToNow(timestamp, { addSuffix: true })}
-              </div>
-            ) : null}
-          </div>
+      ) : null}
+
+      {/* Interview answer summary */}
+      {interviewSummary?.items?.length ? (
+        <div className="mb-2">
+          <InterviewSummaryDisplay items={interviewSummary.items} />
         </div>
-      )}
+      ) : null}
+
+      {/* Thinking spinner */}
+      {showThinking ? <ThinkingIndicator /> : null}
+
+      {/* Markdown content */}
+      {hasContent ? (
+        <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed text-foreground">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {content}
+          </ReactMarkdown>
+          {isStreaming ? <StreamingCursor /> : null}
+        </div>
+      ) : null}
+
+      {/* Tool summary */}
+      {hasSteps ? <ToolSummary steps={steps} /> : null}
+
+      {/* Plan checklist */}
+      {plan && plan.length > 0 ? (
+        <div className="mt-2">
+          <PlanChecklist steps={plan} />
+        </div>
+      ) : null}
+
+      {/* Sub-agent status */}
+      {subAgents && subAgents.length > 0 ? (
+        <AgentStatusPanel
+          agents={subAgents.map((a) => ({
+            id: a.id,
+            task: a.task,
+            status: a.status,
+            message: a.summary,
+          }))}
+        />
+      ) : null}
+
+      {/* File changes */}
+      {fileChanges && fileChanges.length > 0 ? (
+        <div className="mt-2">
+          <FileChangeCard files={fileChanges} />
+        </div>
+      ) : null}
+
+      {/* Product doc update card */}
+      {productDocUpdated && productDocSectionName && productDocSectionContent ? (
+        <div className="mt-2">
+          <ProductDocUpdateCard
+            sectionName={productDocSectionName}
+            sectionContent={productDocSectionContent}
+          />
+        </div>
+      ) : null}
     </div>
   )
 })

@@ -1,33 +1,57 @@
+import * as React from 'react'
 import { Routes, Route } from 'react-router-dom'
-import { HomePage } from '@/pages/HomePage'
-import { ProjectPage } from '@/pages/ProjectPage'
-import { SettingsPage } from '@/pages/SettingsPage'
-import { ExecutionPage } from '@/pages/ExecutionPage'
 import { Toaster } from '@/components/ui/toaster'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useOnlineStatus } from '@/hooks/useOnlineStatus'
+
+const HomePage = React.lazy(() =>
+  import('@/pages/HomePage').then((module) => ({ default: module.HomePage }))
+)
+
+const ProjectPage = React.lazy(() =>
+  import('@/pages/ProjectPage').then((module) => ({ default: module.ProjectPage }))
+)
+
+const SettingsPage = React.lazy(() =>
+  import('@/pages/SettingsPage').then((module) => ({ default: module.SettingsPage }))
+)
+
+const ExecutionPage = React.lazy(() =>
+  import('@/pages/ExecutionPage').then((module) => ({ default: module.ExecutionPage }))
+)
 
 function App() {
   const isOnline = useOnlineStatus()
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {!isOnline ? (
-        <div
-          className="bg-destructive px-4 py-2 text-center text-xs font-medium text-destructive-foreground"
-          role="status"
-          aria-live="polite"
+    <ErrorBoundary>
+      <div className="min-h-screen bg-background text-foreground">
+        {!isOnline ? (
+          <div
+            className="bg-destructive px-4 py-2 text-center text-xs font-medium text-destructive-foreground"
+            role="status"
+            aria-live="polite"
+          >
+            You are offline. Changes will sync when the connection returns.
+          </div>
+        ) : null}
+        <React.Suspense
+          fallback={
+            <div className="flex h-[calc(100vh-56px)] items-center justify-center text-sm text-muted-foreground">
+              Loading...
+            </div>
+          }
         >
-          You are offline. Changes will sync when the connection returns.
-        </div>
-      ) : null}
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/project/:id" element={<ProjectPage />} />
-        <Route path="/project/:id/flow" element={<ExecutionPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-      </Routes>
-      <Toaster />
-    </div>
+          <Routes>
+            <Route path="/" element={<ErrorBoundary><HomePage /></ErrorBoundary>} />
+            <Route path="/project/:id" element={<ErrorBoundary><ProjectPage /></ErrorBoundary>} />
+            <Route path="/project/:id/flow" element={<ErrorBoundary><ExecutionPage /></ErrorBoundary>} />
+            <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
+          </Routes>
+        </React.Suspense>
+        <Toaster />
+      </div>
+    </ErrorBoundary>
   )
 }
 

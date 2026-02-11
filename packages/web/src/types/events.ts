@@ -65,6 +65,13 @@ export type EventType =
   | 'tool_policy_blocked'
   | 'tool_policy_warn'
   | 'interrupt'
+  | 'context_compacted'
+  | 'files_changed'
+  | 'plan_update'
+  | 'agent_spawned'
+  | 'bg_task_started'
+  | 'bg_task_completed'
+  | 'bg_task_failed'
 
 export type SceneType = 'ecommerce' | 'travel' | 'manual' | 'kanban' | 'landing'
 
@@ -242,7 +249,6 @@ export interface AgentProgressEvent extends BaseEvent {
   task_id?: string
   agent_id: string
   message: string
-  progress?: number
 }
 
 export interface AgentEndEvent extends BaseEvent {
@@ -534,6 +540,60 @@ export interface ProductDocOutdatedEvent extends BaseEvent {
   doc_id: string
 }
 
+export interface ContextCompactedEvent extends BaseEvent {
+  type: 'context_compacted'
+  tokens_saved: number
+  turns_removed?: number
+  warning?: string
+}
+
+export interface FileChange {
+  path: string
+  action: 'created' | 'modified' | 'deleted'
+  summary?: string
+}
+
+export interface FilesChangedEvent extends BaseEvent {
+  type: 'files_changed'
+  files: FileChange[]
+}
+
+export interface PlanStep {
+  step: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
+export interface PlanUpdateEvent extends BaseEvent {
+  type: 'plan_update'
+  explanation: string
+  steps: PlanStep[]
+}
+
+export interface AgentSpawnedEvent extends BaseEvent {
+  type: 'agent_spawned'
+  agent_id: string
+  task_description: string
+}
+
+export interface BgTaskStartedEvent extends BaseEvent {
+  type: 'bg_task_started'
+  task_id?: string
+  command: string
+}
+
+export interface BgTaskCompletedEvent extends BaseEvent {
+  type: 'bg_task_completed'
+  task_id?: string
+  output?: string
+  exit_code?: number
+}
+
+export interface BgTaskFailedEvent extends BaseEvent {
+  type: 'bg_task_failed'
+  task_id?: string
+  error: string
+}
+
 export interface SessionEvent {
   id: number
   session_id: string
@@ -593,6 +653,13 @@ export type ExecutionEvent =
   | VerifyEvent
   | ToolPolicyEvent
   | WorkflowEvent
+  | ContextCompactedEvent
+  | FilesChangedEvent
+  | PlanUpdateEvent
+  | AgentSpawnedEvent
+  | BgTaskStartedEvent
+  | BgTaskCompletedEvent
+  | BgTaskFailedEvent
 
 export function isAgentEvent(
   event: ExecutionEvent

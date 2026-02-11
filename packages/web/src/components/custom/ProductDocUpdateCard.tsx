@@ -1,12 +1,10 @@
 import * as React from 'react'
-import { ChevronDown, ChevronRight, ArrowRight } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface ProductDocUpdateCardProps {
   sectionName: string
   sectionContent: string
-  onNavigateToDoc: () => void
 }
 
 const FALLBACK_SECTION_NAME = 'Product Doc'
@@ -15,7 +13,6 @@ const FALLBACK_SECTION_CONTENT = 'No section preview was provided for this updat
 export function ProductDocUpdateCard({
   sectionName,
   sectionContent,
-  onNavigateToDoc,
 }: ProductDocUpdateCardProps) {
   const [expanded, setExpanded] = React.useState(false)
 
@@ -51,18 +48,6 @@ export function ProductDocUpdateCard({
             </pre>
           </div>
         </div>
-      </div>
-
-      <div className="mt-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1 px-0 text-xs"
-          onClick={onNavigateToDoc}
-        >
-          View full Product Doc
-          <ArrowRight className="h-3 w-3" />
-        </Button>
       </div>
     </div>
   )

@@ -24,10 +24,14 @@ You are an expert coding assistant that builds mobile-optimized web pages.
 
 You follow a **Product Doc first** workflow:
 
-1. **Interview**: When the user's request lacks detail, use the `ask_user` tool
-   to ask 2-5 multiple-choice questions per round. Adapt the number of rounds
-   to how much info you still need. If the user's prompt is already detailed,
-   you may skip straight to step 2.
+1. **Interview** (REQUIRED): Always start by asking the user clarifying questions
+   using the `ask_user` tool. Ask 2-5 multiple-choice questions per round.
+   You MUST ask at least ONE round of questions before creating the Product Doc,
+   even if the user's initial request seems detailed. There are always aspects
+   worth clarifying: visual style preferences, specific content, interaction
+   details, color palette, layout choices, etc.
+   Adapt the number of follow-up rounds to how much info you still need
+   (typically 1-3 rounds total).
 
 2. **Build Product Doc**: Create or update `PRODUCT.md` in the workspace.
    This is the source of truth for what to build. It has these sections:
@@ -55,6 +59,8 @@ You follow a **Product Doc first** workflow:
 ## Rules
 
 - NEVER generate code without a PRODUCT.md. Always create the doc first.
+- NEVER create PRODUCT.md without asking the user at least one round of
+  clarifying questions first via `ask_user`.
 - When updating PRODUCT.md, only update the affected section(s), not the
   entire document. Use the edit_file tool for surgical updates.
 - The Product Doc is the contract. Code must match the doc.
@@ -95,6 +101,7 @@ class App:
             on_text_delta=self._on_text_delta,
             on_tool_call=self._on_tool_call,
             on_tool_result=self._on_tool_result,
+            on_tool_progress=self._on_tool_progress,
             on_sub_agent_start=self._on_sub_agent_start,
             on_sub_agent_end=self._on_sub_agent_end,
             user_io=self.user_io,
@@ -122,6 +129,9 @@ class App:
             self.project = self.store.create()
 
         workspace = self.store.workspace_dir(self.project.id)
+        # Reload config with workspace for project-level overrides
+        self.config = Config.load(workspace=workspace)
+        self.config._ensure_agents()
         self.engine = self._create_engine(workspace)
 
         # Load existing context if resuming
@@ -130,6 +140,9 @@ class App:
             self.engine.context = Context.load(
                 ctx_path, system_prompt=self.engine.agent_config.system_prompt
             )
+            # Restore engine state (cost, usage, snapshots)
+            state_path = self.store.project_dir(self.project.id) / "engine_state.json"
+            self.engine.load_state(state_path)
             self.console.print_info(f"Resumed project: {self.project.id}")
 
         model_name = self.config.get_model(self.engine.agent_config.model).model
@@ -154,26 +167,31 @@ class App:
 
             self._streaming_started = False
             try:
-                self.console.start_streaming()
-                self._streaming_started = True
+                self.console.start_spinner("Thinking...")
                 result = await self.engine.run_turn(user_input)
-                self.console.end_streaming()
-                self._streaming_started = False
+                self.console.stop_spinner()
+                if self._streaming_started:
+                    self.console.end_streaming()
+                    self._streaming_started = False
 
                 if result.usage:
                     self.console.print_usage(result.usage)
 
-                # Save context
+                # Save context and engine state
                 ctx_path = self.store.context_path(self.project.id)
                 self.engine.context.save(ctx_path)
+                state_path = self.store.project_dir(self.project.id) / "engine_state.json"
+                self.engine.save_state(state_path)
                 self.store.update_timestamp(self.project)
 
             except KeyboardInterrupt:
+                self.console.stop_spinner()
                 if self._streaming_started:
                     self.console.end_streaming()
                 self.engine.stop()
                 self.console.print_info("Interrupted.")
             except Exception as e:
+                self.console.stop_spinner()
                 if self._streaming_started:
                     self.console.end_streaming()
                 self.console.print_error(str(e))
@@ -192,6 +210,13 @@ class App:
                 "Commands:\n"
                 "  /quit, /exit, /q  - Exit\n"
                 "  /clear            - Clear conversation\n"
+                "  /undo             - Undo last turn\n"
+                "  /rollback <n>     - Rollback last N turns\n"
+                "  /branch <name>    - Save current state as named branch\n"
+                "  /switch <name>    - Switch to a named branch\n"
+                "  /checkpoints        - List conversation checkpoints\n"
+                "  /revert <index>     - Revert to a specific checkpoint\n"
+                "  /branches         - List saved branches\n"
                 "  /doc              - Show product doc\n"
                 "  /doc edit         - Open product doc in $EDITOR\n"
                 "  /projects         - List projects\n"
@@ -238,7 +263,8 @@ class App:
                 elif sub in self.config.models:
                     self.engine.agent_config.model = sub
                     self.engine.setup()
-                    self.console.print_info(f"Switched to: {sub}")
+                    display_name = self.config.get_model(sub).model
+                    self.console.print_welcome(display_name)
                 else:
                     self.console.print_error(
                         f"Unknown model: {sub}. Use '/model list' to see available."
@@ -249,6 +275,78 @@ class App:
                     f"Current: {current}\n"
                     f"Use '/model list' to see all, '/model <name>' to switch"
                 )
+        elif command == "/undo":
+            if self.engine and self.engine.context.undo():
+                self.console.print_info("Undid last turn.")
+            else:
+                self.console.print_info("Nothing to undo.")
+        elif command == "/rollback":
+            n = 1
+            if len(parts) > 1:
+                try:
+                    n = int(parts[1].strip())
+                except ValueError:
+                    self.console.print_error("Usage: /rollback <number>")
+                    return True
+            if self.engine:
+                removed = self.engine.context.rollback(n)
+                self.console.print_info(f"Rolled back {removed} turn(s).")
+        elif command == "/branch":
+            if len(parts) < 2 or not parts[1].strip():
+                self.console.print_error("Usage: /branch <name>")
+            elif self.engine:
+                name = parts[1].strip()
+                self.engine.context.fork(name)
+                self.console.print_info(f"Branch '{name}' saved.")
+        elif command == "/switch":
+            if len(parts) < 2 or not parts[1].strip():
+                self.console.print_error("Usage: /switch <name>")
+            elif self.engine:
+                name = parts[1].strip()
+                if self.engine.context.switch_branch(name):
+                    self.console.print_info(f"Switched to branch '{name}'.")
+                else:
+                    available = ", ".join(self.engine.context.list_branches()) or "none"
+                    self.console.print_error(f"Branch '{name}' not found. Available: {available}")
+        elif command == "/branches":
+            if self.engine:
+                branches = self.engine.context.list_branches()
+                if branches:
+                    for b in branches:
+                        self.console.print_info(f"  {b}")
+                else:
+                    self.console.print_info("No branches saved. Use /branch <name> to create one.")
+        elif command == "/checkpoints":
+            if self.engine:
+                cps = self.engine.context.list_checkpoints()
+                if cps:
+                    for cp in cps:
+                        self.console.print_info(
+                            f"  [{cp['index']}] {cp['label'] or '(unlabeled)'}  "
+                            f"— {cp['messages']} msgs, ~{cp['tokens']} tokens"
+                        )
+                else:
+                    self.console.print_info("No checkpoints yet.")
+        elif command == "/revert":
+            if len(parts) < 2 or not parts[1].strip():
+                self.console.print_error("Usage: /revert <index>")
+            elif self.engine:
+                try:
+                    idx = int(parts[1].strip())
+                except ValueError:
+                    self.console.print_error("Usage: /revert <index> (must be a number)")
+                    return True
+                if self.engine.context.revert_to(idx):
+                    self.console.print_info(
+                        f"Reverted to checkpoint [{idx}]. "
+                        f"Current state saved as branch 'pre-revert' (use /switch pre-revert to undo)."
+                    )
+                else:
+                    count = len(self.engine.context._snapshots)
+                    self.console.print_error(
+                        f"Invalid index: {idx}. "
+                        f"Available range: 0–{count - 1}" if count else f"Invalid index: {idx}. No checkpoints available."
+                    )
         elif command == "/usage":
             if self.engine:
                 self.console.print_usage(self.engine._total_usage)
@@ -304,13 +402,23 @@ class App:
     # -- Callbacks --
 
     async def _on_text_delta(self, delta: str):
+        if not self._streaming_started:
+            self.console.stop_spinner()
+            self.console.start_streaming()
+            self._streaming_started = True
         self.console.stream_text(delta)
 
     async def _on_tool_call(self, name: str, tc: dict):
-        self.console.end_streaming()
-        self._streaming_started = False
-        # ask_user renders its own UI via CLIUserIO, skip the tool panel
+        self.console.stop_spinner()
+        if self._streaming_started:
+            self.console.end_streaming()
+            self._streaming_started = False
+        # ask_user renders its own UI via CLIUserIO, skip display
         if name == "ask_user":
+            return
+        # think is internal reasoning — keep spinner, don't show in feed
+        if name == "think":
+            self.console.start_spinner("Thinking...")
             return
         args = tc.get("arguments", "{}")
         try:
@@ -318,19 +426,29 @@ class App:
         except Exception:
             parsed = {"raw": args}
         self.console.print_tool_call(name, parsed)
+        # Show spinner with tool context while executing
+        from ic.ui.console import _tool_call_summary
+        summary = _tool_call_summary(name, parsed)
+        self.console.start_spinner(summary + "...")
 
     async def _on_tool_result(self, name: str, result: str):
+        self.console.stop_spinner()
         # ask_user already showed its UI, just show a brief summary
         if name == "ask_user":
             lines = result.strip().split("\n")
             count = sum(1 for l in lines if l.startswith("Q:"))
             self.console.print_info(f"  ({count} question(s) answered)")
-            self.console.start_streaming()
-            self._streaming_started = True
+            self.console.start_spinner("Thinking...")
+            return
+        # think is internal reasoning — silent
+        if name == "think":
+            self.console.start_spinner("Thinking...")
             return
         self.console.print_tool_result(name, result)
-        self.console.start_streaming()
-        self._streaming_started = True
+        self.console.start_spinner("Thinking...")
+
+    async def _on_tool_progress(self, tool_name: str, message: str, percent: int | None):
+        self.console.print_tool_progress(tool_name, message, percent)
 
     async def _on_sub_agent_start(self, task: str):
         self.console.print_sub_agent_start(task)

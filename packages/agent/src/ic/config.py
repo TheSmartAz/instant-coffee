@@ -2,7 +2,12 @@
 
 Model-centric config: each entry is a model, not a provider.
 Same api_key/base_url can be shared across multiple models.
-Config stored in ~/.ic/config.toml, with .env fallback.
+
+Config loading priority (highest first):
+1. Environment variables
+2. .instant-coffee/config.local.toml (git-ignored, per-machine)
+3. .instant-coffee/config.toml (project-specific)
+4. ~/.ic/config.toml (user defaults)
 """
 
 from __future__ import annotations
@@ -34,6 +39,32 @@ DMXAPI_MODELS = [
 DMXAPI_BASE_URL = "https://www.dmxapi.cn/v1"
 
 
+# Per-model token pricing (USD per 1M tokens): (input, output)
+# Source: provider pricing pages as of 2025-06
+MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # DMXAPI / Chinese models
+    "kimi-k2.5":                    (2.00, 8.00),
+    "DeepSeek-V3.2":                (0.27, 1.10),
+    "gpt-5-mini":                   (1.50, 6.00),
+    "glm-4.7":                      (1.00, 4.00),
+    "qwen3-max-2026-01-23":         (1.60, 6.40),
+    "MiniMax-M2.1":                 (1.00, 4.00),
+    "hunyuan-2.0-instruct-20251111":(1.00, 4.00),
+    "gemini-3-flash-preview":       (0.15, 0.60),
+    "grok-code-fast-1":             (2.00, 10.00),
+    # OpenAI
+    "gpt-4o":                       (2.50, 10.00),
+    "gpt-4o-mini":                  (0.15, 0.60),
+    "o3-mini":                      (1.10, 4.40),
+    # Anthropic
+    "claude-sonnet-4-20250514":     (3.00, 15.00),
+    "claude-haiku-4-20250514":      (0.80, 4.00),
+    # DeepSeek
+    "deepseek-chat":                (0.27, 1.10),
+    "deepseek-reasoner":            (0.55, 2.19),
+}
+
+
 @dataclass
 class ModelConfig:
     """Configuration for a model. name is the user-facing alias."""
@@ -44,6 +75,7 @@ class ModelConfig:
     base_url: str | None = None
     max_tokens: int = 32768
     temperature: float = 0.0
+    timeout: float = 120.0   # timeout in seconds for API requests
 
     def __post_init__(self):
         if not self.model:
@@ -65,6 +97,7 @@ DEFAULT_TOOLS_MAIN = [
     "ic.tools.file:ReadFile",
     "ic.tools.file:WriteFile",
     "ic.tools.file:EditFile",
+    "ic.tools.file:MultiEditFile",
     "ic.tools.file:GlobFiles",
     "ic.tools.file:GrepFiles",
     "ic.tools.shell:Shell",
@@ -72,6 +105,10 @@ DEFAULT_TOOLS_MAIN = [
     "ic.tools.todo:Todo",
     "ic.tools.ask:AskUser",
     "ic.tools.subagent:CreateSubAgent",
+    "ic.tools.subagent:CreateParallelSubAgents",
+    "ic.tools.web:WebSearch",
+    "ic.tools.web:WebFetch",
+    "ic.tools.skill:ExecuteSkill",
 ]
 
 DEFAULT_TOOLS_SUB = [
@@ -86,6 +123,20 @@ DEFAULT_TOOLS_SUB = [
 
 
 @dataclass
+class ModelPointers:
+    """Model pointers for different purposes. Each points to a model name in Config.models."""
+
+    main: str = ""      # Primary model for main agent conversations
+    sub: str = ""       # Model for sub-agents (can be cheaper)
+    compact: str = ""   # Model for context summarization (should be fast & cheap)
+
+    def resolve(self, role: str, fallback: str = "") -> str:
+        """Get the model name for a given role, falling back to main or default."""
+        value = getattr(self, role, "") if role in ("main", "sub", "compact") else ""
+        return value or self.main or fallback
+
+
+@dataclass
 class Config:
     """Global configuration."""
 
@@ -93,6 +144,7 @@ class Config:
     models: dict[str, ModelConfig] = field(default_factory=dict)
     agents: dict[str, AgentConfig] = field(default_factory=dict)
     default_model: str = ""
+    model_pointers: ModelPointers = field(default_factory=ModelPointers)
 
     def __post_init__(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -104,16 +156,55 @@ class Config:
     # ── Loading ──────────────────────────────────────────────
 
     @classmethod
-    def load(cls) -> Config:
-        """Load config: TOML > .env > environment variables."""
+    def load(cls, workspace: "Path | None" = None) -> Config:
+        """Load config: cascade layers > TOML > .env > environment variables.
+
+        When workspace is provided, uses CascadingConfig for 4-layer priority:
+        env > config.local.toml > config.toml > ~/.ic/config.toml
+        """
         cfg = cls()
         cfg._load_dotenv()
-        if cfg.config_path.exists():
+
+        # Try cascading config first (supports project-level overrides)
+        from ic.cascade import CascadingConfig
+        cascade = CascadingConfig(workspace=workspace)
+        merged_models = cascade.get("models", {})
+
+        if merged_models:
+            cfg._apply_cascade(cascade)
+        elif cfg.config_path.exists():
             cfg._load_from_toml()
         else:
             cfg._load_from_env()
+
         cfg._ensure_agents()
         return cfg
+
+    def _apply_cascade(self, cascade: Any):
+        """Apply merged CascadingConfig data to this Config."""
+        merged_models = cascade.get("models", {})
+        for name, m in merged_models.items():
+            self.models[name] = ModelConfig(
+                name=name,
+                model=m.get("model", ""),
+                api_key=m.get("api_key", ""),
+                base_url=m.get("base_url"),
+                max_tokens=m.get("max_tokens", 32768),
+                temperature=m.get("temperature", 0.0),
+            )
+
+        self.default_model = cascade.get("default_model", "")
+        if not self.default_model and self.models:
+            self.default_model = next(iter(self.models))
+
+        # Load model pointers
+        ptrs = cascade.get("model_pointers", {}) or {}
+        self.model_pointers = ModelPointers(
+            main=ptrs.get("main", ""),
+            sub=ptrs.get("sub", ""),
+            compact=ptrs.get("compact", ""),
+        )
+        self._auto_select_pointers()
 
     def _load_dotenv(self):
         """Load .env files into os.environ (won't override existing).
@@ -174,6 +265,14 @@ class Config:
         if not self.default_model and self.models:
             self.default_model = next(iter(self.models))
 
+        # Load model pointers
+        ptrs = data.get("model_pointers", {})
+        self.model_pointers = ModelPointers(
+            main=ptrs.get("main", ""),
+            sub=ptrs.get("sub", ""),
+            compact=ptrs.get("compact", ""),
+        )
+
         for name, a in data.get("agents", {}).items():
             self.agents[name] = AgentConfig(
                 name=name,
@@ -228,6 +327,39 @@ class Config:
                 self.default_model = env_model
             else:
                 self.default_model = next(iter(self.models))
+
+        # Auto-select model pointers if not set
+        self._auto_select_pointers()
+
+    # ── Model Pointers ─────────────────────────────────────────
+
+    def _auto_select_pointers(self):
+        """Auto-select cheap models for sub/compact if not explicitly set."""
+        if not self.models:
+            return
+
+        # main always defaults to default_model
+        if not self.model_pointers.main:
+            self.model_pointers.main = self.default_model
+
+        # For compact/sub, prefer the cheapest available model
+        if not self.model_pointers.compact or not self.model_pointers.sub:
+            cheapest = self._find_cheapest_model()
+            if not self.model_pointers.compact:
+                self.model_pointers.compact = cheapest or self.default_model
+            if not self.model_pointers.sub:
+                self.model_pointers.sub = cheapest or self.default_model
+
+    def _find_cheapest_model(self) -> str:
+        """Find the cheapest available model by input token price."""
+        best_name = ""
+        best_price = float("inf")
+        for name in self.models:
+            pricing = MODEL_PRICING.get(name)
+            if pricing and pricing[0] < best_price:
+                best_price = pricing[0]
+                best_name = name
+        return best_name
 
     # ── Agents ───────────────────────────────────────────────
 

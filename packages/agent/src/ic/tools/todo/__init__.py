@@ -1,62 +1,91 @@
-"""Todo tool - task tracking for the agent."""
+"""Plan tool - structured planning for complex tasks."""
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from ic.tools.base import BaseTool, ToolParam, ToolResult
 
 
 class Todo(BaseTool):
-    name = "todo"
-    description = "Manage a task list. Actions: add, list, update, remove."
+    """Plan tool for creating and updating execution plans.
+
+    Replaces the old Todo tool with a structured plan that fires
+    callbacks for real-time UI updates.
+    """
+
+    name = "update_plan"
+    description = (
+        "Create or update the execution plan. Use this for complex tasks "
+        "(multi-page sites, major redesigns, new features) to outline steps "
+        "before executing. For simple refinements, execute directly without a plan."
+    )
     parameters = [
-        ToolParam(name="action", description="Action to perform", enum=["add", "list", "update", "remove"]),
-        ToolParam(name="task", description="Task description (for add)", required=False),
-        ToolParam(name="task_id", type="integer", description="Task ID (for update/remove)", required=False),
-        ToolParam(name="status", description="New status (for update)", required=False, enum=["pending", "in_progress", "done"]),
+        ToolParam(
+            name="explanation",
+            description="Brief explanation of the plan or what changed",
+        ),
+        ToolParam(
+            name="steps",
+            type="array",
+            description=(
+                "List of plan steps. Each step has 'step' (description) "
+                "and 'status' (pending/in_progress/completed)."
+            ),
+        ),
     ]
 
-    _tasks: list[dict[str, Any]] = []
-    _next_id: int = 1
+    def __init__(self, engine: Any = None):
+        self._engine = engine
+        self._current_plan: dict[str, Any] = {}
 
-    def __init__(self):
-        self._tasks = []
-        self._next_id = 1
+    @property
+    def current_plan(self) -> dict[str, Any]:
+        return self._current_plan
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        action = kwargs["action"]
-        if action == "add":
-            task_desc = kwargs.get("task", "")
-            if not task_desc:
-                return ToolResult(error="Task description required", is_error=True)
-            task = {"id": self._next_id, "task": task_desc, "status": "pending"}
-            self._tasks.append(task)
-            self._next_id += 1
-            return ToolResult(output=f"Added task #{task['id']}: {task_desc}")
+        explanation = kwargs.get("explanation", "")
+        steps_raw = kwargs.get("steps", [])
 
-        elif action == "list":
-            if not self._tasks:
-                return ToolResult(output="No tasks.")
-            lines = []
-            for t in self._tasks:
-                icon = {"pending": "○", "in_progress": "◑", "done": "●"}.get(t["status"], "?")
-                lines.append(f"  {icon} #{t['id']} [{t['status']}] {t['task']}")
-            return ToolResult(output="\n".join(lines))
+        if not steps_raw:
+            return ToolResult(error="At least one step is required", is_error=True)
 
-        elif action == "update":
-            tid = int(kwargs.get("task_id", 0))
-            status = kwargs.get("status", "")
-            task = next((t for t in self._tasks if t["id"] == tid), None)
-            if not task:
-                return ToolResult(error=f"Task #{tid} not found", is_error=True)
-            task["status"] = status
-            return ToolResult(output=f"Updated task #{tid} → {status}")
+        # Normalize steps
+        steps = []
+        for s in steps_raw:
+            if isinstance(s, dict):
+                steps.append({
+                    "step": s.get("step", ""),
+                    "status": s.get("status", "pending"),
+                })
+            elif isinstance(s, str):
+                steps.append({"step": s, "status": "pending"})
 
-        elif action == "remove":
-            tid = int(kwargs.get("task_id", 0))
-            self._tasks = [t for t in self._tasks if t["id"] != tid]
-            return ToolResult(output=f"Removed task #{tid}")
+        self._current_plan = {
+            "explanation": explanation,
+            "steps": steps,
+        }
 
-        return ToolResult(error=f"Unknown action: {action}", is_error=True)
+        # Fire callback on engine if available
+        if self._engine and hasattr(self._engine, "on_plan_update"):
+            callback = getattr(self._engine, "on_plan_update", None)
+            if callback:
+                try:
+                    result = callback(self._current_plan)
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception:
+                    pass
+
+        # Format response
+        lines = [f"Plan: {explanation}"]
+        for i, s in enumerate(steps, 1):
+            icon = {"pending": "○", "in_progress": "◉", "completed": "✓"}.get(
+                s["status"], "○"
+            )
+            lines.append(f"  {icon} {i}. {s['step']}")
+
+        completed = sum(1 for s in steps if s["status"] == "completed")
+        lines.append(f"\nProgress: {completed}/{len(steps)} steps completed")
+
+        return ToolResult(output="\n".join(lines))

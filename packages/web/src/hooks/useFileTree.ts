@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { notifyAsyncError } from '@/lib/notifyAsyncError'
 import type { FileContent, FileTreeNode } from '../types'
 import type { ExecutionEvent } from '../types/events'
 
@@ -37,7 +38,10 @@ export function useFileTree(sessionId: string): UseFileTreeResult {
       setTree(response.tree)
     } catch (err) {
       setError(err as Error)
-      console.error('Failed to fetch file tree:', err)
+      notifyAsyncError(err, {
+        title: 'Failed to load files',
+        loggerPrefix: 'Failed to fetch file tree:',
+      })
     } finally {
       setIsLoading(false)
     }
@@ -65,7 +69,10 @@ export function useFileTree(sessionId: string): UseFileTreeResult {
         setContentCache((prev) => ({ ...prev, [path]: content }))
       } catch (err) {
         setError(err as Error)
-        console.error('Failed to fetch file content:', err)
+        notifyAsyncError(err, {
+          title: 'Failed to load file content',
+          loggerPrefix: 'Failed to fetch file content:',
+        })
       } finally {
         setIsContentLoading(false)
       }

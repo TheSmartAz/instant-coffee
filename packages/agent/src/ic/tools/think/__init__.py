@@ -10,6 +10,7 @@ from ic.tools.base import BaseTool, ToolParam, ToolResult
 class Think(BaseTool):
     name = "think"
     description = "Use this tool to think through complex problems step by step. The content is not shown to the user."
+    is_concurrent_safe = True
     parameters = [
         ToolParam(name="thought", description="Your reasoning and analysis"),
     ]

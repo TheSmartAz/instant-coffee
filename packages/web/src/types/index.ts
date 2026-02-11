@@ -1,3 +1,5 @@
+import type { FileChange, PlanStep } from './events'
+
 export type MessageRole = 'user' | 'assistant'
 
 export type ChatStepStatus = 'in_progress' | 'done' | 'failed'
@@ -93,6 +95,16 @@ export interface Message {
   disambiguation?: Disambiguation
   hidden?: boolean
   assets?: ChatAsset[]
+  fileChanges?: FileChange[]
+  plan?: PlanStep[]
+  subAgents?: SubAgentInfo[]
+}
+
+export interface SubAgentInfo {
+  id: string
+  task: string
+  status: 'running' | 'completed' | 'failed'
+  summary?: string
 }
 
 export interface Version {
@@ -122,6 +134,15 @@ export interface SessionDetail {
   currentVersion?: number
   previewUrl?: string
   previewHtml?: string
+}
+
+export interface Thread {
+  id: string
+  session_id: string
+  title: string | null
+  created_at: string
+  updated_at: string
+  message_count: number
 }
 
 export interface Settings {
@@ -211,13 +232,18 @@ export interface ChatStyleReference {
   scope_pages?: string[]
 }
 
+export type ImageIntent = 'asset' | 'style_reference' | 'layout_reference' | 'screenshot'
+
 export interface ChatRequestPayload {
   session_id?: string
+  thread_id?: string
   message: string
   interview?: boolean
   generate_now?: boolean
   images?: string[]
+  image_intent?: ImageIntent
   target_pages?: string[]
+  mentioned_files?: string[]
   style_reference?: ChatStyleReference
   resume?: Record<string, unknown>
 }
@@ -407,6 +433,79 @@ export interface PageVersionPreview {
 export interface PageVersionPinResponse {
   message?: string
   version: PageVersionRecord
+}
+
+// API Response Types
+export interface SessionResponse {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  current_version: number | null
+  product_type: string | null
+  complexity: string | null
+  skill_id: string | null
+  doc_tier: string | null
+  style_reference_mode: string | null
+  model_classifier: string | null
+  model_writer: string | null
+  model_expander: string | null
+  model_validator: string | null
+  model_style_refiner: string | null
+  build_status: string | null
+  message_count: number
+  version_count: number
+  preview_html?: string | null
+  preview_url?: string
+}
+
+export interface SessionMetadataResponse {
+  session_id: string
+  graph_state: Record<string, unknown> | null
+  build_status: 'pending' | 'building' | 'success' | 'failed'
+  build_artifacts: Record<string, unknown> | null
+  aesthetic_scores: Record<string, unknown> | null
+  updated_at: string | null
+}
+
+export interface SessionRevertResponse {
+  success: boolean
+  current_version: number
+  preview_url: string
+  preview_html: string
+}
+
+export interface SettingsResponse {
+  api_key: string
+  model: string | null
+  temperature: number | null
+  max_tokens: number | null
+  output_dir: string | null
+  auto_save: boolean | null
+  available_models: ModelOption[]
+}
+
+export interface ProductDocResponse {
+  id: string
+  session_id: string
+  content: string
+  structured: Record<string, unknown>
+  version: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PageResponse {
+  id: string
+  session_id: string
+  title: string
+  slug: string
+  description: string
+  order_index: number
+  current_version_id: number | null
+  created_at: string
+  updated_at: string
 }
 
 // File Tree Types (v04 Code Tab support)

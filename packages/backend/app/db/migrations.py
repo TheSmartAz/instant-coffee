@@ -9,6 +9,7 @@ from .models import (
     PageVersion,
     ProductDoc,
     ProductDocHistory,
+    ProjectMemory,
     ProjectSnapshot,
     ProjectSnapshotDoc,
     ProjectSnapshotPage,
@@ -16,6 +17,7 @@ from .models import (
     SessionEvent,
     SessionEventSequence,
     SessionRun,
+    Thread,
     VersionSource,
 )
 from ..services.page_version import PageVersionService
@@ -33,6 +35,8 @@ def init_db(database: Database | None = None) -> None:
     migrate_v07_graph_state(db_instance)
     migrate_v08_run_model(db_instance)
     migrate_v08_event_run_columns(db_instance)
+    migrate_v09_threads(db_instance)
+    migrate_v10_project_memory(db_instance)
 
 
 def migrate_v04_product_doc_pages(database: Database | None = None) -> None:
@@ -116,10 +120,6 @@ def migrate_v06_indexes(database: Database | None = None) -> None:
     _ensure_index(engine, "messages", "idx_messages_session_ts", ["session_id", "timestamp"])
     _ensure_index(engine, "token_usage", "idx_token_usage_session_id", ["session_id"])
     _ensure_index(engine, "token_usage", "idx_token_usage_session_ts", ["session_id", "timestamp"])
-    _ensure_index(engine, "plans", "idx_plans_session_id", ["session_id"])
-    _ensure_index(engine, "plans", "idx_plans_status", ["status"])
-    _ensure_index(engine, "tasks", "idx_tasks_plan_id", ["plan_id"])
-    _ensure_index(engine, "tasks", "idx_tasks_status", ["status"])
     _ensure_index(engine, "page_versions", "idx_page_versions_page_created_at", ["page_id", "created_at"])
 
 
@@ -551,6 +551,41 @@ def downgrade_v04_product_doc_pages(database: Database | None = None) -> None:
     )
 
 
+def migrate_v09_threads(database: Database | None = None) -> None:
+    """Add threads table and thread_id column to messages."""
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+
+    # Create threads table if missing (create_all handles this, but be explicit)
+    if "threads" not in tables:
+        Base.metadata.create_all(bind=engine, tables=[Thread.__table__])
+
+    # Add thread_id column to messages if missing
+    if "messages" in tables:
+        columns = {col["name"] for col in inspector.get_columns("messages")}
+        if "thread_id" not in columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE messages ADD COLUMN thread_id VARCHAR REFERENCES threads(id) ON DELETE CASCADE")
+                )
+            _ensure_index(engine, "messages", "idx_messages_thread_id", ["thread_id"])
+            _ensure_index(engine, "messages", "idx_messages_thread_ts", ["thread_id", "timestamp"])
+
+
+def migrate_v10_project_memory(database: Database | None = None) -> None:
+    """Create project_memory table for session resume / project memory."""
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    inspector = inspect(engine)
+    if "project_memory" not in inspector.get_table_names():
+        Base.metadata.create_all(
+            bind=engine,
+            tables=[ProjectMemory.__table__],
+        )
+
+
 __all__ = [
     "init_db",
     "migrate_v04_product_doc_pages",
@@ -560,5 +595,7 @@ __all__ = [
     "migrate_v07_graph_state",
     "migrate_v08_run_model",
     "migrate_v08_event_run_columns",
+    "migrate_v09_threads",
+    "migrate_v10_project_memory",
     "downgrade_v04_product_doc_pages",
 ]

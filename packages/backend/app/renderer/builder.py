@@ -13,6 +13,8 @@ from typing import Any
 
 from ..services.mobile_shell import ensure_mobile_shell
 from .file_generator import SchemaFileGenerator
+from .html_to_react import ConvertedFile, HtmlToReactConverter, PageHtml
+from .tsx_writer import TsxFileWriter
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,6 @@ class ReactSSGBuilder:
         self.work_dir = (self.session_dir / "build").resolve()
         self.dist_dir = (self.session_dir / "dist").resolve()
         self.log_path = self.session_dir / "build.log"
-        self._task_id = f"build:{session_id}"
 
     async def build(
         self,
@@ -103,6 +104,159 @@ class ReactSSGBuilder:
             raise
         self._emit_done(result)
         return result
+
+    # ------------------------------------------------------------------
+    # HTML-to-React build path
+    # ------------------------------------------------------------------
+
+    async def build_from_html(
+        self,
+        pages: list[PageHtml],
+        product_doc_content: str | None = None,
+    ) -> dict[str, Any]:
+        """Build from HTML pages via AI conversion to React + Tailwind."""
+        self._emit_start()
+        try:
+            result = await self._build_from_html_async(pages, product_doc_content)
+        except Exception as exc:
+            self._emit_failed(exc)
+            raise
+        self._emit_done(result)
+        return result
+
+    async def _build_from_html_async(
+        self,
+        pages: list[PageHtml],
+        product_doc_content: str | None = None,
+    ) -> dict[str, Any]:
+        if not self.TEMPLATE_PATH.exists():
+            raise BuildError("React SSG template not found", stage="template")
+
+        self._reset_log()
+        self._log("Build started (HTML-to-React path)")
+        self._check_cancelled("init")
+
+        # 1. Copy template
+        self._emit_progress("Copying template", 10)
+        await asyncio.to_thread(self._copy_template)
+
+        # 2. AI conversion
+        self._emit_progress("Converting HTML to React", 15)
+        self._check_cancelled("ai_convert")
+        self._log("Calling AI to convert HTML pages to React components")
+        converter = HtmlToReactConverter()
+        converted_files = await converter.convert(pages, product_doc_content)
+        self._log(f"AI returned {len(converted_files)} files")
+        self._emit_progress("AI conversion complete", 40)
+
+        # 3. Write files
+        self._emit_progress("Writing React files", 45)
+        self._check_cancelled("write_files")
+        page_dicts = [{"slug": p.slug, "title": p.title} for p in pages]
+        await asyncio.to_thread(
+            self._write_converted_files, converted_files, page_dicts
+        )
+        self._emit_progress("Files written", 50)
+
+        # 4. npm install
+        self._emit_progress("Installing dependencies", 55)
+        await asyncio.to_thread(
+            self._run_command,
+            ["npm", "ci"] if (self.work_dir / "package-lock.json").exists() else ["npm", "install"],
+            stage="npm_install",
+        )
+        self._emit_progress("Dependencies installed", 65)
+
+        # 5. npm build (with retry on failure)
+        self._emit_progress("Building project", 70)
+        build_result = await self._npm_build_with_retry(
+            pages, converted_files, product_doc_content, page_dicts
+        )
+        if build_result is not None:
+            converted_files = build_result
+
+        build_dist = self.work_dir / "dist"
+        if not build_dist.exists():
+            raise BuildError("Build output not found", stage="npm_build")
+        self._emit_progress("Build succeeded", 80)
+
+        # 6. Publish dist
+        self._emit_progress("Publishing build artifacts", 90)
+        await asyncio.to_thread(self._publish_dist, build_dist)
+
+        # 7. Mobile shell
+        self._emit_progress("Applying mobile shell", 95)
+        self._check_cancelled("mobile_shell")
+        await asyncio.to_thread(self._apply_mobile_shell)
+
+        # 8. Complete
+        html_pages = sorted(
+            str(p.relative_to(self.dist_dir))
+            for p in self.dist_dir.rglob("*.html")
+            if p.is_file()
+        )
+        self._emit_progress("Build complete", 100)
+
+        return BuildResult(
+            status="success",
+            dist_path=str(self.dist_dir),
+            pages=html_pages,
+        ).__dict__
+
+    def _copy_template(self) -> None:
+        if self.work_dir.exists():
+            shutil.rmtree(self.work_dir)
+        shutil.copytree(self.TEMPLATE_PATH, self.work_dir)
+
+    def _write_converted_files(
+        self,
+        files: list[ConvertedFile],
+        page_dicts: list[dict],
+    ) -> None:
+        writer = TsxFileWriter(self.work_dir)
+        writer.write_files(files)
+        writer.write_entry_points(page_dicts)
+        self._log(f"Wrote {len(files)} converted files + entry points")
+
+    def _publish_dist(self, build_dist: Path) -> None:
+        if self.dist_dir.exists():
+            shutil.rmtree(self.dist_dir)
+        shutil.move(str(build_dist), str(self.dist_dir))
+
+    async def _npm_build_with_retry(
+        self,
+        pages: list[PageHtml],
+        converted_files: list[ConvertedFile],
+        product_doc_content: str | None,
+        page_dicts: list[dict],
+        max_retries: int = 2,
+    ) -> list[ConvertedFile] | None:
+        """Run npm build; on failure, ask AI to fix and retry."""
+        for attempt in range(max_retries + 1):
+            try:
+                await asyncio.to_thread(
+                    self._run_command, ["npm", "run", "build"], stage="npm_build"
+                )
+                return None  # success, no new files
+            except BuildError as exc:
+                if attempt >= max_retries:
+                    raise
+                self._log(
+                    f"Build failed (attempt {attempt + 1}), "
+                    f"asking AI to fix errors"
+                )
+                self._emit_progress(
+                    f"Fixing build errors (retry {attempt + 1})", 75
+                )
+                error_text = exc.stderr or exc.stdout or str(exc)
+                converter = HtmlToReactConverter()
+                converted_files = await converter.retry_with_errors(
+                    pages, converted_files, error_text, product_doc_content
+                )
+                await asyncio.to_thread(
+                    self._write_converted_files, converted_files, page_dicts
+                )
+        return converted_files
 
     def _build_sync(
         self,
@@ -240,11 +394,8 @@ class ReactSSGBuilder:
         if not self.event_emitter:
             return
         try:
-            from ..events.models import TaskStartedEvent, build_start_event
+            from ..events.models import build_start_event
 
-            self.event_emitter.emit(
-                TaskStartedEvent(task_id=self._task_id, task_title="React SSG Build")
-            )
             self.event_emitter.emit(build_start_event())
         except Exception:
             logger.debug("Failed to emit build start event")
@@ -253,11 +404,8 @@ class ReactSSGBuilder:
         if not self.event_emitter:
             return
         try:
-            from ..events.models import TaskProgressEvent, build_progress_event
+            from ..events.models import build_progress_event
 
-            self.event_emitter.emit(
-                TaskProgressEvent(task_id=self._task_id, progress=progress, message=message)
-            )
             self.event_emitter.emit(
                 build_progress_event(
                     step=message,
@@ -272,9 +420,8 @@ class ReactSSGBuilder:
         if not self.event_emitter:
             return
         try:
-            from ..events.models import TaskDoneEvent, build_complete_event
+            from ..events.models import build_complete_event
 
-            self.event_emitter.emit(TaskDoneEvent(task_id=self._task_id, result=result))
             self.event_emitter.emit(build_complete_event(payload=result))
         except Exception:
             logger.debug("Failed to emit build done event")
@@ -283,23 +430,8 @@ class ReactSSGBuilder:
         if not self.event_emitter:
             return
         try:
-            from ..events.models import TaskFailedEvent, build_failed_event
+            from ..events.models import build_failed_event
 
-            error_type = "dependency" if isinstance(exc, BuildError) and exc.stage in {
-                "npm_install",
-                "npm_build",
-            } else "logic"
-            self.event_emitter.emit(
-                TaskFailedEvent(
-                    task_id=self._task_id,
-                    error_type=error_type,
-                    error_message=str(exc),
-                    retry_count=0,
-                    max_retries=0,
-                    available_actions=["retry"],
-                    blocked_tasks=[],
-                )
-            )
             self.event_emitter.emit(
                 build_failed_event(
                     error=str(exc),

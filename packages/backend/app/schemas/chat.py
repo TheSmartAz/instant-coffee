@@ -1,30 +1,32 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .style_reference import StyleTokens
 
 class StyleReferenceInput(BaseModel):
     mode: Literal["full_mimic", "style_only"] = "full_mimic"
     images: List[str] = Field(default_factory=list)
     scope_pages: List[str] = Field(default_factory=list)
-    tokens: Optional[StyleTokens] = None
+    tokens: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(extra="forbid")
 
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
+    thread_id: Optional[str] = None
     message: str = Field(min_length=1)
     interview: Optional[bool] = None
     generate_now: bool = False
     images: List[str] = Field(default_factory=list)
+    image_intent: Optional[Literal["asset", "style_reference", "layout_reference", "screenshot"]] = None
     target_pages: List[str] = Field(default_factory=list)
     style_reference: Optional[StyleReferenceInput] = None
     style_reference_mode: Optional[Literal["full_mimic", "style_only"]] = None
     resume: Optional[dict] = None
+    mentioned_files: List[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_image_count(self) -> "ChatRequest":

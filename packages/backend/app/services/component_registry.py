@@ -6,8 +6,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .filesystem import FilesystemService
-
 
 def slugify_component_id(value: str) -> str:
     text = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "")).strip("-").lower()
@@ -18,8 +16,9 @@ def slugify_component_id(value: str) -> str:
 
 class ComponentRegistryService:
     def __init__(self, output_dir: str, session_id: str) -> None:
-        self._fs = FilesystemService(output_dir)
-        self._session_dir = self._fs.create_session_directory(session_id)
+        base = Path(output_dir).expanduser().resolve()
+        self._session_dir = base / session_id
+        self._session_dir.mkdir(parents=True, exist_ok=True)
         self._components_dir = self._session_dir / "components"
 
     @property

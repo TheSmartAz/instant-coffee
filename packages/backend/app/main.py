@@ -8,25 +8,26 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
+from .middleware.rate_limit import RateLimitMiddleware
+
 from .api import (
+    background_tasks_router,
     build_router,
     chat_router,
     data_router,
     events_router,
     files_router,
     migrations_router,
+    page_diff_router,
     pages_router,
-    plan_router,
     preview_router,
     product_doc_router,
     runs_router,
-    session_abort_router,
     sessions_router,
     assets_router,
     schemas_router,
     settings_router,
     snapshots_router,
-    tasks_router,
 )
 from .config import get_settings
 from .db.data_migration_v04 import migrate_existing_sessions
@@ -83,6 +84,12 @@ def create_app() -> FastAPI:
         allow_headers=allow_headers,
     )
 
+    app.add_middleware(
+        RateLimitMiddleware,
+        default_rpm=120,
+        expensive_rpm=30,
+    )
+
     app.include_router(sessions_router)
     app.include_router(assets_router)
     app.include_router(build_router)
@@ -90,10 +97,9 @@ def create_app() -> FastAPI:
     app.include_router(data_router)
     app.include_router(events_router)
     app.include_router(settings_router)
-    app.include_router(tasks_router)
-    app.include_router(plan_router)
+    app.include_router(background_tasks_router)
+    app.include_router(page_diff_router)
     app.include_router(preview_router)
-    app.include_router(session_abort_router)
     app.include_router(runs_router)
     app.include_router(migrations_router)
     app.include_router(pages_router)
@@ -108,7 +114,42 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok"}
+        checks: dict[str, str] = {}
+        overall = "ok"
+
+        # DB check
+        try:
+            database = get_database()
+            with database.session() as session:
+                session.execute(__import__("sqlalchemy").text("SELECT 1"))
+            checks["database"] = "ok"
+        except Exception as exc:
+            checks["database"] = f"error: {exc}"
+            overall = "degraded"
+
+        # API key check
+        settings = get_settings()
+        has_key = bool(
+            settings.anthropic_api_key
+            or settings.openai_api_key
+            or settings.default_key
+        )
+        checks["api_key"] = "ok" if has_key else "missing"
+        if not has_key:
+            overall = "degraded"
+
+        # Disk check
+        try:
+            import shutil
+            usage = shutil.disk_usage(assets_dir)
+            free_gb = usage.free / (1024 ** 3)
+            checks["disk_free_gb"] = f"{free_gb:.1f}"
+            if free_gb < 1.0:
+                overall = "degraded"
+        except Exception:
+            checks["disk_free_gb"] = "unknown"
+
+        return {"status": overall, "checks": checks}
 
     return app
 

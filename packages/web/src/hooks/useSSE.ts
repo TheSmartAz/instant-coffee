@@ -109,6 +109,7 @@ export interface UseSSEOptions {
   onDone?: () => void
   autoReconnect?: boolean
   reconnectDelay?: number
+  maxReconnectAttempts?: number
   autoConnect?: boolean
   loadHistory?: boolean
   historyLimit?: number
@@ -136,6 +137,7 @@ export function useSSE({
   onDone,
   autoReconnect = true,
   reconnectDelay = 3000,
+  maxReconnectAttempts = 10,
   autoConnect = true,
   loadHistory = true,
   historyLimit = 1000,
@@ -152,6 +154,7 @@ export function useSSE({
 
   const eventSourceRef = React.useRef<EventSource | null>(null)
   const reconnectTimeoutRef = React.useRef<number | null>(null)
+  const reconnectAttemptRef = React.useRef(0)
   const seenEventKeysRef = React.useRef<Set<string>>(new Set())
   const pendingEventsRef = React.useRef<ExecutionEvent[]>([])
   const flushHandleRef = React.useRef<number | null>(null)
@@ -252,6 +255,7 @@ export function useSSE({
     eventSourceRef.current = eventSource
 
     eventSource.onopen = () => {
+      reconnectAttemptRef.current = 0
       setIsConnected(true)
       setIsConnecting(false)
       setConnectionState('open')
@@ -259,6 +263,7 @@ export function useSSE({
 
     eventSource.onmessage = (event) => {
       if (event.data === '[DONE]') {
+        clearReconnect()
         setIsConnected(false)
         setConnectionState('closed')
         eventSource.close()
@@ -288,6 +293,10 @@ export function useSSE({
             : new Error('Failed to parse SSE event')
         setError(err)
         onErrorRef.current?.(err)
+        eventSource.close()
+        eventSourceRef.current = null
+        setIsConnected(false)
+        setConnectionState('error')
       }
     }
 
@@ -300,13 +309,17 @@ export function useSSE({
       onErrorRef.current?.(err)
       eventSource.close()
 
-      if (autoReconnect) {
+      if (autoReconnect && reconnectAttemptRef.current < maxReconnectAttempts) {
+        const attempt = reconnectAttemptRef.current
+        reconnectAttemptRef.current = attempt + 1
+        const delay = Math.min(reconnectDelay * Math.pow(2, attempt), 30000)
+        clearReconnect()
         reconnectTimeoutRef.current = window.setTimeout(() => {
           connect()
-        }, reconnectDelay)
+        }, delay)
       }
     }
-  }, [autoReconnect, clearReconnect, reconnectDelay, url, scheduleFlush])
+  }, [autoReconnect, clearReconnect, maxReconnectAttempts, reconnectDelay, url, scheduleFlush])
 
   const clearEvents = React.useCallback(() => {
     cancelFlush()
@@ -392,9 +405,10 @@ export function useSSE({
     if (!autoConnect || !url) return
     connect()
     return () => {
+      cancelFlush()
       disconnect()
     }
-  }, [autoConnect, connect, disconnect, url])
+  }, [autoConnect, cancelFlush, connect, disconnect, url])
 
   React.useEffect(() => {
     cancelFlush()

@@ -18,9 +18,10 @@ from ..db.models import Session as SessionModel, SessionEvent
 from ..db.utils import get_db
 from ..events.emitter import EventEmitter
 from ..renderer.builder import BuildError, ReactSSGBuilder
+from ..renderer.html_to_react import PageHtml
 from ..schemas.session_metadata import BuildInfo, BuildStatus, SessionMetadata
 from ..config import get_settings
-from ..graph.nodes.generate import generate_node
+from ..services.build_payload import generate_node
 from ..services.event_store import EventStoreService
 from ..services.component_registry import ComponentRegistryService
 from ..services.page import PageService
@@ -205,6 +206,33 @@ def _format_build_error(exc: Exception) -> str:
     return str(exc)
 
 
+def _fetch_pages_html(db: DbSession, session_id: str) -> list[PageHtml]:
+    """Fetch current HTML for all pages in a session."""
+    pages = PageService(db).list_by_session(session_id)
+    result: list[PageHtml] = []
+    for page in pages:
+        html: str | None = None
+        if page.current_version and hasattr(page.current_version, "html"):
+            html = page.current_version.html
+        if not html and page.versions:
+            latest = sorted(page.versions, key=lambda v: v.version, reverse=True)
+            for v in latest:
+                if v.html:
+                    html = v.html
+                    break
+        if html:
+            result.append(PageHtml(slug=page.slug, title=page.title, html=html))
+    return result
+
+
+def _fetch_product_doc(db: DbSession, session_id: str) -> str | None:
+    """Fetch product doc content for a session."""
+    doc = ProductDocService(db).get_by_session_id(session_id)
+    if doc and doc.content:
+        return doc.content
+    return None
+
+
 def _format_timestamp(value: Optional[datetime]) -> str:
     if value is None:
         return ""
@@ -240,12 +268,22 @@ async def _run_build_task(
         emitter = EventEmitter(session_id=session_id, event_store=EventStoreService(db))
         builder = ReactSSGBuilder(session_id, event_emitter=emitter, cancel_event=cancel_event)
         try:
-            result = await builder.build(
-                page_schemas=payload.get("page_schemas") or [],
-                component_registry=payload.get("component_registry") or {},
-                style_tokens=payload.get("style_tokens") or {},
-                assets=payload.get("assets"),
-            )
+            # Try HTML-to-React path first
+            pages_html = _fetch_pages_html(db, session_id)
+            if pages_html:
+                product_doc = _fetch_product_doc(db, session_id)
+                result = await builder.build_from_html(
+                    pages=pages_html,
+                    product_doc_content=product_doc,
+                )
+            else:
+                # Fallback: schema-based build
+                result = await builder.build(
+                    page_schemas=payload.get("page_schemas") or [],
+                    component_registry=payload.get("component_registry") or {},
+                    style_tokens=payload.get("style_tokens") or {},
+                    assets=payload.get("assets"),
+                )
             completed_at = datetime.now(timezone.utc)
             info = BuildInfo(
                 status=BuildStatus.SUCCESS,
@@ -314,9 +352,12 @@ async def trigger_build(
     if current_info.status == BuildStatus.BUILDING:
         return current_info
 
+    # Check if HTML pages are available (HTML-to-React path)
+    has_html_pages = bool(_fetch_pages_html(db, session_id))
+
     payload = _extract_build_payload(metadata.graph_state)
     page_schemas = payload.get("page_schemas")
-    if not isinstance(page_schemas, list) or not page_schemas:
+    if not has_html_pages and (not isinstance(page_schemas, list) or not page_schemas):
         payload = await _fallback_build_payload(
             db=db,
             session_id=session_id,
@@ -335,7 +376,8 @@ async def trigger_build(
             )
             store.update_metadata(session_id, {"graph_state": merged_state})
         else:
-            raise HTTPException(status_code=400, detail="No page schemas available for build")
+            if not has_html_pages:
+                raise HTTPException(status_code=400, detail="No page schemas or HTML pages available for build")
 
     started_at = datetime.now(timezone.utc)
     building_info = BuildInfo(status=BuildStatus.BUILDING, pages=[], started_at=started_at)

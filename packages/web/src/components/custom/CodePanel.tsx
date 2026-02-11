@@ -76,6 +76,7 @@ export function CodePanel({ sessionId, active = true }: CodePanelProps) {
             className="h-6 w-6"
             onClick={handleRefresh}
             title="Refresh"
+            aria-label="Refresh files"
           >
             <RefreshCw className="h-3 w-3" />
           </Button>

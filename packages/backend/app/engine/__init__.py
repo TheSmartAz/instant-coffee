@@ -1,7 +1,6 @@
 """Engine integration — bridges the agent Engine into the web backend.
 
 Imports are lazy to avoid hard dependency on the ``ic`` agent package.
-The engine feature is gated behind ``USE_ENGINE=true`` in settings.
 """
 
 from .registry import engine_registry

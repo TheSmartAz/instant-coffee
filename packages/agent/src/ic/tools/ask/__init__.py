@@ -20,8 +20,8 @@ class AskUser(BaseTool):
         "requirements. Each question includes options the user can pick "
         "from, plus free-text input. Use this when the user's request "
         "lacks detail needed to build a good product doc. "
-        "2-5 questions per call. The user can skip questions or type "
-        "'/go' to proceed with what's been collected."
+        "2-5 questions per call is recommended. The user can skip questions "
+        "or provide free-form answers. Supports batch questioning for efficiency."
     )
     parameters = [
         ToolParam(
@@ -30,8 +30,15 @@ class AskUser(BaseTool):
             description=(
                 "Array of question objects. Each has: "
                 "'question' (string), 'options' (array of {label, description}), "
-                "and optional 'allow_multiple' (boolean, default false)."
+                "'allow_multiple' (boolean, default false), and "
+                "'type' (optional: 'single', 'multi', or 'text', defaults to 'single')."
             ),
+        ),
+        ToolParam(
+            name="batch_id",
+            type="string",
+            description="Optional batch ID for grouping related questions",
+            required=False,
         ),
     ]
 

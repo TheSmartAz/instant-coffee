@@ -1,135 +1,61 @@
 import * as React from 'react'
 import { ChatInput, type ChatInputProps } from './ChatInput'
 import { ChatMessage } from './ChatMessage'
+import { TokenDisplay } from '@/components/TokenDisplay'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useVirtualList } from '@/hooks/useVirtualList'
 import type {
-  ChatAsset,
-  ChatAttachment,
-  ChatStyleReference,
   InterviewActionPayload,
   Message,
   Page,
+  SessionTokenSummary,
 } from '@/types'
-
-const ASSET_REFERENCE_RE = /asset:[A-Za-z0-9_-]+/g
-
-const extractAssetIds = (content?: string) => {
-  if (!content) return []
-  const matches = content.match(ASSET_REFERENCE_RE)
-  if (!matches || matches.length === 0) return []
-  return Array.from(new Set(matches))
-}
 
 export interface ChatPanelProps {
   messages: Message[]
-  assets?: ChatAsset[]
   onSendMessage: (
     content: string,
     options?: {
       triggerInterview?: boolean
       generateNow?: boolean
-      attachments?: ChatAttachment[]
       targetPages?: string[]
-      styleReference?: ChatStyleReference
+      mentionedFiles?: string[]
     }
   ) => void
   onAssetUpload?: ChatInputProps['onAssetUpload']
-  onAssetRemove?: (assetId: string) => void
   onInterviewAction?: (payload: InterviewActionPayload) => void
   onTabChange?: (tab: 'preview' | 'code' | 'product-doc' | 'data') => void
-  onDisambiguationSelect?: (option: { id: string; slug: string; title: string }) => void
   isLoading?: boolean
-  title?: string
-  status?: string
   errorMessage?: string | null
-  showHeader?: boolean
-  showBorder?: boolean
   className?: string
   pages?: Page[]
+  tokenUsage?: SessionTokenSummary
 }
 
 export function ChatPanel({
   messages,
-  assets,
   onSendMessage,
   onAssetUpload,
-  onAssetRemove,
   onInterviewAction,
   onTabChange,
-  onDisambiguationSelect,
   isLoading = false,
-  title = 'Conversation',
-  status,
   errorMessage,
-  showHeader = true,
-  showBorder = true,
   className,
   pages,
+  tokenUsage,
 }: ChatPanelProps) {
   const bottomRef = React.useRef<HTMLDivElement | null>(null)
   const visibleMessages = React.useMemo(
     () => messages.filter((message) => !message.hidden),
     [messages]
   )
-  const assetLookup = React.useMemo(() => {
-    const map = new Map<string, ChatAsset>()
-    if (assets) {
-      assets.forEach((asset) => {
-        map.set(asset.id, asset)
-      })
-    }
-    return map
-  }, [assets])
-  const assetsProvided = assets !== undefined
-  const hasAssetMentions = React.useMemo(
-    () =>
-      visibleMessages.some(
-        (message) =>
-          (message.assets && message.assets.length > 0) ||
-          extractAssetIds(message.content).length > 0
-      ),
-    [visibleMessages]
-  )
-  const assetMessage = React.useMemo(() => {
-    if (!assets || assets.length === 0) return null
-    if (hasAssetMentions) return null
-    return {
-      id: 'asset-summary',
-      role: 'user',
-      content: 'Uploaded assets',
-      assets,
-    } as Message
-  }, [assets, hasAssetMentions])
-  const displayMessages = React.useMemo(
-    () => (assetMessage ? [assetMessage, ...visibleMessages] : visibleMessages),
-    [assetMessage, visibleMessages]
-  )
-  const showEmptyState = !isLoading && displayMessages.length === 0
+
+  const showEmptyState = !isLoading && visibleMessages.length === 0
   const rootRef = React.useRef<HTMLDivElement | null>(null)
   const [scrollElement, setScrollElement] = React.useState<HTMLDivElement | null>(null)
   const [autoScroll, setAutoScroll] = React.useState(true)
-  const resolveMessageAssets = React.useCallback(
-    (message: Message) => {
-      const collected = new Map<string, ChatAsset>()
-      if (message.assets) {
-        message.assets.forEach((asset) => {
-          if (!assetsProvided || assetLookup.has(asset.id)) {
-            collected.set(asset.id, assetLookup.get(asset.id) ?? asset)
-          }
-        })
-      }
-      const referencedIds = extractAssetIds(message.content)
-      referencedIds.forEach((id) => {
-        const asset = assetLookup.get(id)
-        if (asset) collected.set(asset.id, asset)
-      })
-      return Array.from(collected.values())
-    },
-    [assetLookup, assetsProvided]
-  )
 
   React.useEffect(() => {
     const root = rootRef.current
@@ -151,7 +77,7 @@ export function ChatPanel({
     viewportHeight,
     shouldVirtualize,
   } = useVirtualList({
-    count: displayMessages.length,
+    count: visibleMessages.length,
     estimateSize: 120,
     overscan: 8,
     minItems: 80,
@@ -170,27 +96,12 @@ export function ChatPanel({
   React.useLayoutEffect(() => {
     if (!autoScroll || !scrollElement) return
     scrollElement.scrollTo({ top: effectiveTotalHeight, behavior: 'smooth' })
-  }, [autoScroll, scrollElement, effectiveTotalHeight, displayMessages.length])
+  }, [autoScroll, scrollElement, effectiveTotalHeight, visibleMessages.length])
 
-  const windowedMessages = displayMessages.slice(start, end)
-  const isFirstMessage = displayMessages.length === 0
+  const windowedMessages = visibleMessages.slice(start, end)
 
   return (
-    <div
-      className={cn(
-        'flex h-full flex-col',
-        showBorder ? 'border-r border-border' : '',
-        className
-      )}
-    >
-      {showHeader ? (
-        <div className="flex items-center justify-between px-6 py-4 text-sm font-semibold text-foreground">
-          <span>{title}</span>
-          {status ? (
-            <span className="text-xs font-normal text-muted-foreground">{status}</span>
-          ) : null}
-        </div>
-      ) : null}
+    <div className={cn('flex h-full flex-col', className)}>
       <ScrollArea ref={rootRef} className="flex-1">
         <div
           className="flex flex-col"
@@ -200,9 +111,8 @@ export function ChatPanel({
         >
           {isLoading && messages.length === 0 ? (
             <div className="space-y-4 px-6 py-6">
-              {Array.from({ length: 4 }).map((_, index) => (
+              {Array.from({ length: 3 }).map((_, index) => (
                 <div key={index} className="flex gap-4">
-                  <Skeleton className="h-8 w-8 rounded-full" />
                   <div className="flex-1 space-y-2">
                     <Skeleton className="h-4 w-1/3" />
                     <Skeleton className="h-4 w-full" />
@@ -213,26 +123,44 @@ export function ChatPanel({
             </div>
           ) : null}
           {showEmptyState ? (
-            <div className="px-6 py-10 text-sm text-muted-foreground">
-              Start the conversation by describing what you want to build.
+            <div className="flex flex-col items-center gap-6 px-6 py-16">
+              <div className="text-center">
+                <h3 className="text-base font-medium text-foreground mb-1">
+                  What would you like to build?
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  Describe your idea and I'll create a mobile-optimized page for you.
+                </p>
+              </div>
+              <div className="grid w-full max-w-md gap-2">
+                {[
+                  'A product landing page for a coffee subscription service',
+                  'A personal portfolio with project showcase',
+                  'A restaurant menu with online ordering',
+                  'An event invitation page with RSVP form',
+                ].map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    className="rounded-lg border border-border bg-card px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent hover:text-foreground"
+                    onClick={() => onSendMessage(suggestion)}
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
-          <div className="px-6 py-6">
-            <div style={{ paddingTop, paddingBottom }} className="space-y-6">
-              {windowedMessages.map((message, index) => {
-                const messageAssets = resolveMessageAssets(message)
-                return (
-                  <ChatMessage
-                    key={`${message.id}-${start + index}`}
-                    {...message}
-                    assets={messageAssets.length > 0 ? messageAssets : undefined}
-                    onAssetRemove={onAssetRemove}
-                    onInterviewAction={onInterviewAction}
-                    onTabChange={onTabChange}
-                    onDisambiguationSelect={onDisambiguationSelect}
-                  />
-                )
-              })}
+          <div className="px-4 py-4">
+            <div style={{ paddingTop, paddingBottom }} className="space-y-3">
+              {windowedMessages.map((message, index) => (
+                <ChatMessage
+                  key={`${message.id}-${start + index}`}
+                  {...message}
+                  onInterviewAction={onInterviewAction}
+                  onTabChange={onTabChange}
+                />
+              ))}
             </div>
           </div>
           <div ref={bottomRef} />
@@ -243,13 +171,16 @@ export function ChatPanel({
           {errorMessage}
         </div>
       ) : null}
-      <div className="border-t border-border p-4">
+      {tokenUsage && tokenUsage.total.total_tokens > 0 ? (
+        <div className="border-t border-border px-3 py-2">
+          <TokenDisplay usage={tokenUsage} showDetails={false} />
+        </div>
+      ) : null}
+      <div className="p-4">
         <ChatInput
           onSend={onSendMessage}
           onAssetUpload={onAssetUpload}
           disabled={isLoading}
-          initialInterviewOn={isFirstMessage}
-          showInterviewToggle
           pages={pages}
         />
       </div>

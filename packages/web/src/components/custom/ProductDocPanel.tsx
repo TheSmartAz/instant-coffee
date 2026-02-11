@@ -10,12 +10,15 @@ import { useProductDoc } from '@/hooks/useProductDoc'
 import { useProductDocDiff } from '@/hooks/useProductDocDiff'
 import { MarkdownDiffViewer } from '@/components/custom/MarkdownDiffViewer'
 import { VersionDiffSelector } from '@/components/custom/VersionDiffSelector'
-import type { ProductDocHistory, ProductDocStatus } from '@/types'
+import type { ProductDoc, ProductDocHistory, ProductDocStatus } from '@/types'
 
 export interface ProductDocPanelProps {
   sessionId: string
   onBuild?: () => void
   buildDisabled?: boolean
+  productDoc?: ProductDoc | null
+  isLoading?: boolean
+  error?: string | null
 }
 
 const statusLabels: Record<ProductDocStatus, string> = {
@@ -74,8 +77,21 @@ function ProductDocEmpty() {
   )
 }
 
-export function ProductDocPanel({ sessionId, onBuild, buildDisabled = false }: ProductDocPanelProps) {
-  const { productDoc, isLoading, error } = useProductDoc(sessionId)
+export function ProductDocPanel({
+  sessionId,
+  onBuild,
+  buildDisabled = false,
+  productDoc: productDocProp,
+  isLoading: isLoadingProp,
+  error: errorProp,
+}: ProductDocPanelProps) {
+  // Use props from parent (avoids duplicate API call) with hook fallback
+  const hook = useProductDoc(sessionId, {
+    enabled: productDocProp === undefined,
+  })
+  const productDoc = productDocProp !== undefined ? productDocProp : hook.productDoc
+  const isLoading = isLoadingProp !== undefined ? isLoadingProp : hook.isLoading
+  const error = errorProp !== undefined ? errorProp : hook.error
   const [diffOpen, setDiffOpen] = React.useState(false)
   const [history, setHistory] = React.useState<ProductDocHistory[]>([])
   const [historyLoading, setHistoryLoading] = React.useState(false)

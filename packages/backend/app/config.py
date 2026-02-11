@@ -209,37 +209,13 @@ class Settings:
     temperature: float = field(default_factory=lambda: _get_float("TEMPERATURE", 0.7))
     max_tokens: int = field(default_factory=lambda: _get_int("MAX_TOKENS", 8000))
     auto_save: bool = field(default_factory=lambda: _get_bool("AUTO_SAVE", True))
-    use_langgraph: bool = field(
-        default_factory=lambda: _get_bool("USE_LANGGRAPH", _get_bool("FF_USE_LANGGRAPH", False))
-    )
-    use_engine: bool = field(
-        default_factory=lambda: _get_bool("USE_ENGINE", True)
-    )
-    langgraph_checkpointer: str = field(
-        default_factory=lambda: _get_env("LANGGRAPH_CHECKPOINTER", "sqlite") or "sqlite"
-    )
-    langgraph_checkpoint_url: str | None = field(default_factory=lambda: _get_env("LANGGRAPH_CHECKPOINT_URL"))
+    skills_dir: str | None = field(default_factory=lambda: _get_env("SKILLS_DIR"))
     mcp_enabled: bool = field(default_factory=lambda: _get_bool("ENABLE_MCP", _get_bool("USE_MCP", False)))
     mcp_servers: dict[str, Any] = field(default_factory=lambda: _get_json("MCP_SERVERS", {}))
     mcp_server_url: str | None = field(default_factory=lambda: _get_env("MCP_SERVER_URL"))
     style_extractor_enabled: bool = field(
         default_factory=lambda: _get_bool("ENABLE_STYLE_EXTRACTOR", True)
     )
-
-    aesthetic_scoring_enabled: bool = field(
-        default_factory=lambda: _get_bool("ENABLE_AESTHETIC_SCORING", False)
-    )
-    aesthetic_thresholds: dict[str, Any] = field(
-        default_factory=lambda: _get_json("AESTHETIC_THRESHOLDS", {})
-    )
-
-    verify_gate_enabled: bool = field(default_factory=lambda: _get_bool("VERIFY_GATE_ENABLED", True))
-    verify_gate_auto_fix_enabled: bool = field(
-        default_factory=lambda: _get_bool("VERIFY_GATE_AUTO_FIX_ENABLED", True)
-    )
-    verify_gate_max_retry: int = field(default_factory=lambda: _get_int("VERIFY_GATE_MAX_RETRY", 1))
-
-    max_concurrent_tasks: int = field(default_factory=lambda: _get_int("MAX_CONCURRENCY", 3))
 
     migrate_v04_on_startup: bool = field(default_factory=lambda: _get_bool("MIGRATE_V04_ON_STARTUP", False))
 

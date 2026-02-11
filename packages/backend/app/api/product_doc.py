@@ -118,7 +118,17 @@ def get_product_doc(
     if record is None:
         disk_doc = _load_disk_product_doc(session_id)
         if disk_doc is None:
-            raise HTTPException(status_code=404, detail="ProductDoc not found")
+            now = datetime.now(timezone.utc)
+            return ProductDocResponse(
+                id=f"placeholder:{session_id}",
+                session_id=session_id,
+                content="",
+                structured={},
+                version=0,
+                status=_status_value(ProductDocStatus.DRAFT),
+                created_at=now,
+                updated_at=now,
+            )
         content, sections, timestamp = disk_doc
         return ProductDocResponse(
             id=f"disk:{session_id}",
@@ -156,13 +166,11 @@ def get_product_doc_history(
     service = ProductDocService(db)
     doc = service.get_by_session_id(session_id)
     if doc is None:
-        if _load_disk_product_doc(session_id) is not None:
-            return ProductDocHistoryListResponse(
-                history=[],
-                total=0,
-                pinned_count=0,
-            )
-        raise HTTPException(status_code=404, detail="ProductDoc not found")
+        return ProductDocHistoryListResponse(
+            history=[],
+            total=0,
+            pinned_count=0,
+        )
     total_query = (
         db.query(func.count(ProductDocHistory.id))
         .filter(ProductDocHistory.product_doc_id == doc.id)

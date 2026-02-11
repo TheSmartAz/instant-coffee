@@ -18,7 +18,10 @@ export type PendingMessageRecord = {
 
 const STORAGE_PREFIX = 'instant-coffee:pending-message:'
 
-const getKey = (sessionId: string) => `${STORAGE_PREFIX}${sessionId}`
+const getKey = (sessionId: string, threadId?: string) =>
+  threadId
+    ? `${STORAGE_PREFIX}${sessionId}:${threadId}`
+    : `${STORAGE_PREFIX}${sessionId}`
 
 export const toStoredChatStep = (step: ChatStep): StoredChatStep => ({
   ...step,
@@ -40,11 +43,11 @@ export const fromStoredMessage = (stored: StoredMessage): Message => ({
   })),
 })
 
-export const loadPendingMessage = (sessionId?: string): PendingMessageRecord | null => {
+export const loadPendingMessage = (sessionId?: string, threadId?: string): PendingMessageRecord | null => {
   if (!sessionId) return null
   if (typeof window === 'undefined') return null
   try {
-    const raw = window.localStorage.getItem(getKey(sessionId))
+    const raw = window.localStorage.getItem(getKey(sessionId, threadId))
     if (!raw) return null
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object') return null
@@ -54,21 +57,21 @@ export const loadPendingMessage = (sessionId?: string): PendingMessageRecord | n
   }
 }
 
-export const savePendingMessage = (sessionId: string, record: PendingMessageRecord) => {
+export const savePendingMessage = (sessionId: string, record: PendingMessageRecord, threadId?: string) => {
   if (!sessionId) return
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(getKey(sessionId), JSON.stringify(record))
+    window.localStorage.setItem(getKey(sessionId, threadId), JSON.stringify(record))
   } catch {
     // ignore storage failures
   }
 }
 
-export const clearPendingMessage = (sessionId?: string) => {
+export const clearPendingMessage = (sessionId?: string, threadId?: string) => {
   if (!sessionId) return
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.removeItem(getKey(sessionId))
+    window.localStorage.removeItem(getKey(sessionId, threadId))
   } catch {
     // ignore
   }

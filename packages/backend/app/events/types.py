@@ -8,20 +8,13 @@ class EventType(str, Enum):
     AGENT_END = "agent_end"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    TOOL_PROGRESS = "tool_progress"  # Added for tool execution progress
     TOKEN_USAGE = "token_usage"
+    COST_UPDATE = "cost_update"
+    SHELL_APPROVAL = "shell_approval"
+    DELTA = "delta"
     ERROR = "error"
     DONE = "done"
-
-    # Phase 2: Plan and Task events
-    PLAN_CREATED = "plan_created"
-    PLAN_UPDATED = "plan_updated"
-    TASK_STARTED = "task_started"
-    TASK_PROGRESS = "task_progress"
-    TASK_DONE = "task_done"
-    TASK_FAILED = "task_failed"
-    TASK_RETRYING = "task_retrying"
-    TASK_SKIPPED = "task_skipped"
-    TASK_BLOCKED = "task_blocked"
 
     # Phase 4: Sitemap events
     MULTIPAGE_DECISION_MADE = "multipage_decision_made"
@@ -31,7 +24,6 @@ class EventType(str, Enum):
     PAGE_CREATED = "page_created"
     PAGE_VERSION_CREATED = "page_version_created"
     PAGE_PREVIEW_READY = "page_preview_ready"
-    AESTHETIC_SCORE = "aesthetic_score"
 
     # Phase 4: ProductDoc events
     PRODUCT_DOC_GENERATED = "product_doc_generated"
@@ -84,6 +76,15 @@ class EventType(str, Enum):
     TOOL_POLICY_BLOCKED = "tool_policy_blocked"
     TOOL_POLICY_WARN = "tool_policy_warn"
 
+    # Phase 9: Agent improvements
+    FILES_CHANGED = "files_changed"
+    CONTEXT_COMPACTED = "context_compacted"
+    PLAN_UPDATE = "plan_update"
+    AGENT_SPAWNED = "agent_spawned"
+    BG_TASK_STARTED = "bg_task_started"
+    BG_TASK_COMPLETED = "bg_task_completed"
+    BG_TASK_FAILED = "bg_task_failed"
+
 
 STRUCTURED_EVENT_TYPES = {event_type.value for event_type in EventType}
 STRUCTURED_EVENT_TYPES.update(
@@ -91,8 +92,6 @@ STRUCTURED_EVENT_TYPES.update(
         # Spec naming variants
         "agent_complete",
         "agent_error",
-        "task_completed",
-        "task_aborted",
     }
 )
 

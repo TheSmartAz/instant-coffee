@@ -12,6 +12,7 @@ class StreamEventType(Enum):
     TEXT = "text"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    TOOL_PROGRESS = "tool_progress"  # New: progress during tool execution
     DONE = "done"
     ERROR = "error"
 

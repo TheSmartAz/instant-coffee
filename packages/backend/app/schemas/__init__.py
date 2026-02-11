@@ -17,14 +17,6 @@ from .session_metadata import (
     SessionMetadata,
     SessionMetadataUpdate,
 )
-from .validation import AestheticScore, AutoChecks, DimensionScores
-from .component import (
-    ComponentDefinition,
-    ComponentRegistry,
-    DesignTokens,
-    PropDefinition,
-    normalize_design_tokens,
-)
 
 __all__ = [
     "ChatRequest",
@@ -48,12 +40,4 @@ __all__ = [
     "BuildInfo",
     "SessionMetadata",
     "SessionMetadataUpdate",
-    "AestheticScore",
-    "AutoChecks",
-    "DimensionScores",
-    "ComponentRegistry",
-    "ComponentDefinition",
-    "PropDefinition",
-    "DesignTokens",
-    "normalize_design_tokens",
 ]

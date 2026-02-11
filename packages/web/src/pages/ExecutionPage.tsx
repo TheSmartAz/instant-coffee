@@ -59,7 +59,12 @@ export function ExecutionPage() {
     <div className="flex h-screen flex-col">
       <header className="flex items-center justify-between border-b border-border px-6 py-4">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            asChild
+            aria-label={sessionId ? 'Back to project' : 'Back to home'}
+          >
             <Link to={sessionId ? `/project/${sessionId}` : '/'}>
               <ArrowLeft className="h-4 w-4" />
             </Link>

@@ -61,7 +61,6 @@ class AgentProgressEvent(BaseEvent):
     task_id: Optional[str] = None
     agent_id: str
     message: str
-    progress: Optional[int] = None  # 0-100
 
 
 class AgentEndEvent(BaseEvent):
@@ -93,6 +92,17 @@ class ToolResultEvent(BaseEvent):
     error: Optional[str] = None
 
 
+class ToolProgressEvent(BaseEvent):
+    """Progress update during tool execution."""
+    type: EventType = EventType.TOOL_PROGRESS
+    task_id: Optional[str] = None
+    agent_id: str
+    agent_type: str = "agent"
+    tool_name: str
+    progress_message: str
+    progress_percent: Optional[int] = None  # 0-100, or None for indeterminate
+
+
 class TokenUsageEvent(BaseEvent):
     type: EventType = EventType.TOKEN_USAGE
     task_id: Optional[str] = None
@@ -103,68 +113,20 @@ class TokenUsageEvent(BaseEvent):
     cost_usd: float
 
 
-# Plan events
-class PlanCreatedEvent(BaseEvent):
-    type: EventType = EventType.PLAN_CREATED
-    plan: Dict[str, Any]
+class CostUpdateEvent(BaseEvent):
+    """Real-time cost tracking update from the engine."""
+    type: EventType = EventType.COST_UPDATE
+    prompt_tokens: int
+    completion_tokens: int
+    total_cost_usd: float
 
 
-class PlanUpdatedEvent(BaseEvent):
-    type: EventType = EventType.PLAN_UPDATED
-    plan_id: str
-    changes: List[Dict[str, Any]]
-
-
-# Task events
-class TaskStartedEvent(BaseEvent):
-    type: EventType = EventType.TASK_STARTED
-    task_id: str
-    task_title: str
-
-
-class TaskProgressEvent(BaseEvent):
-    type: EventType = EventType.TASK_PROGRESS
-    task_id: str
-    progress: int
-    message: Optional[str] = None
-
-
-class TaskDoneEvent(BaseEvent):
-    type: EventType = EventType.TASK_DONE
-    task_id: str
-    result: Optional[Dict[str, Any]] = None
-
-
-class TaskFailedEvent(BaseEvent):
-    type: EventType = EventType.TASK_FAILED
-    task_id: str
-    error_type: str  # temporary, logic, dependency
-    error_message: str
-    retry_count: int
-    max_retries: int
-    available_actions: List[str]
-    blocked_tasks: List[str]
-
-
-class TaskRetryingEvent(BaseEvent):
-    type: EventType = EventType.TASK_RETRYING
-    task_id: str
-    attempt: int
-    max_attempts: int
-    next_retry_in: int
-
-
-class TaskSkippedEvent(BaseEvent):
-    type: EventType = EventType.TASK_SKIPPED
-    task_id: str
-    reason: Optional[str] = None
-
-
-class TaskBlockedEvent(BaseEvent):
-    type: EventType = EventType.TASK_BLOCKED
-    task_id: str
-    blocked_by: List[str] = Field(default_factory=list)
-    reason: Optional[str] = None
+class ShellApprovalEvent(BaseEvent):
+    """Emitted when a shell command needs user approval before execution."""
+    type: EventType = EventType.SHELL_APPROVAL
+    command: str
+    reason: str  # Why the command was flagged
+    approval_id: str  # Unique ID for the approval request
 
 
 class PageCreatedEvent(BaseEvent):
@@ -186,14 +148,6 @@ class PagePreviewReadyEvent(BaseEvent):
     page_id: str
     slug: str
     preview_url: Optional[str] = None
-
-
-class AestheticScoreEvent(BaseEvent):
-    type: EventType = EventType.AESTHETIC_SCORE
-    page_id: str
-    slug: Optional[str] = None
-    score: Dict[str, Any]
-    attempts: Optional[List[Dict[str, Any]]] = None
 
 
 # Interview events
@@ -283,6 +237,79 @@ class DoneEvent(BaseEvent):
     type: EventType = EventType.DONE
     summary: Optional[str] = None
     token_usage: Optional[Dict[str, Any]] = None
+
+
+class TextDeltaEvent(BaseEvent):
+    """Lightweight streaming text delta — serialises without ``type`` so the
+    frontend treats it as a raw delta chunk rather than a structured event."""
+
+    type: EventType = EventType.DELTA
+    delta: str
+
+    def to_sse(self) -> str:
+        import json
+
+        return f"data: {json.dumps({'delta': self.delta}, ensure_ascii=False)}\n\n"
+
+
+# ── Phase 9: Agent improvement events ──────────────────────────
+
+
+class FilesChangedEvent(BaseEvent):
+    """Emitted after a turn when files were created/modified/deleted."""
+
+    type: EventType = EventType.FILES_CHANGED
+    files: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ContextCompactedEvent(BaseEvent):
+    """Emitted when context is compacted to save tokens."""
+
+    type: EventType = EventType.CONTEXT_COMPACTED
+    tokens_saved: int = 0
+    turns_removed: int = 0
+    warning: Optional[str] = None
+
+
+class PlanUpdateEvent(BaseEvent):
+    """Emitted when the agent creates or updates a plan."""
+
+    type: EventType = EventType.PLAN_UPDATE
+    explanation: str = ""
+    steps: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class AgentSpawnedEvent(BaseEvent):
+    """Emitted when a sub-agent is spawned for a task."""
+
+    type: EventType = EventType.AGENT_SPAWNED
+    agent_id: str
+    task_description: str = ""
+
+
+class BgTaskStartedEvent(BaseEvent):
+    """Emitted when a background shell task starts."""
+
+    type: EventType = EventType.BG_TASK_STARTED
+    task_id: Optional[str] = None
+    command: str = ""
+
+
+class BgTaskCompletedEvent(BaseEvent):
+    """Emitted when a background shell task completes."""
+
+    type: EventType = EventType.BG_TASK_COMPLETED
+    task_id: Optional[str] = None
+    output: Optional[str] = None
+    exit_code: Optional[int] = None
+
+
+class BgTaskFailedEvent(BaseEvent):
+    """Emitted when a background shell task fails."""
+
+    type: EventType = EventType.BG_TASK_FAILED
+    task_id: Optional[str] = None
+    error: str = ""
 
 
 def _clean_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

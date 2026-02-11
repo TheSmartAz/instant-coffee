@@ -106,14 +106,21 @@ const buildInterviewAnswers = (
       return
     }
 
-    const textValue = Array.isArray(value) ? value[0] : value
-    if (!textValue) return
+    // text type: treat as single with allow_other
+    const textSelected = Array.isArray(value) ? value[0] : value
+    const textLabel = textSelected
+      ? textSelected === OTHER_OPTION_ID
+        ? other
+        : buildOptionsMap(question.options)[textSelected]
+      : other
+    if (!textLabel && !other) return
     result.push({
       id: question.id,
       question: question.title,
       type: question.type,
-      value: textValue,
-      label: textValue,
+      value: textSelected ?? '',
+      label: textLabel ?? other,
+      other,
       index: globalIndex,
     })
   })
@@ -159,6 +166,8 @@ const renderOption = (
           }
           onChange(option.id)
         }}
+        aria-label={option.label}
+        aria-describedby={`interview-question-${question.id}`}
         className="h-3.5 w-3.5 accent-primary"
       />
       <span>{option.label}</span>
@@ -227,7 +236,6 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
     }))
   }
 
-  const showOther = question.allow_other
   const otherSelected = question.type === 'multi'
     ? toArray(selectedValue).includes(OTHER_OPTION_ID)
     : selectedValue === OTHER_OPTION_ID
@@ -276,46 +284,52 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
 
       {!expanded && batch.status !== 'active' ? null : (
         <div className="mt-4 space-y-4">
-          <div className="text-sm font-medium text-foreground">
+          <div
+            className="text-sm font-medium text-foreground"
+            id={`interview-question-${question.id}`}
+          >
             {question.title}
           </div>
-          {question.type === 'text' ? (
-            <Input
-              value={typeof selectedValue === 'string' ? selectedValue : ''}
-              onChange={(event) => setAnswerValue(event.target.value)}
-              placeholder={question.placeholder ?? 'Enter your answer'}
-              disabled={readOnly}
-            />
-          ) : (
-            <div className="space-y-2">
-              {(question.options ?? []).map((option) =>
-                renderOption(
-                  question,
-                  option,
-                  selectedValue,
-                  setAnswerValue,
-                  readOnly
-                )
-              )}
-              {showOther ? (
-                <div className="space-y-2">
-                  {renderOption(
-                    question,
-                    { id: OTHER_OPTION_ID, label: 'Other' },
+          {(() => {
+            const effectiveType = question.type === 'text' ? 'single' : question.type
+            const effectiveQuestion = question.type === 'text'
+              ? { ...question, type: effectiveType as 'single', allow_other: true }
+              : question
+            const hasOptions = (effectiveQuestion.options ?? []).length > 0
+            const forceOther = question.type === 'text' || effectiveQuestion.allow_other
+            return (
+              <div className="space-y-2">
+                {(effectiveQuestion.options ?? []).map((option) =>
+                  renderOption(
+                    effectiveQuestion,
+                    option,
                     selectedValue,
                     setAnswerValue,
                     readOnly
-                  )}
-                  <Input
-                    value={currentAnswer?.other ?? ''}
-                    onChange={(event) => setOtherValue(event.target.value)}
-                    placeholder={question.other_placeholder ?? 'Enter your other answer'}
-                    disabled={readOnly || !otherSelected}
-                  />
-                </div>
-              ) : null}
-            </div>
-          )}
+                  )
+                )}
+                {forceOther ? (
+                  <div className="space-y-2">
+                    {hasOptions ? renderOption(
+                      effectiveQuestion,
+                      { id: OTHER_OPTION_ID, label: 'Other' },
+                      selectedValue,
+                      setAnswerValue,
+                      readOnly
+                    ) : null}
+                    <Input
+                      value={hasOptions ? (currentAnswer?.other ?? '') : (typeof selectedValue === 'string' ? selectedValue : '')}
+                      onChange={(event) => hasOptions ? setOtherValue(event.target.value) : setAnswerValue(event.target.value)}
+                      placeholder={question.other_placeholder ?? question.placeholder ?? 'Enter your answer'}
+                      disabled={readOnly || (hasOptions && !otherSelected)}
+                      aria-label={hasOptions ? `${question.title} (Other)` : question.title}
+                      aria-describedby={`interview-question-${question.id}`}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            )
+          })()}
 
           <div className="flex items-center justify-between">
             <Button

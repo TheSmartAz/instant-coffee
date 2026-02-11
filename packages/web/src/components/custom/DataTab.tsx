@@ -381,12 +381,17 @@ export function DataTab({ sessionId }: DataTabProps) {
             ) : (
               <div className="overflow-hidden rounded-lg border border-border bg-background">
                 <div className="max-h-[52vh] overflow-auto">
-                  <table className="w-full min-w-[680px] border-collapse text-sm" data-testid="data-grid">
+                  <table
+                    className="w-full min-w-[680px] border-collapse text-sm"
+                    data-testid="data-grid"
+                    role="table"
+                  >
                     <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                       <tr className="border-b border-border">
                         {tableColumns.map((column) => (
                           <th
                             key={column}
+                            scope="col"
                             className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                           >
                             {column}

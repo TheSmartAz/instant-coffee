@@ -1,31 +1,23 @@
 import * as React from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Settings, Activity, Trash2, Square } from 'lucide-react'
+import { ArrowLeft, Settings, Activity } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 import { ChatPanel } from '@/components/custom/ChatPanel'
 import { WorkbenchPanel, type WorkbenchTab } from '@/components/custom/WorkbenchPanel'
 import { VersionPanel } from '@/components/custom/VersionPanel'
-import { EventList } from '@/components/EventFlow/EventList'
-import { api, type RequestError } from '@/api/client'
+import { ThreadSelector } from '@/components/custom/ThreadSelector'
+import { AbortDialog } from '@/components/custom/AbortDialog'
+import { api } from '@/api/client'
 import { useChat } from '@/hooks/useChat'
 import { useAestheticScore } from '@/hooks/useAestheticScore'
 import { useBuildStatus } from '@/hooks/useBuildStatus'
-import { useSSE } from '@/hooks/useSSE'
 import { useSession } from '@/hooks/useSession'
 import { usePages } from '@/hooks/usePages'
 import { useProductDoc } from '@/hooks/useProductDoc'
+import { useThreads } from '@/hooks/useThreads'
+import { useSessionCost } from '@/hooks/useCost'
+import { usePreviewManager } from '@/hooks/usePreviewManager'
+import { useAsyncAction } from '@/hooks/useAsyncAction'
 import { toast } from '@/hooks/use-toast'
 
 const LAST_PROJECT_KEY = 'instant-coffee:last-project-id'
@@ -37,21 +29,23 @@ export function ProjectPage() {
   const [isRefreshing, setIsRefreshing] = React.useState(false)
   const [isExporting, setIsExporting] = React.useState(false)
   const [isAborting, setIsAborting] = React.useState(false)
-  const [activeTab, setActiveTab] = React.useState<'chat' | 'events'>('chat')
+  const [, setIsSwitchingThread] = React.useState(false)
   const [workbenchTab, setWorkbenchTab] = React.useState<WorkbenchTab>('preview')
-  const [appMode, setAppMode] = React.useState(false)
   const [previewMode, setPreviewMode] = React.useState<'live' | 'build'>('live')
-  const [pagePreviewVersion, setPagePreviewVersion] = React.useState<number | null>(
-    null
-  )
   const sessionId = id && id !== 'new' ? id : undefined
+  const {
+    threads,
+    activeThreadId,
+    createThread,
+    deleteThread,
+    switchThread,
+    refresh: refreshThreads,
+  } = useThreads(sessionId)
   const { session, messages, versions, isLoading, error, refresh, setMessages } =
-    useSession(sessionId)
+    useSession(sessionId, activeThreadId ?? undefined)
 
-  const [previewHtml, setPreviewHtml] = React.useState<string | null>(null)
-  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
-  const autoLoadedPreviewRef = React.useRef<Set<string>>(new Set())
-  const [buildPreviewStamp, setBuildPreviewStamp] = React.useState(0)
+  // Cost tracking
+  const { data: costData } = useSessionCost(sessionId)
 
   // Multi-page support (v04) - use usePages hook
   const {
@@ -82,7 +76,7 @@ export function ProjectPage() {
   const hasRequestedPagesRef = React.useRef(false)
 
   // ProductDoc state management - auto-switch on events
-  const { productDoc } = useProductDoc(sessionId, {
+  const { productDoc, isLoading: isProductDocLoading, error: productDocError } = useProductDoc(sessionId, {
     onProductDocGenerated: () => {
       setWorkbenchTab('product-doc')
     },
@@ -96,7 +90,6 @@ export function ProjectPage() {
     isLoading: isBuildLoading,
     error: buildError,
     refresh: refreshBuildStatus,
-    startBuild,
     cancelBuild,
     selectedPage: selectedBuildPage,
     selectPage: selectBuildPage,
@@ -110,6 +103,31 @@ export function ProjectPage() {
     },
     []
   )
+
+  const preview = usePreviewManager({
+    sessionId,
+    session,
+    versions,
+    pages,
+    selectedPageId,
+    hasLoadedPages,
+    buildStatus: buildState.status,
+    buildPagePreviewUrl,
+    refresh,
+  })
+
+  const {
+    previewHtml,
+    previewUrl,
+    pagePreviewVersion,
+    appMode,
+    setAppMode,
+    buildPreviewStamp,
+    setBuildPreviewStamp,
+    loadPagePreview,
+    handlePreview,
+  } = preview
+  const { runAction } = useAsyncAction()
 
   const extractBuildSlug = React.useCallback((pagePath: string) => {
     if (!pagePath) return null
@@ -135,60 +153,16 @@ export function ProjectPage() {
     return slug === 'index' ? 'index.html' : `pages/${slug}/index.html`
   }, [])
 
-  // Function to load page preview (prefer preview_url)
-  const loadPagePreview = React.useCallback(
-    async (pageId: string, options?: { bustCache?: boolean }) => {
-      try {
-        const preview = await api.pages.getPreview(pageId)
-        setPagePreviewVersion(preview.version ?? null)
-        if (appMode) {
-          setPreviewHtml(preview.html ?? null)
-          setPreviewUrl(null)
-          return
-        }
-        const previewUrl = buildPagePreviewUrl(pageId, options)
-        setPreviewUrl(previewUrl)
-        setPreviewHtml(null)
-      } catch (err) {
-        const status = (err as RequestError)?.status
-        if (status === 404) {
-          setPreviewHtml(null)
-          setPreviewUrl(null)
-          setPagePreviewVersion(null)
-          return
-        }
-        console.error('Failed to load page preview:', err)
-      }
-    },
-    [appMode, buildPagePreviewUrl]
-  )
-  const isHttpUrl = React.useCallback(
-    (value?: string | null) => (value ? /^https?:\/\//i.test(value) : false),
-    []
-  )
   const chat = useChat({
     sessionId,
+    threadId: activeThreadId ?? undefined,
     messages,
     setMessages,
     onSessionCreated: (newSessionId) => {
       if (id && id !== 'new') return
       navigate(`/project/${newSessionId}`, { replace: true })
     },
-    onPreview: (payload) => {
-      if (payload.html) {
-        setPreviewHtml(payload.html)
-        setPreviewUrl(null)
-        return
-      }
-      if (payload.previewUrl && isHttpUrl(payload.previewUrl)) {
-        const isPagePreview = payload.previewUrl.includes('/api/pages/')
-        const allowSessionPreview = !hasPages && hasLoadedPages && versions.length > 0
-        if (isPagePreview || allowSessionPreview) {
-          setPreviewHtml(null)
-          setPreviewUrl(payload.previewUrl)
-        }
-      }
-    },
+    onPreview: handlePreview,
     onTabChange: (tab) => {
       setWorkbenchTab(tab)
     },
@@ -202,41 +176,21 @@ export function ProjectPage() {
     },
   })
 
-  const sse = useSSE({
-    url: sessionId ? api.chat.streamUrl(sessionId) : '',
-    sessionId,
-    autoConnect: activeTab === 'events' && Boolean(sessionId),
-    loadHistory: activeTab === 'events' && Boolean(sessionId),
-    onError: (err) => {
-      toast({ title: 'SSE connection error', description: err.message })
-    },
-  })
-  const { clearEvents } = sse
-
-  const chatStatus = chat.isStreaming
-    ? 'Streaming'
-    : chat.connectionState === 'open'
-      ? 'Live'
-      : chat.connectionState === 'connecting'
-        ? 'Connecting'
-        : chat.connectionState === 'error'
-          ? 'Connection lost'
-          : undefined
-  const eventStatus =
-    sse.connectionState === 'open'
-      ? 'Live'
-      : sse.connectionState === 'connecting'
-        ? 'Connecting'
-        : sse.connectionState === 'error'
-          ? 'Connection lost'
-          : undefined
   const isBuildRunning =
     buildState.status === 'building' || buildState.status === 'pending'
 
+  // Refresh thread titles when messages change (backend auto-sets title on first message)
+  const prevMessageCountRef = React.useRef(messages.length)
   React.useEffect(() => {
-    setActiveTab('chat')
-    clearEvents()
-  }, [sessionId, clearEvents])
+    const prevCount = prevMessageCountRef.current
+    prevMessageCountRef.current = messages.length
+    if (messages.length > prevCount && activeThreadId) {
+      const activeThread = threads.find((t) => t.id === activeThreadId)
+      if (activeThread && !activeThread.title) {
+        refreshThreads()
+      }
+    }
+  }, [messages.length, activeThreadId, threads, refreshThreads])
 
   // Remember the last visited project for the "Back" button in Settings
   React.useEffect(() => {
@@ -263,85 +217,12 @@ export function ProjectPage() {
     }
   }, [sessionId, isLoadingPages])
 
-  React.useEffect(() => {
-    if (!hasLoadedPages || hasPages) return
-    if (session?.previewHtml) {
-      setPreviewHtml(session.previewHtml)
-      setPreviewUrl(null)
-      return
-    }
-    if (session?.previewUrl && isHttpUrl(session.previewUrl)) {
-      setPreviewUrl(session.previewUrl)
-    }
-  }, [
-    hasLoadedPages,
-    hasPages,
-    isHttpUrl,
-    session?.previewHtml,
-    session?.previewUrl,
-  ])
-
-  React.useEffect(() => {
-    if (!hasLoadedPages || hasPages) return
-    const active = versions.find((version) => version.isCurrent)
-    if (active?.previewHtml) {
-      setPreviewHtml(active.previewHtml)
-      setPreviewUrl(null)
-      return
-    }
-    if (active?.previewUrl && isHttpUrl(active.previewUrl)) {
-      setPreviewUrl(active.previewUrl)
-    }
-  }, [hasLoadedPages, hasPages, isHttpUrl, versions])
-
-  React.useEffect(() => {
-    if (!hasPages) return
-    if (previewUrl && previewUrl.includes('/api/sessions/')) {
-      setPreviewUrl(null)
-    }
-  }, [hasPages, previewUrl])
-
-  React.useEffect(() => {
-    setPagePreviewVersion(null)
-  }, [selectedPageId])
-
-  React.useEffect(() => {
-    if (!selectedPageId) return
-    if (previewUrl || previewHtml) return
-    if (autoLoadedPreviewRef.current.has(selectedPageId)) return
-    autoLoadedPreviewRef.current.add(selectedPageId)
-    void loadPagePreview(selectedPageId)
-  }, [selectedPageId, previewUrl, previewHtml, loadPagePreview])
-
-  React.useEffect(() => {
-    if (!selectedPageId) return
-    void loadPagePreview(selectedPageId, { bustCache: true })
-  }, [appMode, loadPagePreview, selectedPageId])
-
+  // Reset preview mode when session changes
   React.useEffect(() => {
     if (!sessionId) {
-      setAppMode(false)
       setPreviewMode('live')
-      return
-    }
-    try {
-      const key = `instant-coffee:app-mode:${sessionId}`
-      const raw = window.localStorage.getItem(key)
-      setAppMode(raw === 'true')
-    } catch {
-      setAppMode(false)
     }
   }, [sessionId])
-
-  React.useEffect(() => {
-    if (!sessionId) return
-    try {
-      const key = `instant-coffee:app-mode:${sessionId}`
-      window.localStorage.setItem(key, appMode ? 'true' : 'false')
-    } catch {
-      // ignore storage failures
-    }
-  }, [appMode, sessionId])
 
   React.useEffect(() => {
     if (!selectedPageId || buildState.pages.length === 0) return
@@ -369,87 +250,102 @@ export function ProjectPage() {
     toast({ title: 'Build error', description: buildError })
   }, [buildError])
 
-  const handleRefreshPreview = async () => {
+  const handleRefreshPreview = React.useCallback(async () => {
     if (!sessionId) return
     if (previewMode === 'build') {
       setBuildPreviewStamp(Date.now())
       toast({ title: 'Build preview refreshed' })
       return
     }
-    setIsRefreshing(true)
-    try {
-      const ok = await refresh()
-      if (ok) {
-        toast({ title: 'Preview refreshed' })
-      } else {
-        toast({ title: 'Refresh failed', description: 'Unable to reload session.' })
+    await runAction(
+      async () => refresh(),
+      {
+        onStart: () => setIsRefreshing(true),
+        onFinally: () => setIsRefreshing(false),
+        successToast: (ok) =>
+          ok
+            ? { title: 'Preview refreshed' }
+            : { title: 'Refresh failed', description: 'Unable to reload session.' },
+        errorToast: { title: 'Refresh failed' },
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to refresh preview'
-      toast({ title: 'Refresh failed', description: message })
-    } finally {
-      setIsRefreshing(false)
-    }
-  }
+    )
+  }, [previewMode, refresh, runAction, sessionId, setBuildPreviewStamp])
 
-  const handleExportPreview = async () => {
+  const handleExportPreview = React.useCallback(async () => {
     if (!sessionId) return
-    setIsExporting(true)
-    try {
-      const result = await api.export.session(sessionId)
-      if (result.success) {
-        let successCount = 0
-        let failedCount = 0
-        for (const page of result.manifest.pages) {
-          if (page.status === 'success') {
-            successCount += 1
-          } else if (page.status === 'failed') {
-            failedCount += 1
+    await runAction(
+      async () => api.export.session(sessionId),
+      {
+        onStart: () => setIsExporting(true),
+        onFinally: () => setIsExporting(false),
+        successToast: (result) => {
+          if (!result.success) {
+            return { title: 'Export failed', description: 'Check the console for details.' }
           }
-        }
 
-        let message = `Export succeeded! ${successCount} pages exported to ${result.export_dir}`
-        if (failedCount > 0) {
-          message += ` (${failedCount} pages failed)`
-        }
-        toast({ title: 'Export complete', description: message })
-      } else {
-        toast({ title: 'Export failed', description: 'Check the console for details.' })
+          let successCount = 0
+          let failedCount = 0
+          for (const page of result.manifest.pages) {
+            if (page.status === 'success') {
+              successCount += 1
+            } else if (page.status === 'failed') {
+              failedCount += 1
+            }
+          }
+
+          let message = `Export succeeded! ${successCount} pages exported to ${result.export_dir}`
+          if (failedCount > 0) {
+            message += ` (${failedCount} pages failed)`
+          }
+          return { title: 'Export complete', description: message }
+        },
+        errorToast: { title: 'Export failed' },
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Export failed. Please retry.'
-      toast({ title: 'Export failed', description: message })
-    } finally {
-      setIsExporting(false)
-    }
-  }
+    )
+  }, [runAction, sessionId])
 
-  const canClearChat = Boolean(sessionId) && (messages.length > 0 || chat.isStreaming)
   const canAbort = Boolean(sessionId) && !isAborting
 
-  const handleClearChat = async () => {
+  const handleNewThread = async () => {
     if (!sessionId) return
+    setIsSwitchingThread(true)
     try {
-      await chat.clearThread()
-      toast({ title: 'Chat cleared' })
-    } catch {
-      // Error toast handled in hook
+      const thread = await createThread()
+      if (thread) {
+        setMessages([])
+      }
+    } finally {
+      setIsSwitchingThread(false)
+    }
+  }
+
+  const handleDeleteThread = async (threadId: string) => {
+    if (!sessionId) return
+    setIsSwitchingThread(true)
+    try {
+      const ok = await deleteThread(threadId)
+      if (ok) {
+        toast({ title: 'Thread deleted' })
+      }
+    } finally {
+      setIsSwitchingThread(false)
     }
   }
 
   const handleAbort = async () => {
     if (!sessionId) return
-    setIsAborting(true)
-    try {
-      await api.sessions.abort(sessionId)
-      chat.stopStream()
-      toast({ title: 'Execution aborted' })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Abort failed'
-      toast({ title: 'Abort failed', description: message })
-    } finally {
-      setIsAborting(false)
-    }
+    await runAction(
+      async () => {
+        await api.sessions.abort(sessionId)
+        chat.stopStream()
+      },
+      {
+        onStart: () => setIsAborting(true),
+        onFinally: () => setIsAborting(false),
+        successToast: { title: 'Execution aborted' },
+        errorToast: { title: 'Abort failed' },
+      }
+    )
   }
 
   // Page selection handler for multi-page support
@@ -469,34 +365,18 @@ export function ProjectPage() {
         toast({ title: 'Build preview refreshed' })
         return
       }
-      setIsRefreshing(true)
-      try {
-        await loadPagePreview(pageId, { bustCache: true })
-        toast({ title: 'Page preview refreshed' })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to refresh page preview'
-        toast({ title: 'Refresh failed', description: message })
-      } finally {
-        setIsRefreshing(false)
-      }
+      await runAction(
+        async () => loadPagePreview(pageId, { bustCache: true }),
+        {
+          onStart: () => setIsRefreshing(true),
+          onFinally: () => setIsRefreshing(false),
+          successToast: { title: 'Page preview refreshed' },
+          errorToast: { title: 'Refresh failed' },
+        }
+      )
     },
-    [loadPagePreview, previewMode]
+    [loadPagePreview, previewMode, runAction, setBuildPreviewStamp]
   )
-
-  const previousBuildStatusRef = React.useRef(buildState.status)
-
-  React.useEffect(() => {
-    const previous = previousBuildStatusRef.current
-    if (previous !== 'success' && buildState.status === 'success') {
-      setBuildPreviewStamp(Date.now())
-      if (selectedPageId) {
-        void loadPagePreview(selectedPageId, { bustCache: true })
-      } else {
-        void refresh()
-      }
-    }
-    previousBuildStatusRef.current = buildState.status
-  }, [buildState.status, loadPagePreview, refresh, selectedPageId])
 
   const buildPreviewPath = React.useMemo(() => {
     const buildPages = buildState.pages ?? []
@@ -512,14 +392,11 @@ export function ProjectPage() {
 
   const handleBuildFromDoc = React.useCallback(async () => {
     if (!sessionId) return
-    try {
-      await startBuild()
-      toast({ title: 'Build started' })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to start build'
-      toast({ title: 'Build failed', description: message })
-    }
-  }, [sessionId, startBuild])
+    chat.sendMessage(
+      'Build the pages based on the product doc. Generate all the HTML pages defined in the product document.',
+      { generateNow: true }
+    )
+  }, [sessionId, chat])
 
   const handleBuildRetry = React.useCallback(() => {
     void handleBuildFromDoc()
@@ -527,15 +404,17 @@ export function ProjectPage() {
 
   const handleBuildCancel = React.useCallback(async () => {
     if (!sessionId) return
-    try {
-      await cancelBuild()
-      toast({ title: 'Build cancelled' })
-      void refreshBuildStatus()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to cancel build'
-      toast({ title: 'Cancel failed', description: message })
-    }
-  }, [cancelBuild, refreshBuildStatus, sessionId])
+    await runAction(
+      async () => {
+        await cancelBuild()
+        void refreshBuildStatus()
+      },
+      {
+        successToast: { title: 'Build cancelled' },
+        errorToast: { title: 'Cancel failed' },
+      }
+    )
+  }, [cancelBuild, refreshBuildStatus, runAction, sessionId])
 
   const handleBuildPageSelect = React.useCallback(
     (pagePath: string) => {
@@ -570,7 +449,7 @@ export function ProjectPage() {
     <div className="flex h-screen flex-col animate-in fade-in">
       <header className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild>
+          <Button variant="ghost" size="icon" asChild aria-label="Back to home">
             <Link to="/">
               <ArrowLeft className="h-4 w-4" />
             </Link>
@@ -587,7 +466,7 @@ export function ProjectPage() {
               </Link>
             </Button>
           ) : null}
-          <Button variant="ghost" size="icon" asChild>
+          <Button variant="ghost" size="icon" asChild aria-label="Open settings">
             <Link to="/settings">
               <Settings className="h-4 w-4" />
             </Link>
@@ -605,118 +484,38 @@ export function ProjectPage() {
           ) : null}
           {/* Chat Panel - 35% */}
           <div className="flex flex-col border-r border-border w-[35%] max-w-[45%] min-w-[300px]">
-            <Tabs
-              value={activeTab}
-              onValueChange={(value) => setActiveTab(value as 'chat' | 'events')}
-              className="flex h-full flex-col"
-            >
-              <div className="flex h-14 items-center justify-between border-b border-border px-4 shrink-0">
-                <TabsList>
-                  <TabsTrigger value="chat">Chat</TabsTrigger>
-                  <TabsTrigger value="events">Events</TabsTrigger>
-                </TabsList>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">
-                    {activeTab === 'chat' ? chatStatus : eventStatus}
-                  </span>
-                  {activeTab === 'chat' ? (
-                    <div className="flex items-center gap-1">
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            disabled={!canAbort}
-                            aria-label="Abort current execution"
-                            className="hover:bg-red-500"
-                          >
-                            <Square className="h-4 w-4" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Abort current execution?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This will stop the current run for this session. You can start a new run afterwards.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction onClick={handleAbort}>
-                              Abort run
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            disabled={!canClearChat}
-                            aria-label="Clear chat"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Clear chat?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This will delete all chat messages for the current session. ProductDoc / Pages / Versions will be kept.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction onClick={handleClearChat}>
-                              Clear chat
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </div>
-                  ) : null}
-                </div>
+            <div className="flex h-16 items-center border-b border-border px-3 shrink-0 gap-2">
+              <ThreadSelector
+                threads={threads}
+                activeThreadId={activeThreadId}
+                onSwitchThread={async (threadId) => {
+                  setIsSwitchingThread(true)
+                  try {
+                    await switchThread(threadId)
+                  } finally {
+                    setIsSwitchingThread(false)
+                  }
+                }}
+                onNewThread={handleNewThread}
+                onDeleteThread={handleDeleteThread}
+              />
+              {/* Actions */}
+              <div className="flex items-center gap-0.5 shrink-0">
+                <AbortDialog disabled={!canAbort} onAbort={handleAbort} />
               </div>
-              <TabsContent value="chat" className="mt-0 flex-1 min-h-0">
-                <ChatPanel
-                  messages={messages}
-                  assets={chat.assets}
-                  onSendMessage={chat.sendMessage}
-                  onAssetUpload={chat.uploadAsset}
-                  onAssetRemove={chat.removeAsset}
-                  onInterviewAction={chat.handleInterviewAction}
-                  onTabChange={setWorkbenchTab}
-                  onDisambiguationSelect={(option) => {
-                    // Find the page and select it, then send a follow-up message
-                    const page = pages.find((p) => p.slug === option.slug)
-                    if (page) {
-                      selectPage(page.id)
-                      void loadPagePreview(page.id)
-                      setWorkbenchTab('preview')
-                      // Send a follow-up message with the selected page
-                      void chat.sendMessage(`I choose: ${option.title}`)
-                    }
-                  }}
-                  isLoading={isLoading || chat.isStreaming}
-                  title={session?.title ?? 'Chat'}
-                  status={chatStatus}
-                  errorMessage={chat.error}
-                  showHeader={false}
-                  showBorder={false}
-                  className="h-full"
-                  pages={pages}
-                />
-              </TabsContent>
-              <TabsContent value="events" className="mt-0 flex-1 min-h-0">
-                <EventList
-                  events={sse.events}
-                  isLoading={sse.isLoading}
-                  className="h-full"
-                  emptyMessage="Waiting for execution events..."
-                />
-              </TabsContent>
-            </Tabs>
+            </div>
+            <ChatPanel
+              messages={messages}
+              onSendMessage={chat.sendMessage}
+              onAssetUpload={chat.uploadAsset}
+              onInterviewAction={chat.handleInterviewAction}
+              onTabChange={setWorkbenchTab}
+              isLoading={isLoading || chat.isStreaming}
+              errorMessage={chat.error}
+              className="flex-1 min-h-0"
+              pages={pages}
+              tokenUsage={costData}
+            />
           </div>
           {/* Resize Handle (visual only) */}
           <div className="w-px bg-border hover:bg-accent cursor-col-resize active:cursor-col-resize" />
@@ -734,6 +533,9 @@ export function ProjectPage() {
               buildDisabled={chat.isStreaming || isBuildRunning || isBuildLoading}
               previewVersion={previewVersionLabel}
               productDocVersion={productDoc?.version ?? null}
+              productDoc={productDoc}
+              isProductDocLoading={isProductDocLoading}
+              productDocError={productDocError}
               pages={pages}
               selectedPageId={selectedPageId}
               onSelectPage={handleSelectPage}

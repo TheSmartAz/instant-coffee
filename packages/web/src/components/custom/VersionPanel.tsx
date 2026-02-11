@@ -1,9 +1,7 @@
 import * as React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { formatDistanceToNow } from 'date-fns'
-import { ChevronRight, ChevronLeft, Code, Eye, FileText, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Code, Eye, FileText, Loader2 } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,16 +20,22 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { formatRelativeDate } from '@/lib/formatRelativeDate'
 import { cn } from '@/lib/utils'
-import { api, type RequestError } from '@/api/client'
+import { api } from '@/api/client'
 import { toast } from '@/hooks/use-toast'
 import { usePageVersions } from '@/hooks/usePageVersions'
 import { useSnapshots } from '@/hooks/useSnapshots'
 import { useProductDocHistory } from '@/hooks/useProductDocHistory'
 import { useVersionPin, type VersionPinType } from '@/hooks/useVersionPin'
+import { useAsyncAction } from '@/hooks/useAsyncAction'
 import { PhoneFrame } from './PhoneFrame'
-import { VersionTimeline, type VersionTimelineActionState } from './VersionTimeline'
+import { type VersionTimelineActionState } from './VersionTimeline'
 import { PinnedLimitDialog, type PinnedLimitDialogItem } from './PinnedLimitDialog'
+import { DiffViewDialog } from './DiffViewDialog'
+import { VersionPanelHeader } from './VersionPanelHeader'
+import { VersionPanelStats } from './VersionPanelStats'
+import { VersionPanelContent } from './VersionPanelContent'
 import type { PageVersion, ProductDocHistory, ProductDocHistoryResponse, ProjectSnapshot } from '@/types'
 
 type VersionTab = 'preview' | 'code' | 'product-doc' | 'data'
@@ -53,8 +57,6 @@ export interface VersionPanelProps {
   isCollapsed: boolean
   onToggleCollapse: () => void
 }
-
-const toDate = (value?: string) => (value ? new Date(value) : new Date())
 
 export function VersionPanel({
   sessionId,
@@ -98,6 +100,7 @@ export function VersionPanel({
   })
 
   const { pin, unpin } = useVersionPin()
+  const { runAction } = useAsyncAction()
 
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [previewHtml, setPreviewHtml] = React.useState<string | null>(null)
@@ -126,6 +129,11 @@ export function VersionPanel({
     item: PinnedLimitDialogItem
     id: string | number
   } | null>(null)
+
+  // Page diff dialog state
+  const [pageDiffOpen, setPageDiffOpen] = React.useState(false)
+  const [diffPageId, setDiffPageId] = React.useState<string | null>(null)
+  const [diffPageTitle, setDiffPageTitle] = React.useState<string | null>(null)
   const [isResolvingPin, setIsResolvingPin] = React.useState(false)
 
   const panelConfig = React.useMemo<PanelConfig>(() => {
@@ -222,6 +230,13 @@ export function VersionPanel({
       ? selectedPageTitle ?? 'No page selected'
       : sessionTitle ?? (sessionId ? `Project ${sessionId.slice(0, 6)}` : 'No project yet')
 
+  const collapsedCountLabel =
+    panelConfig.type === 'page'
+      ? `${pageVersions.length} versions`
+      : panelConfig.type === 'snapshot'
+        ? `${snapshots.length} snapshots`
+        : `${productDocHistory.length} doc versions`
+
   const handlePinDialogChange = React.useCallback((open: boolean) => {
     setPinDialogOpen(open)
     if (!open) {
@@ -276,9 +291,7 @@ export function VersionPanel({
           id: snapshot.id,
           title: `Snapshot #${snapshot.snapshot_number}`,
           subtitle: snapshot.label ?? undefined,
-          meta: `Created ${formatDistanceToNow(toDate(snapshot.created_at), {
-            addSuffix: true,
-          })}`,
+          meta: `Created ${formatRelativeDate(snapshot.created_at)}`,
         }
       }
       if (type === 'product-doc') {
@@ -287,9 +300,7 @@ export function VersionPanel({
           id: history.id,
           title: `v${history.version}`,
           subtitle: history.change_summary,
-          meta: `Created ${formatDistanceToNow(toDate(history.created_at), {
-            addSuffix: true,
-          })}`,
+          meta: `Created ${formatRelativeDate(history.created_at)}`,
         }
       }
       const version = item as PageVersion
@@ -297,7 +308,7 @@ export function VersionPanel({
         id: version.id,
         title: `v${version.version}`,
         subtitle: version.description ?? undefined,
-        meta: `Created ${formatDistanceToNow(version.createdAt, { addSuffix: true })}`,
+        meta: `Created ${formatRelativeDate(version.createdAt)}`,
       }
     },
     []
@@ -326,37 +337,45 @@ export function VersionPanel({
           ? (item as PageVersion).id
           : (item as ProjectSnapshot | ProductDocHistory).id
       setActionState({ id, action: 'pin' })
-      try {
-        const result = await pin({
-          type,
-          id,
-          pageId: type === 'page' ? selectedPageId ?? undefined : undefined,
-          sessionId: type !== 'page' ? sessionId : undefined,
-        })
-        if (result.ok) {
-          await refreshByType(type)
-          toast({ title: 'Version pinned' })
-          return
+      await runAction(
+        () =>
+          pin({
+            type,
+            id,
+            pageId: type === 'page' ? selectedPageId ?? undefined : undefined,
+            sessionId: type !== 'page' ? sessionId : undefined,
+          }),
+        {
+          onSuccess: async (result) => {
+            if (result.ok) {
+              await refreshByType(type)
+              toast({ title: 'Version pinned' })
+              return
+            }
+            const pinned = getPinnedItems(type).map((pinnedItem) =>
+              buildPinItem(type, pinnedItem)
+            )
+            setPendingPin({
+              type,
+              id,
+              item: buildPinItem(type, item),
+            })
+            setPinDialogItems(pinned)
+            setPinDialogOpen(true)
+          },
+          errorToast: (error) => ({
+            title: 'Pin failed',
+            description:
+              error.message || 'Failed to pin version. Please try again later.',
+          }),
+          onFinally: () => {
+            setActionState(null)
+          },
         }
-        const pinned = getPinnedItems(type).map((pinnedItem) =>
-          buildPinItem(type, pinnedItem)
-        )
-        setPendingPin({
-          type,
-          id,
-          item: buildPinItem(type, item),
-        })
-        setPinDialogItems(pinned)
-        setPinDialogOpen(true)
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to pin version. Please try again later.'
-        toast({ title: 'Pin failed', description: message })
-      } finally {
-        setActionState(null)
-      }
+      )
     },
     [
+      runAction,
       pin,
       selectedPageId,
       sessionId,
@@ -376,64 +395,82 @@ export function VersionPanel({
           ? (item as PageVersion).id
           : (item as ProjectSnapshot | ProductDocHistory).id
       setActionState({ id, action: 'unpin' })
-      try {
-        await unpin({
-          type,
-          id,
-          pageId: type === 'page' ? selectedPageId ?? undefined : undefined,
-          sessionId: type !== 'page' ? sessionId : undefined,
-        })
-        await refreshByType(type)
-        toast({ title: 'Version unpinned' })
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to unpin version. Please try again later.'
-        toast({ title: 'Unpin failed', description: message })
-      } finally {
-        setActionState(null)
-      }
+      await runAction(
+        () =>
+          unpin({
+            type,
+            id,
+            pageId: type === 'page' ? selectedPageId ?? undefined : undefined,
+            sessionId: type !== 'page' ? sessionId : undefined,
+          }),
+        {
+          onSuccess: async () => {
+            await refreshByType(type)
+          },
+          successToast: { title: 'Version unpinned' },
+          errorToast: (error) => ({
+            title: 'Unpin failed',
+            description:
+              error.message || 'Failed to unpin version. Please try again later.',
+          }),
+          onFinally: () => {
+            setActionState(null)
+          },
+        }
+      )
     },
-    [unpin, selectedPageId, sessionId, refreshByType]
+    [runAction, unpin, selectedPageId, sessionId, refreshByType]
   )
 
   const handleResolvePin = React.useCallback(
     async (releaseId: string | number) => {
       if (!pendingPin) return
       setIsResolvingPin(true)
-      try {
-        await unpin({
-          type: pendingPin.type,
-          id: releaseId,
-          pageId: pendingPin.type === 'page' ? selectedPageId ?? undefined : undefined,
-          sessionId: pendingPin.type !== 'page' ? sessionId : undefined,
-        })
-        const result = await pin({
-          type: pendingPin.type,
-          id: pendingPin.id,
-          pageId: pendingPin.type === 'page' ? selectedPageId ?? undefined : undefined,
-          sessionId: pendingPin.type !== 'page' ? sessionId : undefined,
-        })
-        if (!result.ok) {
-          toast({
-            title: 'Pin failed',
-            description: result.conflict.message ?? 'Failed to pin version',
+      await runAction(
+        async () => {
+          await unpin({
+            type: pendingPin.type,
+            id: releaseId,
+            pageId: pendingPin.type === 'page' ? selectedPageId ?? undefined : undefined,
+            sessionId: pendingPin.type !== 'page' ? sessionId : undefined,
           })
-          return
+          return pin({
+            type: pendingPin.type,
+            id: pendingPin.id,
+            pageId: pendingPin.type === 'page' ? selectedPageId ?? undefined : undefined,
+            sessionId: pendingPin.type !== 'page' ? sessionId : undefined,
+          })
+        },
+        {
+          onStart: () => {
+            setActionState({ id: pendingPin.id, action: 'pin' })
+          },
+          onSuccess: async (result) => {
+            if (!result.ok) {
+              toast({
+                title: 'Pin failed',
+                description: result.conflict.message ?? 'Failed to pin version',
+              })
+              return
+            }
+            await refreshByType(pendingPin.type)
+            toast({ title: 'Pinned version updated' })
+            setPinDialogOpen(false)
+            setPendingPin(null)
+          },
+          errorToast: (error) => ({
+            title: 'Operation failed',
+            description:
+              error.message || 'Operation failed. Please try again later.',
+          }),
+          onFinally: () => {
+            setIsResolvingPin(false)
+            setActionState(null)
+          },
         }
-        await refreshByType(pendingPin.type)
-        toast({ title: 'Pinned version updated' })
-        setPinDialogOpen(false)
-        setPendingPin(null)
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Operation failed. Please try again later.'
-        toast({ title: 'Operation failed', description: message })
-      } finally {
-        setIsResolvingPin(false)
-        setActionState(null)
-      }
+      )
     },
-    [pendingPin, unpin, pin, selectedPageId, sessionId, refreshByType]
+    [runAction, pendingPin, unpin, pin, selectedPageId, sessionId, refreshByType]
   )
 
   const handlePreviewVersion = React.useCallback(
@@ -444,26 +481,37 @@ export function VersionPanel({
       setPreviewMeta(version)
       setPreviewHtml(null)
       setActionState({ id: version.id, action: 'view' })
-      try {
-        const preview = await api.pages.previewVersion(selectedPageId, version.id)
-        setPreviewHtml(preview.html ?? '')
-      } catch (err) {
-        const status = (err as RequestError)?.status
-        if (status === 410) {
-          toast({ title: 'This version was released and cannot be previewed' })
-        } else {
-          const message =
-            err instanceof Error ? err.message : 'Failed to load preview. Please try again later.'
-          toast({ title: 'Preview failed', description: message })
+      await runAction(
+        () => api.pages.previewVersion(selectedPageId, version.id),
+        {
+          onSuccess: (preview) => {
+            setPreviewHtml(preview.html ?? '')
+          },
+          onError: (error) => {
+            if (error.status === 410) {
+              toast({ title: 'This version was released and cannot be previewed' })
+            }
+            setPreviewOpen(false)
+            resetPreview()
+          },
+          errorToast: (error) => {
+            if (error.status === 410) {
+              return null
+            }
+            return {
+              title: 'Preview failed',
+              description:
+                error.message || 'Failed to load preview. Please try again later.',
+            }
+          },
+          onFinally: () => {
+            setIsPreviewLoading(false)
+            setActionState(null)
+          },
         }
-        setPreviewOpen(false)
-        resetPreview()
-      } finally {
-        setIsPreviewLoading(false)
-        setActionState(null)
-      }
+      )
     },
-    [selectedPageId, resetPreview]
+    [runAction, selectedPageId, resetPreview]
   )
 
   const handleViewProductDoc = React.useCallback(
@@ -473,24 +521,29 @@ export function VersionPanel({
       setIsDocLoading(true)
       setDocDetail(null)
       setActionState({ id: history.id, action: 'view' })
-      try {
-        const detail = await api.productDocHistory.getProductDocHistoryVersion(
-          sessionId,
-          history.id
-        )
-        setDocDetail(detail)
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to load doc version. Please try again later.'
-        toast({ title: 'Load failed', description: message })
-        setDocOpen(false)
-        setDocDetail(null)
-      } finally {
-        setIsDocLoading(false)
-        setActionState(null)
-      }
+      await runAction(
+        () => api.productDocHistory.getProductDocHistoryVersion(sessionId, history.id),
+        {
+          onSuccess: (detail) => {
+            setDocDetail(detail)
+          },
+          onError: () => {
+            setDocOpen(false)
+            setDocDetail(null)
+          },
+          errorToast: (error) => ({
+            title: 'Load failed',
+            description:
+              error.message || 'Failed to load doc version. Please try again later.',
+          }),
+          onFinally: () => {
+            setIsDocLoading(false)
+            setActionState(null)
+          },
+        }
+      )
     },
-    [sessionId]
+    [runAction, sessionId]
   )
 
   const handleRollback = React.useCallback((snapshot: ProjectSnapshot) => {
@@ -501,33 +554,46 @@ export function VersionPanel({
     if (!rollbackTarget || !sessionId) return
     setIsRollbacking(true)
     setActionState({ id: rollbackTarget.id, action: 'rollback' })
-    try {
-      await api.snapshots.rollbackToSnapshot(sessionId, rollbackTarget.id)
-      toast({
-        title: 'Rollback successful',
-        description: `Rolled back to snapshot #${rollbackTarget.snapshot_number}`,
-      })
-      await Promise.all([
-        refreshSnapshots(),
-        refreshProductDocHistory(),
-        refreshPageVersions(),
-      ])
-      setRollbackTarget(null)
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Rollback failed. Please try again later.'
-      toast({ title: 'Rollback failed', description: message })
-    } finally {
-      setIsRollbacking(false)
-      setActionState(null)
-    }
+    await runAction(
+      () => api.snapshots.rollbackToSnapshot(sessionId, rollbackTarget.id),
+      {
+        onSuccess: async () => {
+          await Promise.all([
+            refreshSnapshots(),
+            refreshProductDocHistory(),
+            refreshPageVersions(),
+          ])
+          setRollbackTarget(null)
+        },
+        successToast: {
+          title: 'Rollback successful',
+          description: `Rolled back to snapshot #${rollbackTarget.snapshot_number}`,
+        },
+        errorToast: (error) => ({
+          title: 'Rollback failed',
+          description:
+            error.message || 'Rollback failed. Please try again later.',
+        }),
+        onFinally: () => {
+          setIsRollbacking(false)
+          setActionState(null)
+        },
+      }
+    )
   }, [
+    runAction,
     rollbackTarget,
     sessionId,
     refreshSnapshots,
     refreshProductDocHistory,
     refreshPageVersions,
   ])
+
+  const handlePageDiff = React.useCallback((pageId: string, pageTitle: string) => {
+    setDiffPageId(pageId)
+    setDiffPageTitle(pageTitle)
+    setPageDiffOpen(true)
+  }, [])
 
   return (
     <div
@@ -537,140 +603,71 @@ export function VersionPanel({
       )}
       style={{ flexGrow: 0, flexShrink: 0 }}
     >
-      <div
-        className={cn(
-          'flex h-14 items-center border-b border-border',
-          isCollapsed ? 'justify-center px-2' : 'justify-between px-4'
-        )}
-      >
-        {!isCollapsed ? (
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-muted/60 text-foreground">
-              <panelConfig.icon className="h-4 w-4" />
-            </div>
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                Version management
-              </div>
-              <div className="text-sm font-semibold text-foreground">
-                {panelConfig.title}
-              </div>
-            </div>
-          </div>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onToggleCollapse}
-          aria-label={isCollapsed ? 'Expand versions panel' : 'Collapse versions panel'}
-        >
-          {isCollapsed ? (
-            <ChevronLeft className="h-4 w-4" />
-          ) : (
-            <ChevronRight className="h-4 w-4" />
-          )}
-        </Button>
-      </div>
+      <VersionPanelHeader
+        isCollapsed={isCollapsed}
+        title={panelConfig.title}
+        icon={panelConfig.icon}
+        onToggleCollapse={onToggleCollapse}
+      />
 
       {isCollapsed ? (
-        <div className="flex flex-1 flex-col items-center justify-between py-4">
-          <div className="flex flex-col items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-muted/60 text-foreground">
-              <panelConfig.icon className="h-5 w-5" />
-            </div>
-            <div className="flex flex-col items-center gap-1 text-[10px] text-muted-foreground">
-              <span className="uppercase tracking-[0.2em]">Focus</span>
-              <span className="rounded-full bg-muted px-2 py-0.5 text-foreground">
-                {panelConfig.type === 'page'
-                  ? `${pageVersions.length} versions`
-                  : panelConfig.type === 'snapshot'
-                    ? `${snapshots.length} snapshots`
-                    : `${productDocHistory.length} doc versions`}
-              </span>
-            </div>
-          </div>
-          <div className="text-[10px] text-muted-foreground">Versions</div>
-        </div>
+        <VersionPanelStats
+          isCollapsed={isCollapsed}
+          panelType={panelConfig.type}
+          countLabel={collapsedCountLabel}
+          icon={panelConfig.icon}
+          contextLabel={contextLabel}
+          contextValue={contextValue}
+          subtitle={panelConfig.subtitle}
+          stats={panelStats}
+        />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
-          <div className="rounded-2xl border border-border/70 bg-background/80 p-4 shadow-sm">
-            <div className="flex items-start justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <panelConfig.icon className="h-3.5 w-3.5" />
-                  <span>{contextLabel}</span>
-                </div>
-                <div className="text-sm font-semibold text-foreground truncate">
-                  {contextValue}
-                </div>
-                <div className="text-xs text-muted-foreground">{panelConfig.subtitle}</div>
-              </div>
-            </div>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {panelStats.map((stat) => (
-                <div
-                  key={stat.label}
-                  className="rounded-xl border border-border/60 bg-muted/40 px-2 py-2 text-center"
-                >
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    {stat.label}
-                  </div>
-                  <div className="text-sm font-semibold text-foreground">{stat.value}</div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <VersionPanelStats
+            isCollapsed={isCollapsed}
+            panelType={panelConfig.type}
+            countLabel={collapsedCountLabel}
+            icon={panelConfig.icon}
+            contextLabel={contextLabel}
+            contextValue={contextValue}
+            subtitle={panelConfig.subtitle}
+            stats={panelStats}
+          />
 
-          <div className="flex min-h-0 flex-1">
-            {panelConfig.type === 'page' ? (
-              <VersionTimeline
-                type="page"
-                versions={pageVersions}
-                currentId={currentPageVersionId ?? null}
-                isLoading={isLoadingPageVersions}
-                actions={['view', 'pin']}
-                actionState={actionState}
-                emptyMessage={panelConfig.emptyMessage}
-                onView={(item) => handlePreviewVersion(item as PageVersion)}
-                onPin={(item) => handlePin('page', item as PageVersion)}
-                onUnpin={(item) => handleUnpin('page', item as PageVersion)}
-              />
-            ) : null}
-
-            {panelConfig.type === 'snapshot' ? (
-              <VersionTimeline
-                type="snapshot"
-                versions={snapshots}
-                isLoading={isLoadingSnapshots}
-                actions={['rollback', 'pin']}
-                actionState={actionState}
-                emptyMessage={panelConfig.emptyMessage}
-                onRollback={(item) => handleRollback(item as ProjectSnapshot)}
-                onPin={(item) => handlePin('snapshot', item as ProjectSnapshot)}
-                onUnpin={(item) => handleUnpin('snapshot', item as ProjectSnapshot)}
-              />
-            ) : null}
-
-            {panelConfig.type === 'product-doc' ? (
-              <VersionTimeline
-                type="product-doc"
-                versions={productDocHistory}
-                isLoading={isLoadingProductDocHistory}
-                actions={['view', 'diff', 'pin']}
-                actionState={actionState}
-                emptyMessage={panelConfig.emptyMessage}
-                onView={(item) => handleViewProductDoc(item as ProductDocHistory)}
-                onDiff={() => {
-                  toast({
-                    title: 'Feature in progress',
-                    description: 'Product doc comparison will ship in v05-F2',
-                  })
-                }}
-                onPin={(item) => handlePin('product-doc', item as ProductDocHistory)}
-                onUnpin={(item) => handleUnpin('product-doc', item as ProductDocHistory)}
-              />
-            ) : null}
-          </div>
+          <VersionPanelContent
+            panelType={panelConfig.type}
+            emptyMessage={panelConfig.emptyMessage}
+            actionState={actionState}
+            pageVersions={pageVersions}
+            currentPageVersionId={currentPageVersionId}
+            isLoadingPageVersions={isLoadingPageVersions}
+            onPreviewVersion={handlePreviewVersion}
+            onPageDiff={handlePageDiff}
+            onPinPage={(item) => {
+              void handlePin('page', item)
+            }}
+            onUnpinPage={(item) => {
+              void handleUnpin('page', item)
+            }}
+            snapshots={snapshots}
+            isLoadingSnapshots={isLoadingSnapshots}
+            onRollback={handleRollback}
+            onPinSnapshot={(item) => {
+              void handlePin('snapshot', item)
+            }}
+            onUnpinSnapshot={(item) => {
+              void handleUnpin('snapshot', item)
+            }}
+            productDocHistory={productDocHistory}
+            isLoadingProductDocHistory={isLoadingProductDocHistory}
+            onViewProductDoc={handleViewProductDoc}
+            onPinProductDoc={(item) => {
+              void handlePin('product-doc', item)
+            }}
+            onUnpinProductDoc={(item) => {
+              void handleUnpin('product-doc', item)
+            }}
+          />
         </div>
       )}
 
@@ -741,9 +738,7 @@ export function VersionPanel({
             </DialogTitle>
             <DialogDescription>
               {docDetail
-                ? `Created ${formatDistanceToNow(toDate(docDetail.created_at), {
-                    addSuffix: true,
-                  })}`
+                ? `Created ${formatRelativeDate(docDetail.created_at)}`
                 : 'View historical product doc content'}
             </DialogDescription>
           </DialogHeader>
@@ -785,9 +780,7 @@ export function VersionPanel({
                   </div>
                   <div>
                     Created{' '}
-                    {formatDistanceToNow(toDate(rollbackTarget.created_at), {
-                      addSuffix: true,
-                    })}
+                    {formatRelativeDate(rollbackTarget.created_at)}
                     , includes {rollbackTarget.page_count} pages
                   </div>
                 </div>
@@ -802,6 +795,14 @@ export function VersionPanel({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <DiffViewDialog
+        open={pageDiffOpen}
+        onOpenChange={setPageDiffOpen}
+        sessionId={sessionId}
+        pageId={diffPageId ?? undefined}
+        pageTitle={diffPageTitle ?? undefined}
+      />
     </div>
   )
 }

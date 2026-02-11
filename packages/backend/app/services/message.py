@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from sqlalchemy.orm import Session as DbSession
 
@@ -11,11 +11,22 @@ class MessageService:
     def __init__(self, db: DbSession) -> None:
         self.db = db
 
-    def add_message(self, session_id: str, role: str, content: str) -> Message:
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        thread_id: Optional[str] = None,
+    ) -> Message:
         normalized = role.strip().lower()
         if normalized not in {"user", "assistant"}:
             raise ValueError("Invalid role")
-        record = Message(session_id=session_id, role=normalized, content=content)
+        record = Message(
+            session_id=session_id,
+            thread_id=thread_id,
+            role=normalized,
+            content=content,
+        )
         self.db.add(record)
         self.db.flush()
         return record
@@ -24,11 +35,16 @@ class MessageService:
         self,
         session_id: str,
         *,
+        thread_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
         latest: bool = True,
     ) -> List[Message]:
-        query = self.db.query(Message).filter(Message.session_id == session_id)
+        query = self.db.query(Message).filter(
+            Message.session_id == session_id
+        )
+        if thread_id is not None:
+            query = query.filter(Message.thread_id == thread_id)
         if latest:
             messages = (
                 query.order_by(Message.timestamp.desc())
@@ -44,12 +60,17 @@ class MessageService:
             .all()
         )
 
-    def clear_messages(self, session_id: str) -> int:
-        return (
-            self.db.query(Message)
-            .filter(Message.session_id == session_id)
-            .delete(synchronize_session=False)
+    def clear_messages(
+        self,
+        session_id: str,
+        thread_id: Optional[str] = None,
+    ) -> int:
+        query = self.db.query(Message).filter(
+            Message.session_id == session_id
         )
+        if thread_id is not None:
+            query = query.filter(Message.thread_id == thread_id)
+        return query.delete(synchronize_session=False)
 
 
 __all__ = ["MessageService"]

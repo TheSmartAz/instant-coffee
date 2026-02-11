@@ -11,22 +11,17 @@ from typing import Any, Iterator, Literal, Optional
 
 from sqlalchemy import func, inspect
 from sqlalchemy.orm import Session as DbSession
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from ..db.models import (
-    Plan,
-    PlanEvent,
     SessionEvent,
     SessionEventSequence,
     SessionEventSource,
-    Task,
-    TaskEvent,
 )
-from ..events.models import BaseEvent, PlanCreatedEvent, PlanUpdatedEvent
+from ..events.models import BaseEvent
 from ..events.types import EXCLUDED_EVENT_TYPES, RUN_SCOPED_EVENT_TYPES, STRUCTURED_EVENT_TYPES
 from ..config import get_settings
 from ..db.database import get_database
-from .plan import PlanService
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +104,6 @@ class EventStoreService:
         return event_type in STRUCTURED_EVENT_TYPES
 
     def _infer_source(self, event_type: str, payload: dict) -> SessionEventSource:
-        if event_type in {"plan_created", "plan_updated"}:
-            return SessionEventSource.PLAN
-        if event_type.startswith("task_") or payload.get("task_id"):
-            return SessionEventSource.TASK
         return SessionEventSource.SESSION
 
     @classmethod
@@ -142,7 +133,17 @@ class EventStoreService:
                 next_seq=next_seq + 1,
             )
             db.add(seq_row)
-            db.flush([seq_row])
+            try:
+                db.flush([seq_row])
+            except IntegrityError:
+                db.rollback()
+                seq_row = db.get(SessionEventSequence, session_id)
+                if seq_row is None:
+                    raise
+                next_seq = int(seq_row.next_seq or 1)
+                seq_row.next_seq = next_seq + 1
+                db.add(seq_row)
+                db.flush([seq_row])
             return next_seq
         next_seq = int(seq_row.next_seq or 1)
         seq_row.next_seq = next_seq + 1
@@ -317,7 +318,6 @@ class EventStoreService:
                             created_at=event.timestamp,
                             db=db,
                         )
-                    self._record_plan_task_event(event, str(event_type), payload, db=db)
                 return
             except OperationalError as exc:
                 if self._is_sqlite_locked(exc):
@@ -327,68 +327,6 @@ class EventStoreService:
                     logger.warning("Event store busy, dropping event after retries")
                     return
                 raise
-
-    def _record_plan_task_event(
-        self, event: BaseEvent, event_type: str, payload: dict, *, db: Optional[DbSession] = None
-    ) -> None:
-        """Maintain legacy plan/task event tables for compatibility."""
-        resolved_db = db or self.db
-        timestamp = event.timestamp or datetime.now(timezone.utc)
-        if isinstance(event, PlanCreatedEvent):
-            plan_payload = payload.get("plan") or {}
-            plan = PlanService(resolved_db).upsert_plan_from_payload(
-                plan_payload, session_id=event.session_id
-            )
-            if plan is None:
-                return
-            plan_event = PlanEvent(
-                plan_id=plan.id,
-                event_type=event_type,
-                message=payload.get("message"),
-                payload=_safe_json_dumps(payload),
-                timestamp=timestamp,
-            )
-            resolved_db.add(plan_event)
-            return
-
-        if isinstance(event, PlanUpdatedEvent):
-            plan_id = payload.get("plan_id")
-            if not plan_id:
-                return
-            if resolved_db.get(Plan, plan_id) is None:
-                return
-            plan_event = PlanEvent(
-                plan_id=plan_id,
-                event_type=event_type,
-                message=payload.get("message"),
-                payload=_safe_json_dumps(payload),
-                timestamp=timestamp,
-            )
-            resolved_db.add(plan_event)
-            return
-
-        task_id = payload.get("task_id")
-        if not task_id:
-            return
-        task = resolved_db.get(Task, task_id)
-        if task is None:
-            logger.debug("Skipping event for unknown task_id=%s", task_id)
-            return
-        task_event = TaskEvent(
-            task_id=task_id,
-            event_type=event_type,
-            agent_id=payload.get("agent_id"),
-            agent_type=payload.get("agent_type"),
-            agent_instance=payload.get("agent_instance"),
-            message=payload.get("message") or payload.get("summary"),
-            progress=payload.get("progress"),
-            tool_name=payload.get("tool_name"),
-            tool_input=_safe_json_dumps(payload.get("tool_input")),
-            tool_output=_safe_json_dumps(payload.get("tool_output")),
-            payload=_safe_json_dumps(payload),
-            timestamp=timestamp,
-        )
-        resolved_db.add(task_event)
 
 
 __all__ = ["EventStoreService"]

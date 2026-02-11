@@ -63,7 +63,12 @@ export function SettingsPage() {
     <div className="flex min-h-screen flex-col animate-in fade-in">
       <header className="flex items-center gap-3 border-b border-border px-6 py-4">
         {lastProjectId ? (
-          <Button variant="ghost" size="icon" onClick={() => navigate(`/project/${lastProjectId}`)}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate(`/project/${lastProjectId}`)}
+            aria-label="Back to project"
+          >
             <ArrowLeft className="h-4 w-4" />
           </Button>
         ) : null}

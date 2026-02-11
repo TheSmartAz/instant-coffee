@@ -22,7 +22,7 @@ from ..services.page_version import (
     PinnedLimitExceeded,
 )
 from ..services.product_doc import ProductDocService
-from ..utils.html import inject_hide_scrollbar_style
+from ..utils.html import EMPTY_PREVIEW_HTML, inject_hide_scrollbar_style
 from ..utils.style import build_global_style_css
 
 router = APIRouter(prefix="/api", tags=["pages"])
@@ -147,6 +147,8 @@ def get_page_preview(
     global_style_css = _build_preview_css(product_doc)
     preview = version_service.build_preview(page_id, global_style_css=global_style_css)
     if preview is None:
+        if _accepts_html(request):
+            return HTMLResponse(content=EMPTY_PREVIEW_HTML)
         raise HTTPException(status_code=404, detail="No preview available")
 
     version, html = preview

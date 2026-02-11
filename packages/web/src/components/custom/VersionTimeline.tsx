@@ -1,10 +1,10 @@
 import * as React from 'react'
-import { formatDistanceToNow } from 'date-fns'
 import { Eye, Loader2, Pin, PinOff, RotateCcw } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
+import { formatRelativeDate } from '@/lib/formatRelativeDate'
 import { cn } from '@/lib/utils'
 import type { PageVersion, ProductDocHistory, ProjectSnapshot, VersionSource } from '@/types'
 
@@ -25,10 +25,11 @@ export interface VersionTimelineProps {
   emptyMessage?: string
   actionState?: VersionTimelineActionState | null
   onView?: (item: PageVersion | ProductDocHistory) => void
-  onDiff?: (item: ProductDocHistory) => void
+  onDiff?: (item: ProductDocHistory | PageVersion) => void
   onRollback?: (item: ProjectSnapshot) => void
   onPin?: (item: PageVersion | ProjectSnapshot | ProductDocHistory) => void
   onUnpin?: (item: PageVersion | ProjectSnapshot | ProductDocHistory) => void
+  onPageDiff?: (pageId: string, pageTitle: string) => void  // New: for page diff
 }
 
 const sourceLabels: Record<VersionSource, string> = {
@@ -122,7 +123,7 @@ const getId = (
 const getPreviewable = (item: PageVersion | ProjectSnapshot | ProductDocHistory) =>
   (item as PageVersion).previewable
 
-export function VersionTimeline({
+export const VersionTimeline = React.memo(function VersionTimeline({
   type,
   versions,
   currentId,
@@ -135,6 +136,7 @@ export function VersionTimeline({
   onRollback,
   onPin,
   onUnpin,
+  onPageDiff,
 }: VersionTimelineProps) {
   const { pinnedItems, regularItems } = React.useMemo(() => {
     const pinned: Array<PageVersion | ProjectSnapshot | ProductDocHistory> = []
@@ -265,7 +267,7 @@ export function VersionTimeline({
                             ) : null}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            {formatDistanceToNow(createdAt, { addSuffix: true })}
+                            {formatRelativeDate(createdAt)}
                           </div>
                         </div>
                         <div className="text-[10px] text-muted-foreground">
@@ -293,6 +295,7 @@ export function VersionTimeline({
                             className={actionButtonClass}
                             onClick={() => onView?.(item as PageVersion | ProductDocHistory)}
                             disabled={isUnavailable || (type === 'page' && !previewable)}
+                            aria-label={`View ${title}`}
                           >
                             {actionState?.id === id && actionState.action === 'view' ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
@@ -311,8 +314,20 @@ export function VersionTimeline({
                             variant="ghost"
                             size="sm"
                             className={actionButtonClass}
-                            onClick={() => onDiff?.(item as ProductDocHistory)}
+                            onClick={() => {
+                              if (type === 'page') {
+                                // Page diff - use onPageDiff callback
+                                onPageDiff?.(
+                                  (item as PageVersion).pageId,
+                                  `v${(item as PageVersion).version}`
+                                )
+                              } else {
+                                // Product doc diff - use onDiff callback
+                                onDiff?.(item as ProductDocHistory)
+                              }
+                            }}
                             disabled={isUnavailable || actionState?.action === 'diff'}
+                            aria-label={`Compare ${title}`}
                           >
                             {actionState?.id === id && actionState.action === 'diff' ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
@@ -330,6 +345,7 @@ export function VersionTimeline({
                             className={actionButtonClass}
                             onClick={() => onRollback?.(item as ProjectSnapshot)}
                             disabled={isUnavailable}
+                            aria-label={`Rollback to ${title}`}
                           >
                             {actionState?.id === id && actionState.action === 'rollback' ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
@@ -358,6 +374,7 @@ export function VersionTimeline({
                                   )
                             }
                             disabled={isUnavailable}
+                            aria-label={`${isPinned ? 'Unpin' : 'Pin'} ${title}`}
                           >
                             {actionState?.id === id &&
                             (actionState.action === 'pin' || actionState.action === 'unpin') ? (
@@ -396,4 +413,6 @@ export function VersionTimeline({
       </div>
     </ScrollArea>
   )
-}
+})
+
+VersionTimeline.displayName = 'VersionTimeline'

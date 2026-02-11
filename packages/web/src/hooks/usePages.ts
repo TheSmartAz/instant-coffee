@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { api } from '@/api/client'
+import { notifyAsyncError } from '@/lib/notifyAsyncError'
 import type { Page } from '@/types'
 
 type ApiPage = {
@@ -112,7 +113,10 @@ export function usePages(
         const response = await api.pages.getPreview(pageId)
         return response.html ?? null
       } catch (err) {
-        console.error('Failed to load page preview:', err)
+        notifyAsyncError(err, {
+          title: 'Failed to load page preview',
+          loggerPrefix: 'Failed to load page preview:',
+        })
         return null
       }
     },

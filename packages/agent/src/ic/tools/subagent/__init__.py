@@ -1,4 +1,4 @@
-"""Sub-agent tool - enables multi-agent collaboration."""
+"""Sub-agent tools - enables multi-agent collaboration."""
 
 from __future__ import annotations
 
@@ -51,3 +51,56 @@ class CreateSubAgent(BaseTool):
             return ToolResult(output=result)
         except Exception as e:
             return ToolResult(error=f"Sub-agent failed: {e}", is_error=True)
+
+
+class CreateParallelSubAgents(BaseTool):
+    name = "create_parallel_sub_agents"
+    description = (
+        "Spawn multiple sub-agents that run concurrently. Each sub-agent "
+        "executes its task independently and in parallel. Use this for "
+        "multi-page generation where each page can be built independently. "
+        "All sub-agents share the same workspace and have access to file, "
+        "shell, and think tools."
+    )
+    parameters = [
+        ToolParam(
+            name="tasks",
+            type="array",
+            description=(
+                "Array of task objects. Each object has: "
+                "'task' (string, required) — description of what to build; "
+                "'model' (string, optional) — model override; "
+                "'max_turns' (integer, optional, default 30) — turn limit."
+            ),
+        ),
+    ]
+    is_concurrent_safe = False
+    timeout_seconds = 600.0  # 10 minutes for parallel page generation
+
+    def __init__(self, engine: Engine | None = None):
+        self._engine = engine
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        if not self._engine:
+            return ToolResult(error="Sub-agent engine not available", is_error=True)
+
+        tasks = kwargs.get("tasks", [])
+        if not tasks or not isinstance(tasks, list):
+            return ToolResult(error="'tasks' must be a non-empty array", is_error=True)
+
+        try:
+            results = await self._engine.run_sub_agents_parallel(tasks)
+        except Exception as e:
+            return ToolResult(error=f"Parallel sub-agents failed: {e}", is_error=True)
+
+        # Format summary
+        lines = [f"Parallel execution complete — {len(results)} sub-agents ran.\n"]
+        for i, r in enumerate(results, 1):
+            task_desc = r["task"][:80]
+            if r["error"]:
+                lines.append(f"### Agent {i}: FAILED\nTask: {task_desc}\nError: {r['error']}\n")
+            else:
+                summary = (r["result"] or "")[:500]
+                lines.append(f"### Agent {i}: OK\nTask: {task_desc}\nResult: {summary}\n")
+
+        return ToolResult(output="\n".join(lines))

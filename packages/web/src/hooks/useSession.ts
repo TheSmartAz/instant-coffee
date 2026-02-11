@@ -12,13 +12,19 @@ import { loadInterviewBatch } from '@/lib/interviewStorage'
 import {
   mergeInterviewAnswerList,
   normalizeInterviewAnswers,
-  normalizeInterviewQuestions,
 } from '@/lib/interviewUtils'
 import {
   clearPendingMessage,
   fromStoredMessage,
   loadPendingMessage,
 } from '@/lib/pendingMessageStorage'
+import {
+  buildInterviewBatchesFromEvents,
+  buildStepsFromEvents,
+  mapInterviewActionToStatus,
+  STEP_EVENT_TYPES,
+} from '@/lib/eventProcessors'
+import { getCaseArray, getCaseString, getCaseValue } from '@/lib/caseAccess'
 import type { SessionEvent } from '@/types/events'
 
 const PENDING_MESSAGE_TTL_MS = 10 * 60 * 1000
@@ -280,10 +286,11 @@ const applyStoredInterview = (
 
 const applyPendingMessage = (
   sessionId: string | undefined,
-  messages: Message[]
+  messages: Message[],
+  threadId?: string
 ) => {
   if (!sessionId) return messages
-  const pending = loadPendingMessage(sessionId)
+  const pending = loadPendingMessage(sessionId, threadId)
   if (!pending?.assistant) return messages
   const restored = fromStoredMessage(pending.assistant)
   if (messages.some((message) => message.id === restored.id)) {
@@ -293,12 +300,12 @@ const applyPendingMessage = (
     restored.interview?.id &&
     messages.some((message) => message.interview?.id === restored.interview?.id)
   ) {
-    clearPendingMessage(sessionId)
+    clearPendingMessage(sessionId, threadId)
     return messages
   }
   const savedAt = pending.savedAt ? new Date(pending.savedAt) : null
   if (savedAt && Date.now() - savedAt.getTime() > PENDING_MESSAGE_TTL_MS) {
-    clearPendingMessage(sessionId)
+    clearPendingMessage(sessionId, threadId)
     return messages
   }
   if (
@@ -310,7 +317,7 @@ const applyPendingMessage = (
         message.timestamp >= savedAt
     )
   ) {
-    clearPendingMessage(sessionId)
+    clearPendingMessage(sessionId, threadId)
     return messages
   }
   return [
@@ -322,146 +329,71 @@ const applyPendingMessage = (
   ]
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value && typeof value === 'object')
-
-const getString = (value: unknown) =>
-  typeof value === 'string' ? value : undefined
-
-const mapInterviewActionToStatus = (
-  action?: string
-): InterviewBatch['status'] | undefined => {
-  switch (action) {
-    case 'generate_now':
-      return 'generated'
-    case 'skip_batch':
-      return 'skipped'
-    case 'submit_batch':
-      return 'submitted'
-    case 'update_answers':
-      return 'active'
-    default:
-      return undefined
-  }
-}
-
-const normalizeInterviewBatchActivity = (batches: InterviewBatch[]) => {
-  if (batches.length === 0) return batches
-
-  const latestBatch = batches[batches.length - 1]
-  if (!latestBatch) return batches
-
-  if (latestBatch.status === 'active') {
-    for (let index = 0; index < batches.length - 1; index += 1) {
-      if (batches[index].status === 'active') {
-        batches[index].status = 'submitted'
-      }
-    }
-    return batches
-  }
-
-  for (const batch of batches) {
-    if (batch.status === 'active') {
-      batch.status = 'submitted'
-    }
-  }
-
-  return batches
-}
-
-const buildInterviewBatchesFromEvents = (events: SessionEvent[]): InterviewBatch[] => {
-  const sorted = [...events].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
-  const batches: InterviewBatch[] = []
-  const byId = new Map<string, InterviewBatch>()
-  let totalCount = 0
-  let latestBatchId: string | null = null
-
-  for (const event of sorted) {
-    if (event.type !== 'interview_question' && event.type !== 'interview_answer') {
-      continue
-    }
-    const payload = isRecord(event.payload) ? event.payload : {}
-
-    if (event.type === 'interview_question') {
-      const questions = normalizeInterviewQuestions(payload.questions)
-      if (questions.length === 0) continue
-      const batchId = String(
-        payload.batch_id ?? payload.batchId ?? payload.id ?? `batch-${event.seq ?? batches.length + 1}`
-      )
-      const prompt = getString(payload.message ?? payload.prompt)
-      const startIndex = totalCount + 1
-      totalCount += questions.length
-      const batch: InterviewBatch = {
-        id: batchId,
-        prompt,
-        questions,
-        startIndex,
-        totalCount,
-        status: 'active',
-      }
-      batches.push(batch)
-      byId.set(batchId, batch)
-      latestBatchId = batchId
-      continue
-    }
-
-    if (event.type === 'interview_answer') {
-      const answers = normalizeInterviewAnswers(
-        payload.answers ?? payload.answer ?? payload.responses ?? payload.response
-      )
-      const batchIdRaw = payload.batch_id ?? payload.batchId ?? payload.id ?? latestBatchId
-      if (!batchIdRaw) continue
-      const batchId = String(batchIdRaw)
-      const batch = byId.get(batchId)
-      if (!batch) continue
-
-      if (answers.length > 0) {
-        const questionIndex = new Map(
-          batch.questions.map((question, index) => [
-            question.id,
-            batch.startIndex + index,
-          ])
-        )
-        const enriched = answers.map((answer, index) => ({
-          ...answer,
-          question:
-            batch.questions.find((q) => q.id === answer.id)?.title ?? answer.question,
-          index:
-            typeof answer.index === 'number'
-              ? answer.index
-              : questionIndex.get(answer.id) ?? batch.startIndex + index,
-        }))
-        batch.answers = mergeInterviewAnswerList(batch.answers, enriched)
-      }
-
-      const action = getString(payload.action)
-      const status = mapInterviewActionToStatus(action)
-      if (status && status !== 'active') {
-        batch.status = status
-        latestBatchId = null
-      } else if (status) {
-        batch.status = status
-      }
-    }
-  }
-
-  return normalizeInterviewBatchActivity(batches)
-}
-
 const extractMessagesList = (messagesResponse: unknown): ApiMessage[] =>
   Array.isArray(messagesResponse)
     ? (messagesResponse as ApiMessage[])
     : (messagesResponse as { messages?: ApiMessage[] })?.messages ?? []
 
+const attachStepsToMessages = (
+  messages: Message[],
+  events: SessionEvent[]
+): Message[] => {
+  const stepsByRun = buildStepsFromEvents(events)
+  if (stepsByRun.size === 0) return messages
+
+  let next = messages
+  for (const [, steps] of stepsByRun) {
+    // Find the assistant message whose timestamp is closest to the events
+    const eventTimes = events
+      .filter((e) => STEP_EVENT_TYPES.has(e.type))
+      .map((e) => new Date(e.created_at).getTime())
+    if (eventTimes.length === 0) continue
+    const minTime = Math.min(...eventTimes)
+    const maxTime = Math.max(...eventTimes)
+
+    let bestIndex = -1
+    let bestDistance = Infinity
+    for (let i = next.length - 1; i >= 0; i--) {
+      const msg = next[i]
+      if (msg.role !== 'assistant') continue
+      if (msg.steps && msg.steps.length > 0) continue
+      const msgTime = msg.timestamp?.getTime() ?? 0
+      // Prefer messages whose timestamp falls within or just before the event range
+      const distance = Math.abs(msgTime - maxTime)
+      if (msgTime >= minTime - 60000 && distance < bestDistance) {
+        bestDistance = distance
+        bestIndex = i
+      }
+    }
+
+    if (bestIndex < 0) {
+      // Fallback: last assistant message without steps
+      for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].role === 'assistant' && (!next[i].steps || next[i].steps!.length === 0)) {
+          bestIndex = i
+          break
+        }
+      }
+    }
+
+    if (bestIndex < 0) continue
+    if (next === messages) next = [...messages]
+    next[bestIndex] = { ...next[bestIndex], steps }
+  }
+
+  return next
+}
+
 const buildBaseMessages = (
   sessionId: string | undefined,
-  rawMessages: ApiMessage[]
+  rawMessages: ApiMessage[],
+  threadId?: string
 ) => {
   const mappedMessages = rawMessages.map(mapMessage)
   const payloadMap = buildInterviewPayloadMap(rawMessages, mappedMessages)
   let nextMessages = applyStoredInterview(sessionId, rawMessages, mappedMessages)
   nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
-  nextMessages = applyPendingMessage(sessionId, nextMessages)
+  nextMessages = applyPendingMessage(sessionId, nextMessages, threadId)
   return { messages: nextMessages, payloadMap }
 }
 
@@ -469,13 +401,14 @@ const applyInterviewEvents = (
   sessionId: string | undefined,
   messages: Message[],
   payloadMap: Map<string, { action?: string; answers: InterviewAnswer[] }>,
-  events: SessionEvent[]
+  events: SessionEvent[],
+  threadId?: string
 ) => {
   const interviewBatches = buildInterviewBatchesFromEvents(events)
   if (interviewBatches.length === 0) return messages
   let nextMessages = attachInterviewBatches(messages, interviewBatches)
   nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
-  nextMessages = applyPendingMessage(sessionId, nextMessages)
+  nextMessages = applyPendingMessage(sessionId, nextMessages, threadId)
   return nextMessages
 }
 
@@ -535,50 +468,32 @@ const attachInterviewBatches = (
 }
 
 const mapMessage = (message: ApiMessage, index: number): Message => {
-  const rawContent = message.content ?? message.message ?? ''
+  const rawContent =
+    getCaseString(message, 'content', { trim: false }) ??
+    getCaseString(message, 'message', { trim: false }) ??
+    ''
   const parsedInterview = parseInterviewFromContent(rawContent)
-  const action =
-    typeof message.action === 'string'
-      ? (message.action as Message['action'])
-      : undefined
+  const role = getCaseString(message, 'role')
+  const action = getCaseString(message, 'action') as Message['action'] | undefined
   const productDocUpdated =
-    message.product_doc_updated === true || action === 'product_doc_updated'
+    getCaseValue<boolean>(message, 'product_doc_updated') === true ||
+    action === 'product_doc_updated'
 
   return {
     id: message.id ?? `m-${index}-${Date.now()}`,
-    role: message.role === 'user' ? 'user' : 'assistant',
+    role: role === 'user' ? 'user' : 'assistant',
     content: parsedInterview.cleanContent,
-    timestamp: toDate(message.created_at ?? message.timestamp),
+    timestamp: toDate(getCaseString(message, 'created_at') ?? getCaseString(message, 'timestamp')),
     interviewSummary: parsedInterview.interviewSummary,
     action,
     productDocUpdated,
-    productDocChangeSummary:
-      typeof message.change_summary === 'string'
-        ? message.change_summary
-        : typeof message.changeSummary === 'string'
-          ? message.changeSummary
-          : undefined,
-    productDocSectionName:
-      typeof message.section_name === 'string'
-        ? message.section_name
-        : typeof message.sectionName === 'string'
-          ? message.sectionName
-          : undefined,
-    productDocSectionContent:
-      typeof message.section_content === 'string'
-        ? message.section_content
-        : typeof message.sectionContent === 'string'
-          ? message.sectionContent
-          : undefined,
-    affectedPages: Array.isArray(message.affected_pages)
-      ? message.affected_pages
-      : undefined,
-    activePageSlug:
-      typeof message.active_page_slug === 'string'
-        ? message.active_page_slug
-        : undefined,
+    productDocChangeSummary: getCaseString(message, 'change_summary'),
+    productDocSectionName: getCaseString(message, 'section_name'),
+    productDocSectionContent: getCaseString(message, 'section_content', { trim: false }),
+    affectedPages: getCaseArray<string>(message, 'affected_pages'),
+    activePageSlug: getCaseString(message, 'active_page_slug'),
     hidden:
-      message.role === 'user' &&
+      role === 'user' &&
       parsedInterview.isInterviewOnly &&
       parsedInterview.interviewAction !== 'update_answers',
   }
@@ -600,7 +515,7 @@ const mapVersion = (
   }
 }
 
-export function useSession(sessionId?: string) {
+export function useSession(sessionId?: string, threadId?: string) {
   const [session, setSession] = React.useState<SessionDetail | null>(null)
   const [messages, setMessagesState] = React.useState<Message[]>([])
   const [versions, setVersions] = React.useState<Version[]>([])
@@ -616,28 +531,49 @@ export function useSession(sessionId?: string) {
     []
   )
 
-  const refresh = React.useCallback(async () => {
-    if (!sessionId) return
-    const loadStartedAt = Date.now()
-    setIsLoading(true)
-    setError(null)
-    try {
+  // Track previous threadId to detect switches
+  const prevThreadIdRef = React.useRef(threadId)
+
+  const buildMessagesFromApi = React.useCallback(
+    (sid: string, messagesResponse: unknown, tid?: string) => {
+      const messagesList = extractMessagesList(messagesResponse)
+      return {
+        messagesList,
+        base: buildBaseMessages(sid, messagesList, tid),
+      }
+    },
+    []
+  )
+
+  const loadSessionData = React.useCallback(
+    async (
+      sid: string,
+      tid: string | undefined,
+      options?: { active?: () => boolean },
+    ) => {
+      const isActive = options?.active ?? (() => true)
+      const loadStartedAt = Date.now()
+      const fetches: [
+        Promise<unknown>,
+        Promise<unknown>,
+        Promise<unknown>,
+      ] = [
+        api.sessions.get(sid),
+        api.sessions.messages(sid, tid),
+        api.sessions.versions(sid, { includePreviewHtml: false }),
+      ]
       const [sessionResponse, messagesResponse, versionsResponse] =
-        await Promise.all([
-          api.sessions.get(sessionId),
-          api.sessions.messages(sessionId),
-          api.sessions.versions(sessionId, { includePreviewHtml: false }),
-        ])
+        await Promise.all(fetches)
+      if (!isActive()) return
 
       if (sessionResponse) {
         setSession(mapSession(sessionResponse as ApiSession))
       }
 
-      const messagesList = extractMessagesList(messagesResponse)
-      const { messages: baseMessages, payloadMap } = buildBaseMessages(
-        sessionId,
-        messagesList
-      )
+      const {
+        messagesList,
+        base: { messages: baseMessages, payloadMap },
+      } = buildMessagesFromApi(sid, messagesResponse, tid)
       if (lastMessageUpdateRef.current <= loadStartedAt) {
         setMessagesState(baseMessages)
         lastMessageUpdateRef.current = Date.now()
@@ -657,20 +593,33 @@ export function useSession(sessionId?: string) {
         void (async () => {
           try {
             const eventsResponse = await api.events.getSessionEvents(
-              sessionId,
+              sid,
               undefined,
-              INTERVIEW_EVENT_LIMIT
+              INTERVIEW_EVENT_LIMIT,
             )
+            if (!isActive()) return
             const events = (eventsResponse as { events?: SessionEvent[] })?.events ?? []
             if (events.length === 0) return
-            setMessages((prev) =>
-              applyInterviewEvents(sessionId, prev, payloadMap, events)
-            )
+            setMessages((prev) => {
+              let next = applyInterviewEvents(sid, prev, payloadMap, events, tid)
+              next = attachStepsToMessages(next, events)
+              return next
+            })
           } catch {
             // Ignore event recovery failures, keep base messages.
           }
         })()
       }
+    },
+    [buildMessagesFromApi, setMessages],
+  )
+
+  const refresh = React.useCallback(async () => {
+    if (!sessionId) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      await loadSessionData(sessionId, threadId)
       return true
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load session'
@@ -679,66 +628,27 @@ export function useSession(sessionId?: string) {
     } finally {
       setIsLoading(false)
     }
-  }, [sessionId, setMessages])
+  }, [sessionId, threadId, loadSessionData])
 
   React.useEffect(() => {
     let active = true
     if (!sessionId) return
+
+    const prevThreadId = prevThreadIdRef.current
+    if (prevThreadId !== threadId) {
+      if (prevThreadId !== undefined) {
+        setMessagesState([])
+        lastMessageUpdateRef.current = Date.now()
+      }
+      prevThreadIdRef.current = threadId
+    }
+
     const load = async () => {
-      const loadStartedAt = Date.now()
       setIsLoading(true)
       try {
-        const [sessionResponse, messagesResponse, versionsResponse] =
-          await Promise.all([
-            api.sessions.get(sessionId),
-            api.sessions.messages(sessionId),
-            api.sessions.versions(sessionId, { includePreviewHtml: false }),
-          ])
-        if (!active) return
-
-        if (sessionResponse) {
-          setSession(mapSession(sessionResponse as ApiSession))
-        }
-
-        const messagesList = extractMessagesList(messagesResponse)
-        const { messages: baseMessages, payloadMap } = buildBaseMessages(
-          sessionId,
-          messagesList
-        )
-        if (lastMessageUpdateRef.current <= loadStartedAt) {
-          setMessagesState(baseMessages)
-          lastMessageUpdateRef.current = Date.now()
-        }
-
-        const versionsPayload = versionsResponse as {
-          versions?: ApiVersion[]
-          current_version?: number
-        }
-        const currentVersion = versionsPayload?.current_version
-        const versionList = Array.isArray(versionsResponse)
-          ? versionsResponse
-          : versionsPayload?.versions ?? []
-        setVersions(versionList.map((item) => mapVersion(item, currentVersion)))
-
-        if (messagesList.length > 0) {
-          void (async () => {
-            try {
-              const eventsResponse = await api.events.getSessionEvents(
-                sessionId,
-                undefined,
-                INTERVIEW_EVENT_LIMIT
-              )
-              if (!active) return
-              const events = (eventsResponse as { events?: SessionEvent[] })?.events ?? []
-              if (events.length === 0) return
-              setMessages((prev) =>
-                applyInterviewEvents(sessionId, prev, payloadMap, events)
-              )
-            } catch {
-              // Ignore event recovery failures, keep base messages.
-            }
-          })()
-        }
+        await loadSessionData(sessionId, threadId, {
+          active: () => active,
+        })
       } catch (err) {
         if (!active) return
         const message = err instanceof Error ? err.message : 'Failed to load session'
@@ -751,7 +661,7 @@ export function useSession(sessionId?: string) {
     return () => {
       active = false
     }
-  }, [sessionId, setMessages])
+  }, [sessionId, threadId, loadSessionData])
 
   return {
     session,

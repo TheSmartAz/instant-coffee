@@ -104,8 +104,9 @@ export const useAestheticScore = (sessionId?: string) => {
       try {
         const metadata = await api.sessions.getMetadata(sessionId)
         if (!active || !metadata || typeof metadata !== 'object') return
-        const payload = metadata as Record<string, unknown>
-        const rawScore = payload.aesthetic_scores ?? payload.aestheticScores
+        const rawScore =
+          metadata.aesthetic_scores ??
+          (metadata as unknown as { aestheticScores?: unknown }).aestheticScores
         const normalized = normalizeAestheticScore(rawScore)
         if (normalized) setScore(normalized)
       } catch {

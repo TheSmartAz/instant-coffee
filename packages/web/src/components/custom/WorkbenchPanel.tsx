@@ -5,6 +5,7 @@ import { PreviewPanel, type PageInfo } from './PreviewPanel'
 import { CodePanel } from './CodePanel'
 import { ProductDocPanel } from './ProductDocPanel'
 import { DataTab } from './DataTab'
+import type { ProductDoc } from '@/types'
 import type { AestheticScore } from '@/types/aesthetic'
 import type { BuildState } from '@/types/build'
 
@@ -20,6 +21,9 @@ export interface WorkbenchPanelProps {
   buildDisabled?: boolean
   previewVersion?: number | null
   productDocVersion?: number | null
+  productDoc?: ProductDoc | null
+  isProductDocLoading?: boolean
+  productDocError?: string | null
 
   // Tab management
   activeTab: WorkbenchTab
@@ -68,6 +72,9 @@ export function WorkbenchPanel({
   buildDisabled,
   previewVersion,
   productDocVersion,
+  productDoc,
+  isProductDocLoading,
+  productDocError,
   activeTab,
   onTabChange,
   pages,
@@ -181,6 +188,9 @@ export function WorkbenchPanel({
               sessionId={sessionId}
               onBuild={onBuildFromDoc}
               buildDisabled={buildDisabled}
+              productDoc={productDoc}
+              isLoading={isProductDocLoading}
+              error={productDocError}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
@@ -190,7 +200,9 @@ export function WorkbenchPanel({
         </div>
 
         <div className={cn('h-full', activeTab === 'data' ? 'block' : 'hidden')}>
-          <DataTab sessionId={sessionId} key={sessionId || 'data-tab'} />
+          {activeTab === 'data' && (
+            <DataTab sessionId={sessionId} key={sessionId || 'data-tab'} />
+          )}
         </div>
       </div>
     </div>

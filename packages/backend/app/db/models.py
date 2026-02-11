@@ -47,10 +47,10 @@ class Session(Base):
     build_artifacts = Column(JSON, nullable=True)
     aesthetic_scores = Column(JSON, nullable=True)
 
+    threads = relationship("Thread", back_populates="session", cascade="all, delete-orphan")
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
     versions = relationship("Version", back_populates="session", cascade="all, delete-orphan")
     token_usage = relationship("TokenUsage", back_populates="session", cascade="all, delete-orphan")
-    plans = relationship("Plan", back_populates="session", cascade="all, delete-orphan")
     product_doc = relationship(
         "ProductDoc",
         back_populates="session",
@@ -124,20 +124,60 @@ class SessionRun(Base):
         return value
 
 
+class Thread(Base):
+    __tablename__ = "threads"
+
+    id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
+    session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    session = relationship("Session", back_populates="threads")
+    messages = relationship("Message", back_populates="thread", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_threads_session_id", "session_id"),
+        Index("idx_threads_session_created", "session_id", "created_at"),
+    )
+
+
+class ProjectMemory(Base):
+    """Persistent project memory for session resume."""
+    __tablename__ = "project_memory"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    key = Column(String(100), nullable=False)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    session = relationship("Session")
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "key", name="uq_project_memory_session_key"),
+        Index("idx_project_memory_session_id", "session_id"),
+    )
+
+
 class Message(Base):
     __tablename__ = "messages"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    thread_id = Column(String, ForeignKey("threads.id", ondelete="CASCADE"), nullable=True)
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=utcnow)
 
     session = relationship("Session", back_populates="messages")
+    thread = relationship("Thread", back_populates="messages")
 
     __table_args__ = (
         Index("idx_messages_session_id", "session_id"),
         Index("idx_messages_session_ts", "session_id", "timestamp"),
+        Index("idx_messages_thread_id", "thread_id"),
+        Index("idx_messages_thread_ts", "thread_id", "timestamp"),
     )
 
 
@@ -178,107 +218,6 @@ class TokenUsage(Base):
         Index("idx_token_usage_session_id", "session_id"),
         Index("idx_token_usage_session_ts", "session_id", "timestamp"),
     )
-
-
-class PlanStatus(str, enum.Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    DONE = "done"
-    FAILED = "failed"
-    ABORTED = "aborted"
-
-
-class TaskStatus(str, enum.Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    DONE = "done"
-    FAILED = "failed"
-    BLOCKED = "blocked"
-    SKIPPED = "skipped"
-    RETRYING = "retrying"
-    ABORTED = "aborted"
-    TIMEOUT = "timeout"
-
-
-class Plan(Base):
-    __tablename__ = "plans"
-
-    id = Column(String, primary_key=True)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
-    goal = Column(Text, nullable=False)
-    status = Column(String, default=PlanStatus.PENDING.value)
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
-
-    session = relationship("Session", back_populates="plans")
-    tasks = relationship("Task", back_populates="plan", cascade="all, delete-orphan")
-    events = relationship("PlanEvent", back_populates="plan", cascade="all, delete-orphan")
-
-    __table_args__ = (
-        Index("idx_plans_session_id", "session_id"),
-        Index("idx_plans_status", "status"),
-    )
-
-
-class Task(Base):
-    __tablename__ = "tasks"
-
-    id = Column(String, primary_key=True)
-    plan_id = Column(String, ForeignKey("plans.id"), nullable=False)
-    title = Column(String, nullable=False)
-    description = Column(Text)
-    agent_type = Column(String)
-    status = Column(String, default=TaskStatus.PENDING.value)
-    progress = Column(Integer, default=0)
-    depends_on = Column(Text)
-    can_parallel = Column(Boolean, default=True)
-    retry_count = Column(Integer, default=0)
-    error_message = Column(Text)
-    result = Column(Text)
-    started_at = Column(DateTime)
-    completed_at = Column(DateTime)
-    created_at = Column(DateTime, default=utcnow)
-
-    plan = relationship("Plan", back_populates="tasks")
-    events = relationship("TaskEvent", back_populates="task", cascade="all, delete-orphan")
-
-    __table_args__ = (
-        Index("idx_tasks_plan_id", "plan_id"),
-        Index("idx_tasks_status", "status"),
-    )
-
-
-class PlanEvent(Base):
-    __tablename__ = "plan_events"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    plan_id = Column(String, ForeignKey("plans.id"), nullable=False)
-    event_type = Column(String, nullable=False)
-    message = Column(Text)
-    payload = Column(Text)
-    timestamp = Column(DateTime, default=utcnow)
-
-    plan = relationship("Plan", back_populates="events")
-
-
-class TaskEvent(Base):
-    __tablename__ = "task_events"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
-    event_type = Column(String, nullable=False)
-    agent_id = Column(String)
-    agent_type = Column(String)
-    agent_instance = Column(Integer)
-    message = Column(Text)
-    progress = Column(Integer)
-    tool_name = Column(String)
-    tool_input = Column(Text)
-    tool_output = Column(Text)
-    payload = Column(Text)
-    timestamp = Column(DateTime, default=utcnow)
-
-    task = relationship("Task", back_populates="events")
 
 
 class ProductDocStatus(str, enum.Enum):
@@ -560,15 +499,10 @@ class SessionEventSequence(Base):
 
 __all__ = [
     "Session",
+    "Thread",
     "Message",
     "Version",
     "TokenUsage",
-    "Plan",
-    "Task",
-    "PlanEvent",
-    "TaskEvent",
-    "PlanStatus",
-    "TaskStatus",
     "ProductDocStatus",
     "VersionSource",
     "SessionEventSource",
@@ -577,6 +511,7 @@ __all__ = [
     "ProjectSnapshot",
     "ProjectSnapshotDoc",
     "ProjectSnapshotPage",
+    "ProjectMemory",
     "Page",
     "PageVersion",
     "SessionRun",

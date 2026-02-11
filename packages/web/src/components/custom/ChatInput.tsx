@@ -16,9 +16,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import type { AssetType, ChatAttachment, ChatStyleReference, Page } from '@/types'
+import type { AssetType, ChatAttachment, ChatStyleReference, ImageIntent, Page } from '@/types'
 import { toast } from '@/hooks/use-toast'
 import { useSettings } from '@/hooks/useSettings'
+import { useMentionState } from '@/hooks/useMentionState'
+import { compressImageFile } from '@/lib/imageCompression'
 import logoDeepSeek from '@/assets/model-logos/deepseek.png'
 import logoGemini from '@/assets/model-logos/gemini.png'
 import logoGrok from '@/assets/model-logos/grok.png'
@@ -31,7 +33,7 @@ import logoZai from '@/assets/model-logos/zai.png'
 import { AssetTypeSelector } from './AssetTypeSelector'
 import { ImageThumbnail } from './ImageThumbnail'
 import { PageMentionPopover } from './PageMentionPopover'
-import { filterPages, parsePageMentions } from '@/utils/chat'
+import { parsePageMentions } from '@/utils/chat'
 
 export interface ChatInputProps {
   onSend: (
@@ -39,7 +41,9 @@ export interface ChatInputProps {
     options?: {
       triggerInterview?: boolean
       attachments?: ChatAttachment[]
+      imageIntent?: ImageIntent
       targetPages?: string[]
+      mentionedFiles?: string[]
       styleReference?: ChatStyleReference
     }
   ) => void
@@ -50,17 +54,12 @@ export interface ChatInputProps {
   ) => Promise<void>
   disabled?: boolean
   placeholder?: string
-  initialInterviewOn?: boolean
-  showInterviewToggle?: boolean
   pages?: Page[]
 }
 
 const MAX_ATTACHMENTS = 3
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_ASSET_FILE_SIZE = 10 * 1024 * 1024
-const MAX_IMAGE_DIMENSION = 2048
-const MENTION_POPOVER_WIDTH = 288
-const MENTION_POPOVER_HEIGHT = 224
 const ASSET_ACCEPT_TYPES = 'image/png,image/jpeg,image/webp,image/svg+xml'
 
 const ASSET_TYPE_LABELS: Record<AssetType, string> = {
@@ -120,81 +119,6 @@ const resolveModelLogo = (modelId?: string, label?: string) => {
   return null
 }
 
-const isValidMentionBoundary = (value?: string) =>
-  !value || !/[A-Za-z0-9_]/.test(value)
-
-const findMentionAtCursor = (value: string, cursor: number) => {
-  const uptoCursor = value.slice(0, cursor)
-  const atIndex = uptoCursor.lastIndexOf('@')
-  if (atIndex === -1) return null
-  const prevChar = atIndex > 0 ? value[atIndex - 1] : undefined
-  if (!isValidMentionBoundary(prevChar)) return null
-
-  const fragment = uptoCursor.slice(atIndex + 1)
-  if (!/^[A-Za-z0-9_-]*$/.test(fragment)) return null
-
-  return { start: atIndex, end: cursor, query: fragment }
-}
-
-const getCaretCoords = (textarea: HTMLTextAreaElement, position: number) => {
-  const style = window.getComputedStyle(textarea)
-  const div = document.createElement('div')
-  const properties = [
-    'boxSizing',
-    'width',
-    'height',
-    'overflowX',
-    'overflowY',
-    'borderTopWidth',
-    'borderRightWidth',
-    'borderBottomWidth',
-    'borderLeftWidth',
-    'paddingTop',
-    'paddingRight',
-    'paddingBottom',
-    'paddingLeft',
-    'fontStyle',
-    'fontVariant',
-    'fontWeight',
-    'fontStretch',
-    'fontSize',
-    'fontSizeAdjust',
-    'lineHeight',
-    'fontFamily',
-    'textAlign',
-    'textTransform',
-    'textIndent',
-    'textDecoration',
-    'letterSpacing',
-    'wordSpacing',
-    'tabSize',
-  ] as const
-
-  properties.forEach((prop) => {
-    div.style[prop] = style[prop]
-  })
-
-  div.style.position = 'absolute'
-  div.style.visibility = 'hidden'
-  div.style.whiteSpace = 'pre-wrap'
-  div.style.wordWrap = 'break-word'
-  div.style.left = '-9999px'
-  div.textContent = textarea.value.substring(0, position)
-
-  const span = document.createElement('span')
-  span.textContent = textarea.value.substring(position) || '.'
-  div.appendChild(span)
-  document.body.appendChild(div)
-
-  const top = span.offsetTop
-  const left = span.offsetLeft
-  const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) || 16
-
-  document.body.removeChild(div)
-
-  return { top, left, lineHeight }
-}
-
 const readImageFile = async (file: File): Promise<ChatAttachment | null> =>
   new Promise((resolve) => {
     const reader = new FileReader()
@@ -226,132 +150,16 @@ const readImageFile = async (file: File): Promise<ChatAttachment | null> =>
     reader.readAsDataURL(file)
   })
 
-const loadImageFromFile = (file: File): Promise<HTMLImageElement> =>
-  new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const img = new Image()
-    img.decoding = 'async'
-    img.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve(img)
-    }
-    img.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error('Failed to load image'))
-    }
-    img.src = url
-  })
-
-const canvasToBlob = (
-  canvas: HTMLCanvasElement,
-  type: string,
-  quality?: number
-): Promise<Blob | null> =>
-  new Promise((resolve) => {
-    canvas.toBlob((blob) => resolve(blob), type, quality)
-  })
-
-const extensionForType = (type: string) => {
-  switch (type) {
-    case 'image/png':
-      return 'png'
-    case 'image/webp':
-      return 'webp'
-    case 'image/jpeg':
-    case 'image/jpg':
-      return 'jpg'
-    default:
-      return 'jpg'
-  }
-}
-
-const buildOutputName = (name: string, type: string) => {
-  const ext = extensionForType(type)
-  const base = name && name.includes('.') ? name.replace(/\.[^/.]+$/, '') : name || 'image'
-  return `${base}.${ext}`
-}
-
-const buildTypeCandidates = (originalType: string) => {
-  const normalized =
-    originalType.toLowerCase() === 'image/jpg' ? 'image/jpeg' : originalType.toLowerCase()
-  const candidates: string[] = []
-  if (normalized.startsWith('image/')) {
-    candidates.push(normalized)
-  }
-  if (normalized === 'image/png') {
-    candidates.push('image/webp', 'image/jpeg')
-  } else if (normalized === 'image/webp') {
-    candidates.push('image/jpeg')
-  } else if (normalized !== 'image/jpeg') {
-    candidates.push('image/webp', 'image/jpeg')
-  }
-  return Array.from(new Set(candidates))
-}
-
-const compressImageFile = async (file: File): Promise<File | null> => {
-  try {
-    const img = await loadImageFromFile(file)
-    const width = img.naturalWidth || img.width
-    const height = img.naturalHeight || img.height
-    if (!width || !height) return null
-
-    const baseScale =
-      Math.max(width, height) > MAX_IMAGE_DIMENSION
-        ? MAX_IMAGE_DIMENSION / Math.max(width, height)
-        : 1
-    const scaleSteps = [1, 0.85, 0.72, 0.6]
-    const qualitySteps = [0.92, 0.85, 0.78, 0.7, 0.6]
-    const typeCandidates = buildTypeCandidates(file.type)
-
-    const canvas = document.createElement('canvas')
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = 'high'
-
-    for (const scaleStep of scaleSteps) {
-      const scale = baseScale * scaleStep
-      const targetWidth = Math.max(1, Math.round(width * scale))
-      const targetHeight = Math.max(1, Math.round(height * scale))
-      canvas.width = targetWidth
-      canvas.height = targetHeight
-      ctx.clearRect(0, 0, targetWidth, targetHeight)
-      ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
-
-      for (const type of typeCandidates) {
-        if (type === 'image/png') {
-          const blob = await canvasToBlob(canvas, type)
-          if (blob && blob.size <= MAX_FILE_SIZE) {
-            return new File([blob], buildOutputName(file.name, type), { type })
-          }
-          continue
-        }
-        for (const quality of qualitySteps) {
-          const blob = await canvasToBlob(canvas, type, quality)
-          if (blob && blob.size <= MAX_FILE_SIZE) {
-            return new File([blob], buildOutputName(file.name, type), { type })
-          }
-        }
-      }
-    }
-    return null
-  } catch {
-    return null
-  }
-}
-
 export function ChatInput({
   onSend,
   onAssetUpload,
   disabled = false,
   placeholder = 'Describe what you want to build...',
-  initialInterviewOn = false,
-  showInterviewToggle = true,
   pages = [],
 }: ChatInputProps) {
   const [message, setMessage] = React.useState('')
-  const [triggerInterview, setTriggerInterview] = React.useState(initialInterviewOn)
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([])
+  const [imageIntent, setImageIntent] = React.useState<ImageIntent>('asset')
   const [isProcessing, setIsProcessing] = React.useState(false)
   const [assetPickerOpen, setAssetPickerOpen] = React.useState(false)
   const [selectedAssetType, setSelectedAssetType] = React.useState<AssetType | null>(
@@ -363,25 +171,42 @@ export function ChatInput({
   const [speechSupported, setSpeechSupported] = React.useState(false)
   const [isSavingModel, setIsSavingModel] = React.useState(false)
   const [dragActive, setDragActive] = React.useState(false)
-  const [mentionOpen, setMentionOpen] = React.useState(false)
-  const [mentionQuery, setMentionQuery] = React.useState('')
-  const [mentionIndex, setMentionIndex] = React.useState(0)
-  const [mentionRange, setMentionRange] = React.useState<{ start: number; end: number } | null>(
-    null
-  )
-  const [mentionPosition, setMentionPosition] = React.useState<{
-    x: number
-    y: number
-    placement: 'top' | 'bottom'
-    arrowOffset: number
-  } | null>(null)
+  const [liveVoiceStatus, setLiveVoiceStatus] = React.useState('')
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
   const assetInputRef = React.useRef<HTMLInputElement>(null)
   const popoverRef = React.useRef<HTMLDivElement>(null)
-  const prevInitialRef = React.useRef(initialInterviewOn)
   const recognitionRef = React.useRef<SpeechRecognitionLike | null>(null)
+
+  const {
+    mentionOpen,
+    mentionQuery,
+    mentionType,
+    mentionIndex,
+    mentionRange,
+    mentionPosition,
+    filteredPages,
+    setMentionIndex,
+    updateMentionState,
+    closeMention,
+  } = useMentionState(pages, textareaRef)
+
   const { settings, modelOptions, isLoading: isSettingsLoading, updateSettings } =
     useSettings()
+
+  const availableModels = React.useMemo(() => {
+    if (modelOptions.length > 0) return modelOptions
+    if (settings.model) return [{ id: settings.model, label: settings.model }]
+    return []
+  }, [modelOptions, settings.model])
+
+  const modelItems = React.useMemo(
+    () =>
+      availableModels.map((option) => ({
+        ...option,
+        logo: resolveModelLogo(option.id, option.label),
+      })),
+    [availableModels]
+  )
 
   React.useEffect(() => {
     const textarea = textareaRef.current
@@ -391,79 +216,6 @@ export function ChatInput({
     }
   }, [message])
 
-  React.useEffect(() => {
-    if (!prevInitialRef.current && initialInterviewOn) {
-      setTriggerInterview(true)
-    }
-    prevInitialRef.current = initialInterviewOn
-  }, [initialInterviewOn])
-
-
-  const filteredPages = React.useMemo(
-    () => filterPages(pages, mentionQuery),
-    [pages, mentionQuery]
-  )
-
-  React.useEffect(() => {
-    if (!mentionOpen) return
-    setMentionIndex((current) =>
-      Math.min(current, Math.max(filteredPages.length - 1, 0))
-    )
-  }, [filteredPages.length, mentionOpen])
-
-  const updateMentionState = React.useCallback(
-    (value: string, cursor: number) => {
-      const mention = findMentionAtCursor(value, cursor)
-      if (!mention) {
-        setMentionOpen(false)
-        setMentionQuery('')
-        setMentionRange(null)
-        return
-      }
-
-      const textarea = textareaRef.current
-      if (textarea) {
-        const coords = getCaretCoords(textarea, mention.end)
-        const rect = textarea.getBoundingClientRect()
-        const baseX = rect.left + coords.left - textarea.scrollLeft
-        const baseY = rect.top + coords.top - textarea.scrollTop + coords.lineHeight + 8
-
-        let nextX = baseX
-        let nextY = baseY
-        let placement: 'top' | 'bottom' = 'bottom'
-        const margin = 8
-        const maxX = window.innerWidth - MENTION_POPOVER_WIDTH - margin
-        const maxY = window.innerHeight - MENTION_POPOVER_HEIGHT - margin
-
-        if (nextX > maxX) nextX = Math.max(margin, maxX)
-        if (nextY > maxY) {
-          const above = rect.top + coords.top - MENTION_POPOVER_HEIGHT - margin
-          if (above > margin) {
-            nextY = above
-            placement = 'top'
-          } else {
-            nextY = Math.max(margin, maxY)
-          }
-        }
-
-        const unclampedArrow = baseX - nextX
-        const arrowOffset = Math.min(
-          Math.max(unclampedArrow, 12),
-          MENTION_POPOVER_WIDTH - 12
-        )
-
-        setMentionPosition({ x: nextX, y: nextY, placement, arrowOffset })
-      }
-
-      const isSameMention =
-        mentionRange?.start === mention.start && mentionQuery === mention.query
-      setMentionRange({ start: mention.start, end: mention.end })
-      setMentionQuery(mention.query)
-      setMentionIndex((current) => (isSameMention ? current : 0))
-      setMentionOpen(true)
-    },
-    [mentionQuery, mentionRange]
-  )
 
   React.useEffect(() => {
     const SpeechRecognitionCtor = getSpeechRecognitionCtor()
@@ -510,51 +262,49 @@ export function ChatInput({
     }
   }, [updateMentionState])
 
-  const availableModels = React.useMemo(() => {
-    if (modelOptions.length > 0) return modelOptions
-    if (settings.model) return [{ id: settings.model, label: settings.model }]
-    return []
-  }, [modelOptions, settings.model])
-
-  const modelItems = React.useMemo(
-    () =>
-      availableModels.map((option) => ({
-        ...option,
-        logo: resolveModelLogo(option.id, option.label),
-      })),
-    [availableModels]
-  )
-
 
   const handleSend = React.useCallback(() => {
     if (!message.trim() || disabled || isProcessing) return
-    const shouldTriggerInterview = triggerInterview
     const trimmed = message.trim()
     const targetPages = parsePageMentions(trimmed, pages)
+    // Extract @file: mentions from the message
+    const fileMentions = Array.from(trimmed.matchAll(/@file:([A-Za-z0-9_./\-]+)/g))
+      .map((m) => m[1])
+      .filter(Boolean)
     onSend(trimmed, {
-      ...(shouldTriggerInterview ? { triggerInterview: true } : {}),
       attachments,
+      imageIntent: attachments.length > 0 ? imageIntent : undefined,
       targetPages: targetPages.length > 0 ? targetPages : undefined,
+      mentionedFiles: fileMentions.length > 0 ? fileMentions : undefined,
     })
     setMessage('')
-    setTriggerInterview(false)
     setAttachments([])
-    setMentionOpen(false)
-    setMentionQuery('')
-    setMentionRange(null)
+    setImageIntent('asset')
+    closeMention()
     if (isListening) {
       recognitionRef.current?.stop()
     }
   }, [
     attachments,
+    imageIntent,
+    closeMention,
     disabled,
     message,
     onSend,
     pages,
-    triggerInterview,
     isProcessing,
     isListening,
   ])
+
+  const handleModelChange = async (value: string) => {
+    if (value === settings.model) return
+    setIsSavingModel(true)
+    try {
+      await updateSettings({ ...settings, model: value })
+    } finally {
+      setIsSavingModel(false)
+    }
+  }
 
   const handleToggleListening = () => {
     if (disabled || isProcessing) return
@@ -580,17 +330,8 @@ export function ChatInput({
     try {
       recognition.start()
     } catch {
+      recognition.stop()
       setIsListening(false)
-    }
-  }
-
-  const handleModelChange = async (value: string) => {
-    if (value === settings.model) return
-    setIsSavingModel(true)
-    try {
-      await updateSettings({ ...settings, model: value })
-    } finally {
-      setIsSavingModel(false)
     }
   }
 
@@ -632,9 +373,7 @@ export function ChatInput({
           const insertion = shouldAddSpace ? `${mention} ` : mention
           const nextValue = `${before}${insertion}${after}`
           setMessage(nextValue)
-          setMentionOpen(false)
-          setMentionQuery('')
-          setMentionRange(null)
+          closeMention()
           requestAnimationFrame(() => {
             const cursor = before.length + insertion.length
             textarea.setSelectionRange(cursor, cursor)
@@ -645,9 +384,7 @@ export function ChatInput({
       }
       if (event.key === 'Escape') {
         event.preventDefault()
-        setMentionOpen(false)
-        setMentionQuery('')
-        setMentionRange(null)
+        closeMention()
         return
       }
     }
@@ -765,13 +502,11 @@ export function ChatInput({
       if (textarea && target && textarea.contains(target)) return
       const popover = popoverRef.current
       if (popover && target && popover.contains(target)) return
-      setMentionOpen(false)
-      setMentionQuery('')
-      setMentionRange(null)
+      closeMention()
     }
     document.addEventListener('pointerdown', handlePointerDown)
     return () => document.removeEventListener('pointerdown', handlePointerDown)
-  }, [mentionOpen])
+  }, [mentionOpen, closeMention])
 
   const handleFiles = React.useCallback(
     async (files: FileList | File[]) => {
@@ -886,14 +621,33 @@ export function ChatInput({
       data-testid="chat-input"
     >
       {attachments.length > 0 ? (
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {attachments.map((attachment, index) => (
-            <ImageThumbnail
-              key={`${attachment.name}-${index}`}
-              attachment={attachment}
-              onRemove={() => removeAttachment(index)}
-            />
-          ))}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {attachments.map((attachment, index) => (
+              <ImageThumbnail
+                key={`${attachment.name}-${index}`}
+                attachment={attachment}
+                onRemove={() => removeAttachment(index)}
+              />
+            ))}
+          </div>
+          <Select
+            value={imageIntent}
+            onValueChange={(v) => setImageIntent(v as ImageIntent)}
+          >
+            <SelectTrigger
+              className="h-7 w-[170px] rounded-md text-xs"
+              data-testid="image-intent-select"
+            >
+              <SelectValue placeholder="Image intent" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="asset">Asset (use in page)</SelectItem>
+              <SelectItem value="style_reference">Style Reference</SelectItem>
+              <SelectItem value="layout_reference">Layout Reference</SelectItem>
+              <SelectItem value="screenshot">Screenshot</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       ) : null}
       {isUploadingAsset ? (
@@ -934,64 +688,47 @@ export function ChatInput({
           aria-label="Message input"
           data-testid="chat-textarea"
           rows={1}
-          className={`min-h-[44px] w-full resize-none border-0 bg-transparent p-0 pb-2 text-sm shadow-none focus-visible:ring-0 ${
+          className={`min-h-[92px] w-full resize-none border-0 bg-transparent p-0 pb-2 text-sm shadow-none focus-visible:ring-0 ${
             dragActive ? 'ring-2 ring-primary/40' : ''
           }`}
         />
       </div>
-      <div className="flex w-full flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <div className="flex flex-wrap items-center gap-2">
-          {showInterviewToggle ? (
-            <Button
-              type="button"
-              variant={triggerInterview ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setTriggerInterview((prev) => !prev)}
-              disabled={disabled}
-              aria-pressed={triggerInterview}
-              className="h-8 w-[72px] rounded-full"
-            >
-              {triggerInterview ? 'Interview' : 'Chat'}
-            </Button>
-          ) : null}
-          <div className="flex items-center gap-2">
-            <Select
-              value={settings.model ?? modelItems[0]?.id ?? ''}
-              onValueChange={handleModelChange}
-              disabled={disabled || isSettingsLoading || isSavingModel}
-            >
-              <SelectTrigger className="h-8 w-[180px] rounded-full text-xs">
-                <SelectValue placeholder="Select model" />
-              </SelectTrigger>
-              <SelectContent>
-                {modelItems.length > 0 ? (
-                  modelItems.map((option) => (
-                    <SelectItem
-                      key={option.id}
-                      value={option.id}
-                      textValue={option.label ?? option.id}
-                    >
-                      <div className="flex items-center gap-2">
-                        {option.logo ? (
-                          <img
-                            src={option.logo}
-                            alt={`${option.label ?? option.id} logo`}
-                            className="h-4 w-4 shrink-0 rounded-sm object-contain"
-                          />
-                        ) : null}
-                        <span className="text-xs">{option.label ?? option.id}</span>
-                      </div>
-                    </SelectItem>
-                  ))
-                ) : (
-                  <SelectItem value="default" disabled>
-                    No models configured
-                  </SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+      <div className="flex w-full items-center justify-between gap-2 text-xs text-muted-foreground">
+        <Select
+          value={settings.model ?? modelItems[0]?.id ?? ''}
+          onValueChange={handleModelChange}
+          disabled={disabled || isSettingsLoading || isSavingModel}
+        >
+          <SelectTrigger className="h-8 w-[180px] rounded-full text-xs">
+            <SelectValue placeholder="Select model" />
+          </SelectTrigger>
+          <SelectContent>
+            {modelItems.length > 0 ? (
+              modelItems.map((option) => (
+                <SelectItem
+                  key={option.id}
+                  value={option.id}
+                  textValue={option.label ?? option.id}
+                >
+                  <div className="flex items-center gap-2">
+                    {option.logo ? (
+                      <img
+                        src={option.logo}
+                        alt={`${option.label ?? option.id} logo`}
+                        className="h-4 w-4 shrink-0 rounded-sm object-contain"
+                      />
+                    ) : null}
+                    <span className="text-xs">{option.label ?? option.id}</span>
+                  </div>
+                </SelectItem>
+              ))
+            ) : (
+              <SelectItem value="default" disabled>
+                No models configured
+              </SelectItem>
+            )}
+          </SelectContent>
+        </Select>
         <div className="flex items-center gap-1">
           <Button
             type="button"
@@ -1020,7 +757,14 @@ export function ChatInput({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={handleToggleListening}
+            onClick={async () => {
+              await handleToggleListening()
+              setLiveVoiceStatus(
+                isListening
+                  ? 'Voice input stopped'
+                  : 'Voice input started'
+              )
+            }}
             disabled={disabled || isProcessing || !speechSupported}
             aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
             className="h-9 w-9"
@@ -1038,6 +782,9 @@ export function ChatInput({
               <Mic className="h-4 w-4" />
             )}
           </Button>
+          <span className="sr-only" role="status" aria-live="polite">
+            {liveVoiceStatus}
+          </span>
           <Button
             type="button"
             onClick={handleSend}
@@ -1076,9 +823,7 @@ export function ChatInput({
             const insertion = shouldAddSpace ? `${mention} ` : mention
             const nextValue = `${before}${insertion}${after}`
             setMessage(nextValue)
-            setMentionOpen(false)
-            setMentionQuery('')
-            setMentionRange(null)
+            closeMention()
             requestAnimationFrame(() => {
               const cursor = before.length + insertion.length
               textarea.setSelectionRange(cursor, cursor)

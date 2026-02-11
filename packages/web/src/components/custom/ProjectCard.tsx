@@ -1,7 +1,7 @@
 import type { ChangeEvent, KeyboardEvent } from 'react'
-import { formatDistanceToNow } from 'date-fns'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { formatRelativeDate } from '@/lib/formatRelativeDate'
 import { cn } from '@/lib/utils'
 import { PhoneFrame } from './PhoneFrame'
 
@@ -95,7 +95,7 @@ export function ProjectCard({
           <div className="w-full space-y-1 text-left">
             <div className="text-sm font-semibold text-foreground">{name}</div>
             <div className="text-xs text-muted-foreground">
-              {formatDistanceToNow(updatedAt, { addSuffix: true })} · {versionCount}{' '}
+              {formatRelativeDate(updatedAt)} · {versionCount}{' '}
               {versionCount === 1 ? 'version' : 'versions'}
             </div>
           </div>

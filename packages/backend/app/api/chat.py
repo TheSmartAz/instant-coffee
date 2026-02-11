@@ -12,7 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session as DbSession
 
-from ..agents.orchestrator import AgentOrchestrator, OrchestratorResponse
+from ..engine.orchestrator import EngineOrchestrator
+from ..schemas.orchestrator_response import OrchestratorResponse
 from ..config import get_settings
 from ..db.models import Session as SessionModel
 from ..db.utils import get_db
@@ -30,6 +31,7 @@ from ..services.session import SessionService
 from ..services.token_tracker import TokenTrackerService
 from ..services.image_storage import ImageStorageService
 from ..services.event_store import EventStoreService
+from ..services.thread import ThreadService
 from ..utils.chat import parse_page_mentions
 from ..utils.style import build_global_style_css
 from .utils import build_page_preview_url, build_preview_url
@@ -75,10 +77,16 @@ async def _run_orchestrator_stream(
     target_pages: Optional[list[str]] = None,
     resume: Optional[dict] = None,
     run_context: Optional["_ChatRunContext"] = None,
+    thread_id: Optional[str] = None,
+    image_refs: Optional[list[dict]] = None,
+    mentioned_files: Optional[list[str]] = None,
 ) -> None:
     final_message = ""
     final_response: Optional[OrchestratorResponse] = None
     stream_error: Optional[BaseException] = None
+    # Propagate thread_id to engine orchestrator if supported
+    if thread_id and hasattr(orchestrator, "thread_id"):
+        orchestrator.thread_id = thread_id
     try:
         async for response in orchestrator.stream_responses(
             user_message=user_message,
@@ -89,6 +97,8 @@ async def _run_orchestrator_stream(
             style_reference=style_reference,
             target_pages=target_pages,
             resume=resume,
+            image_refs=image_refs,
+            mentioned_files=mentioned_files,
         ):
             final_response = response
             if response.message:
@@ -101,7 +111,8 @@ async def _run_orchestrator_stream(
         try:
             if final_message:
                 MessageService(orchestrator.db).add_message(
-                    orchestrator.session.id, "assistant", final_message
+                    orchestrator.session.id, "assistant", final_message,
+                    thread_id=thread_id,
                 )
             _finalize_adapter_run(
                 db=orchestrator.db,
@@ -132,20 +143,7 @@ def _create_orchestrator(
     session: SessionModel,
     emitter: EventEmitter,
 ):
-    settings = get_settings()
-    # Engine is the primary orchestrator.  The legacy AgentOrchestrator is
-    # only used as a fallback when the ic agent package is not installed or
-    # USE_ENGINE is explicitly set to false.
-    if not settings.use_engine:
-        logger.info("Engine disabled via USE_ENGINE=false, using legacy orchestrator")
-        return AgentOrchestrator(db, session, event_emitter=emitter)
-    try:
-        from ..engine.orchestrator import EngineOrchestrator
-
-        return EngineOrchestrator(db, session, event_emitter=emitter)
-    except Exception:
-        logger.exception("Engine orchestrator unavailable; falling back to legacy")
-    return AgentOrchestrator(db, session, event_emitter=emitter)
+    return EngineOrchestrator(db, session, event_emitter=emitter)
 
 
 def _resolve_resume_payload(
@@ -190,16 +188,10 @@ class _ChatRunContext:
 
 
 def _log_chat_execution_mode(*, endpoint: str, settings) -> None:
-    if settings.chat_use_run_adapter and not settings.use_langgraph:
+    if settings.chat_use_run_adapter:
         logger.info("[%s] chat run adapter path active", endpoint)
         return
-    if settings.chat_use_run_adapter and settings.use_langgraph:
-        logger.info(
-            "[%s] chat_use_run_adapter enabled, but use_langgraph=true so run lifecycle stays orchestrator-managed",
-            endpoint,
-        )
-        return
-    logger.info("[%s] legacy chat path active", endpoint)
+    logger.info("[%s] standard chat path active", endpoint)
 
 
 def _prepare_chat_run_context(
@@ -213,7 +205,7 @@ def _prepare_chat_run_context(
     target_pages: list[str],
     resume_payload: Optional[dict],
 ) -> _ChatRunContext:
-    adapter_active = bool(settings.chat_use_run_adapter and not settings.use_langgraph)
+    adapter_active = bool(settings.chat_use_run_adapter)
     if not adapter_active:
         return _ChatRunContext(
             run_id=_active_run_id(db=db, session_id=session.id, resume_payload=resume_payload),
@@ -596,6 +588,17 @@ async def chat(
         db.commit()
         db.refresh(session)
 
+    # Resolve thread
+    thread_service = ThreadService(db)
+    if payload.thread_id:
+        thread = thread_service.get_thread(payload.thread_id)
+        if thread is None or thread.session_id != session.id:
+            thread = thread_service.ensure_default_thread(session.id)
+    else:
+        thread = thread_service.ensure_default_thread(session.id)
+    db.commit()
+    active_thread_id = thread.id
+
     settings = get_settings()
     _log_chat_execution_mode(endpoint="POST /api/chat", settings=settings)
     page_service = PageService(db)
@@ -614,13 +617,14 @@ async def chat(
     if payload.style_reference and payload.style_reference.images:
         images.extend(payload.style_reference.images)
     images = [img for img in images if isinstance(img, str) and img.strip()]
+    resolved_intent = payload.image_intent or "asset"
     image_refs: list[dict] = []
     if images:
         storage_dir = Path(settings.output_dir) / "image-uploads"
         image_storage = ImageStorageService(str(storage_dir))
         for img in images[:3]:
             if ImageStorageService.is_url(img):
-                image_refs.append({"id": None, "source": "url", "url": img})
+                image_refs.append({"id": None, "source": "url", "url": img, "intent": resolved_intent})
                 continue
             try:
                 stored = await image_storage.save_image(img, session.id)
@@ -632,6 +636,7 @@ async def chat(
                     "source": "upload",
                     "url": stored.url,
                     "content_type": stored.content_type,
+                    "intent": resolved_intent,
                 }
             )
 
@@ -663,13 +668,17 @@ async def chat(
             style_reference_context["tokens"] = style_reference_tokens
 
     message_service = MessageService(db)
-    history_records = message_service.get_messages(session.id, limit=50)
+    history_records = message_service.get_messages(session.id, thread_id=active_thread_id, limit=50)
     history = [{"role": msg.role, "content": msg.content} for msg in history_records]
     if payload.interview is None:
         trigger_interview = len(history_records) == 0
     else:
         trigger_interview = bool(payload.interview)
-    message_service.add_message(session.id, "user", payload.message)
+    message_service.add_message(session.id, "user", payload.message, thread_id=active_thread_id)
+    db.commit()
+
+    # Auto-set thread title from first user message
+    thread_service.auto_title_if_empty(active_thread_id, payload.message)
     db.commit()
 
     interview_payload = _extract_interview_payload(payload.message)
@@ -749,6 +758,9 @@ async def chat(
                         target_pages=target_pages,
                         resume=resolved_resume,
                         run_context=run_context,
+                        thread_id=active_thread_id,
+                        image_refs=image_refs,
+                        mentioned_files=payload.mentioned_files or None,
                     )
                 )
             stream_task.add_done_callback(_log_stream_task_result)
@@ -786,6 +798,7 @@ async def chat(
                             payload_data = response.to_payload()
                             message_text = payload_data.pop("message", "")
                             payload_data.update(response_fields)
+                            payload_data["thread_id"] = active_thread_id
                             async for chunk in _stream_message_payload(
                                 message=message_text,
                                 final_payload=payload_data,
@@ -839,6 +852,8 @@ async def chat(
                 style_reference=style_reference_context,
                 target_pages=target_pages,
                 resume=resolved_resume,
+                image_refs=image_refs,
+                mentioned_files=payload.mentioned_files or None,
             )
         ]
     except Exception as exc:
@@ -920,6 +935,17 @@ async def stream_post(
         db.commit()
         db.refresh(session)
 
+    # Resolve thread
+    thread_service = ThreadService(db)
+    if payload.thread_id:
+        thread = thread_service.get_thread(payload.thread_id)
+        if thread is None or thread.session_id != session.id:
+            thread = thread_service.ensure_default_thread(session.id)
+    else:
+        thread = thread_service.ensure_default_thread(session.id)
+    db.commit()
+    active_thread_id = thread.id
+
     page_service = PageService(db)
     pages = page_service.list_by_session(session.id)
     page_lookup = {page.slug.lower(): page.slug for page in pages}
@@ -936,13 +962,14 @@ async def stream_post(
     if payload.style_reference and payload.style_reference.images:
         images.extend(payload.style_reference.images)
     images = [img for img in images if isinstance(img, str) and img.strip()]
+    resolved_intent = payload.image_intent or "asset"
     image_refs: list[dict] = []
     if images:
         storage_dir = Path(settings.output_dir) / "image-uploads"
         image_storage = ImageStorageService(str(storage_dir))
         for img in images[:3]:
             if ImageStorageService.is_url(img):
-                image_refs.append({"id": None, "source": "url", "url": img})
+                image_refs.append({"id": None, "source": "url", "url": img, "intent": resolved_intent})
                 continue
             try:
                 stored = await image_storage.save_image(img, session.id)
@@ -954,6 +981,7 @@ async def stream_post(
                     "source": "upload",
                     "url": stored.url,
                     "content_type": stored.content_type,
+                    "intent": resolved_intent,
                 }
             )
 
@@ -985,13 +1013,17 @@ async def stream_post(
             style_reference_context["tokens"] = style_reference_tokens
 
     message_service = MessageService(db)
-    history_records = message_service.get_messages(session.id, limit=50)
+    history_records = message_service.get_messages(session.id, thread_id=active_thread_id, limit=50)
     history = [{"role": msg.role, "content": msg.content} for msg in history_records]
     if payload.interview is None:
         trigger_interview = len(history_records) == 0
     else:
         trigger_interview = bool(payload.interview)
-    message_service.add_message(session.id, "user", payload.message)
+    message_service.add_message(session.id, "user", payload.message, thread_id=active_thread_id)
+    db.commit()
+
+    # Auto-set thread title from first user message
+    thread_service.auto_title_if_empty(active_thread_id, payload.message)
     db.commit()
 
     resolved_resume = _resolve_resume_payload(db=db, session=session, resume_payload=payload.resume)
@@ -1052,6 +1084,9 @@ async def stream_post(
                 target_pages=target_pages,
                 resume=resolved_resume,
                 run_context=run_context,
+                thread_id=active_thread_id,
+                image_refs=image_refs,
+                mentioned_files=payload.mentioned_files or None,
             )
         )
         stream_task.add_done_callback(_log_stream_task_result)
@@ -1089,6 +1124,7 @@ async def stream_post(
                         payload_data = response.to_payload()
                         message_text = payload_data.pop("message", "")
                         payload_data.update(response_fields)
+                        payload_data["thread_id"] = active_thread_id
                         async for chunk in _stream_message_payload(
                             message=message_text,
                             final_payload=payload_data,

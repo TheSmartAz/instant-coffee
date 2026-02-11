@@ -105,6 +105,19 @@ function renderPageHtml(props: AppProps) {
   return renderToString(React.createElement(App, props))
 }
 
+interface ManifestPage {
+  slug: string
+  title: string
+  entry?: string
+}
+
+interface PrerenderManifest {
+  pages: ManifestPage[]
+}
+
+const manifestPath = path.join(dataDir, 'prerender-manifest.json')
+const manifest = readJson<PrerenderManifest | null>(manifestPath, null)
+
 const schemas = readJson<PageSchema[]>(path.join(dataDir, 'schemas.json'), [fallbackSchema])
 const tokens = readJson<Record<string, any>>(path.join(dataDir, 'tokens.json'), {})
 const assets = readJson<Record<string, any>>(path.join(dataDir, 'assets.json'), {})
@@ -114,7 +127,19 @@ if (!fs.existsSync(distDir)) {
 }
 
 const baseHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf-8')
-const pageList = Array.isArray(schemas) && schemas.length ? schemas : [fallbackSchema]
+
+// Prefer manifest (HTML-to-React path) over schemas (legacy path)
+let pageList: Array<{ slug: string; title: string; head?: HeadMeta; layout?: string; components?: any[] }>
+if (manifest && Array.isArray(manifest.pages) && manifest.pages.length) {
+  pageList = manifest.pages.map((p) => ({
+    slug: p.slug,
+    title: p.title,
+    layout: 'default' as const,
+    components: [],
+  }))
+} else {
+  pageList = Array.isArray(schemas) && schemas.length ? schemas : [fallbackSchema]
+}
 
 pageList.forEach((page) => {
   const slug = normalizeSlug(page.slug)

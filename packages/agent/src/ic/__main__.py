@@ -24,12 +24,23 @@ def main():
         "--prompt", "-p",
         help="Run a single prompt and exit (non-interactive mode)",
     )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose logging to stderr",
+    )
     args = parser.parse_args()
 
     from ic.config import Config
     from ic.app import App
+    from ic.log import setup_logging
 
     config = Config.load()
+
+    # Set up logging — writes to ~/.ic/logs/agent.jsonl + stderr warnings
+    import logging
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    setup_logging(log_dir=config.data_dir / "logs", level=log_level)
 
     if args.model and args.model in config.models:
         config.default_model = args.model

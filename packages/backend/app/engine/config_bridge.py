@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+from dataclasses import MISSING
 import logging
 from typing import Optional
 
 from ..config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _new_config_with_defaults(config_cls: type["Config"]) -> "Config":
+    """Create a Config instance with all dataclass defaults initialized."""
+    cfg = config_cls.__new__(config_cls)
+
+    for field_name, field_def in config_cls.__dataclass_fields__.items():
+        if field_def.default_factory is not MISSING:
+            setattr(cfg, field_name, field_def.default_factory())
+        elif field_def.default is not MISSING:
+            setattr(cfg, field_name, field_def.default)
+
+    return cfg
 
 
 def backend_settings_to_agent_config(
@@ -19,7 +33,7 @@ def backend_settings_to_agent_config(
     already has all the credentials in its Settings dataclass; we just
     translate them into the agent's Config format.
     """
-    from ic.config import Config, ModelConfig, AgentConfig
+    from ic.config import Config, ModelConfig
 
     s = settings or get_settings()
 
@@ -37,6 +51,7 @@ def backend_settings_to_agent_config(
             base_url=base_url or None,
             max_tokens=s.max_tokens,
             temperature=s.temperature,
+            timeout=s.openai_timeout_seconds,
         )
 
     if s.anthropic_api_key:
@@ -48,15 +63,16 @@ def backend_settings_to_agent_config(
                 base_url=f"{s.anthropic_base_url}/v1/",
                 max_tokens=s.max_tokens,
                 temperature=s.temperature,
+                timeout=s.openai_timeout_seconds,
             )
 
     default_model = model_id if model_id in models else (next(iter(models)) if models else "")
 
-    cfg = Config.__new__(Config)
-    cfg.data_dir = Config.__dataclass_fields__["data_dir"].default_factory()
+    cfg = _new_config_with_defaults(Config)
     cfg.models = models
     cfg.agents = {}
     cfg.default_model = default_model
+    cfg._auto_select_pointers()
     cfg._ensure_agents()
 
     return cfg
