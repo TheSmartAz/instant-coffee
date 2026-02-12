@@ -43,20 +43,50 @@ def _truncate_tool_call_args(tool_calls: list[dict[str, Any]]) -> list[dict[str,
     """
     _MAX_ARG_LEN = 2000  # chars — enough for most tool args
 
+    def _invalid_args_payload(name: str, args_text: str) -> str:
+        payload: dict[str, Any] = {
+            "_invalid_json_args": True,
+            "note": "tool arguments were malformed and replaced in context",
+            "original_length": len(args_text),
+        }
+        if name in {"write_file", "edit_file", "multi_edit_file"}:
+            file_path_match = re.search(r'"file_path"\s*:\s*"([^"]+)"', args_text)
+            if file_path_match:
+                payload["file_path"] = file_path_match.group(1)
+        return json.dumps(payload, ensure_ascii=False)
+
     truncated = []
     for tc in tool_calls:
         args_str = tc.get("arguments", "{}")
-        if len(args_str) <= _MAX_ARG_LEN:
+        name = tc.get("name", "")
+
+        parsed_args: Any | None
+        if isinstance(args_str, str):
+            try:
+                parsed_args = json.loads(args_str)
+            except (json.JSONDecodeError, TypeError):
+                parsed_args = None
+        else:
+            parsed_args = args_str
+
+        # Never keep invalid JSON arguments in context; API proxies can reject
+        # the next request if assistant tool_calls contain malformed JSON text.
+        if parsed_args is None:
+            safe_tc = dict(tc)
+            safe_tc["arguments"] = _invalid_args_payload(name, args_str if isinstance(args_str, str) else "")
+            truncated.append(safe_tc)
+            continue
+
+        if isinstance(args_str, str) and len(args_str) <= _MAX_ARG_LEN:
             truncated.append(tc)
             continue
 
         # Try to parse and selectively truncate
         try:
-            args = json.loads(args_str) if isinstance(args_str, str) else args_str
-            name = tc.get("name", "")
+            args = parsed_args
 
-            if name == "write_file" and "content" in args:
-                content = args["content"]
+            if name == "write_file" and isinstance(args, dict) and "content" in args:
+                content = args["content"] if isinstance(args.get("content"), str) else str(args.get("content", ""))
                 lines = content.count("\n") + 1
                 chars = len(content)
                 # Replace content with a summary
@@ -66,13 +96,30 @@ def _truncate_tool_call_args(tool_calls: list[dict[str, Any]]) -> list[dict[str,
                 )
                 tc = dict(tc)
                 tc["arguments"] = json.dumps(args, ensure_ascii=False)
-            elif len(args_str) > _MAX_ARG_LEN:
-                # Generic truncation for other tools with huge args
+            elif isinstance(args_str, str) and len(args_str) > _MAX_ARG_LEN:
+                # Generic truncation for other tools with huge args.
                 tc = dict(tc)
-                tc["arguments"] = args_str[:_MAX_ARG_LEN] + "..."
+                if isinstance(args, dict):
+                    tc["arguments"] = json.dumps(
+                        {
+                            "_truncated_args": True,
+                            "original_length": len(args_str),
+                            "keys": sorted(args.keys())[:20],
+                        },
+                        ensure_ascii=False,
+                    )
+                else:
+                    tc["arguments"] = json.dumps(
+                        {
+                            "_truncated_args": True,
+                            "original_length": len(args_str),
+                            "value_type": type(args).__name__,
+                        },
+                        ensure_ascii=False,
+                    )
         except (json.JSONDecodeError, TypeError):
             tc = dict(tc)
-            tc["arguments"] = args_str[:_MAX_ARG_LEN] + "..."
+            tc["arguments"] = _invalid_args_payload(name, args_str if isinstance(args_str, str) else "")
 
         truncated.append(tc)
     return truncated
@@ -182,6 +229,7 @@ class Engine:
         workspace: str | None = None,
         user_io: UserIO | None = None,
         on_text_delta: Callable[[str], Awaitable[None] | None] | None = None,
+        on_llm_retry: Callable[[int, int, str], Awaitable[None] | None] | None = None,
         on_tool_call: Callable[[str, dict], Awaitable[None] | None] | None = None,
         on_tool_result: Callable[[str, str], Awaitable[None] | None] | None = None,
         on_tool_progress: Callable[[str, str, int | None], Awaitable[None] | None] | None = None,
@@ -219,6 +267,7 @@ class Engine:
 
         # Callbacks
         self.on_text_delta = on_text_delta
+        self.on_llm_retry = on_llm_retry
         self.on_tool_call = on_tool_call
         self.on_tool_result = on_tool_result
         self.on_tool_progress = on_tool_progress  # New: progress callback
@@ -288,6 +337,126 @@ class Engine:
         if skill_tool and hasattr(skill_tool, "_update_description"):
             skill_tool._update_description()
 
+    @staticmethod
+    def _format_exception(exc: BaseException) -> str:
+        """Format exceptions with class name for clearer retry diagnostics."""
+        name = type(exc).__name__
+        message = str(exc).strip()
+        if message:
+            return f"{name}: {message}"
+        text = repr(exc).strip()
+        if text:
+            return text
+        return f"{name}: <no detail>"
+
+    def _workspace_root(self):
+        from pathlib import Path
+        if not self.workspace:
+            return None
+        return Path(self.workspace)
+
+    @staticmethod
+    def _looks_like_generation_intent(text: str) -> bool:
+        if not text:
+            return False
+        haystack = text.lower()
+        keywords = (
+            "generate", "build", "create", "implement", "webpage",
+            "web page", "website", "landing page", "html", "index.html",
+        )
+        return any(token in haystack for token in keywords)
+
+    @staticmethod
+    def _looks_like_confirmation_prompt(text: str) -> bool:
+        """Detect if the agent is asking the user to confirm before generating."""
+        if not text:
+            return False
+        haystack = text.lower()
+        markers = (
+            "shall i start",
+            "shall i generate",
+            "shall i proceed",
+            "ready to generate",
+            "want me to generate",
+            "want me to proceed",
+            "want me to start",
+            "should i generate",
+            "should i proceed",
+            "should i start",
+            "let me know",
+            "would you like me to",
+        )
+        return any(marker in haystack for marker in markers)
+
+    def _turn_has_generation_signal(
+        self,
+        user_input: str,
+        turn_result: TurnResult,
+        step_text: str,
+    ) -> bool:
+        if self._looks_like_generation_intent(user_input):
+            return True
+        if self._looks_like_generation_intent(step_text):
+            return True
+
+        approval_markers = ("ready to generate", "yes, generate", "yes generate")
+        for tool_result in turn_result.tool_results:
+            output = str(tool_result.get("output", "")).lower()
+            if any(marker in output for marker in approval_markers):
+                return True
+
+        for change in self._file_changes:
+            if change.get("path", "").endswith("PRODUCT.md"):
+                return True
+        return False
+
+    def _index_written_this_turn(self) -> bool:
+        from pathlib import Path
+        for change in self._file_changes:
+            try:
+                if Path(change.get("path", "")).name == "index.html":
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _should_attempt_generation_recovery(
+        self,
+        user_input: str,
+        turn_result: TurnResult,
+        step_result: dict[str, Any],
+    ) -> bool:
+        if step_result.get("tool_calls"):
+            return False
+
+        finish_reason = step_result.get("finish_reason", "")
+        if finish_reason not in {"partial", "empty_exhausted", "stop"}:
+            return False
+
+        workspace = self._workspace_root()
+        if workspace is None:
+            return False
+
+        product_doc = workspace / "PRODUCT.md"
+        index_file = workspace / "index.html"
+        if not product_doc.exists() or index_file.exists():
+            return False
+
+        if self._index_written_this_turn():
+            return False
+
+        # If the agent is asking the user to confirm before generating,
+        # don't force generation recovery — let the user respond.
+        step_text = step_result.get("text", "")
+        if self._looks_like_confirmation_prompt(step_text):
+            return False
+
+        return self._turn_has_generation_signal(
+            user_input=user_input,
+            turn_result=turn_result,
+            step_text=step_text,
+        )
+
     async def _inject_context(self):
         """Inject project context (product doc, files) into the conversation."""
         from pathlib import Path
@@ -325,6 +494,8 @@ class Engine:
         turn_result = TurnResult()
         step = 0
         _empty_retries = 0  # Track consecutive empty responses for retry
+        _generation_retries = 0
+        _max_generation_retries = 2
 
         while self._running and step < self.agent_config.max_turns:
             step += 1
@@ -410,7 +581,52 @@ class Engine:
 
             # If no tool calls, the turn is complete
             if not step_result.get("tool_calls"):
-                turn_result.finish_reason = step_result.get("finish_reason", "stop")
+                finish_reason = step_result.get("finish_reason", "stop")
+                if self._should_attempt_generation_recovery(
+                    user_input=user_input,
+                    turn_result=turn_result,
+                    step_result=step_result,
+                ):
+                    if _generation_retries < _max_generation_retries:
+                        _generation_retries += 1
+                        import logging
+                        logging.getLogger("ic.engine").warning(
+                            "generation_recovery_retry attempt=%d finish_reason=%s",
+                            _generation_retries,
+                            finish_reason,
+                        )
+                        recovery_prompt = (
+                            "Generation recovery: the previous response ended before "
+                            "creating index.html. Continue now and call write_file to "
+                            "create index.html in the workspace root based on PRODUCT.md. "
+                            "Do not ask more questions."
+                        )
+                        self.context.add_user(recovery_prompt)
+                        if self.on_text_delta:
+                            retry_msg = (
+                                "\n\n*(Generation stalled before `index.html` was created. "
+                                "Retrying automatically.)*"
+                            )
+                            await self._call(self.on_text_delta, retry_msg)
+                        continue
+
+                    import logging
+                    logging.getLogger("ic.engine").error(
+                        "generation_recovery_exhausted retries=%d",
+                        _generation_retries,
+                    )
+                    fail_msg = (
+                        "\n\n*(Generation ended before creating `index.html` after "
+                        "automatic retries. Try rerunning with a faster model or a higher "
+                        "model timeout.)*"
+                    )
+                    if self.on_text_delta:
+                        await self._call(self.on_text_delta, fail_msg)
+                    turn_result.text += fail_msg
+                    turn_result.finish_reason = "missing_artifact"
+                    break
+
+                turn_result.finish_reason = finish_reason
                 break
 
             # Context compaction if needed
@@ -499,13 +715,21 @@ class Engine:
                 # Keep the longest partial text we've received
                 if len("".join(text_parts)) > len("".join(best_text_parts)):
                     best_text_parts = text_parts
+                err_text = self._format_exception(exc)
                 if attempt < max_retries - 1:
-                    llm_logger.error(str(exc), len("".join(text_parts)))
+                    llm_logger.error(err_text, len("".join(text_parts)))
+                    if self.on_llm_retry:
+                        await self._call(
+                            self.on_llm_retry,
+                            attempt + 2,
+                            max_retries,
+                            err_text,
+                        )
                     wait = 2 ** attempt
                     await asyncio.sleep(wait)
                     continue
                 # Final attempt failed — return partial result instead of raising
-                llm_logger.error(f"final: {exc}", len("".join(best_text_parts)))
+                llm_logger.error(f"final: {err_text}", len("".join(best_text_parts)))
                 text_parts = best_text_parts
                 finish_reason = "partial"
                 break
@@ -519,10 +743,18 @@ class Engine:
                     or "tool_call" in err_msg
                 )
                 if is_bad_tool_args and attempt < max_retries - 1:
+                    err_text = self._format_exception(exc)
                     import logging
                     logging.getLogger("ic.engine").warning(
-                        "bad_tool_args_retry attempt=%d err=%s", attempt, exc,
+                        "bad_tool_args_retry attempt=%d err=%s", attempt, err_text,
                     )
+                    if self.on_llm_retry:
+                        await self._call(
+                            self.on_llm_retry,
+                            attempt + 2,
+                            max_retries,
+                            err_text,
+                        )
                     wait = 2 ** attempt
                     await asyncio.sleep(wait)
                     continue
@@ -542,6 +774,14 @@ class Engine:
                     or "ReadError" in exc_name
                     or "ConnectError" in exc_name
                 ):
+                    err_text = self._format_exception(exc)
+                    if self.on_llm_retry:
+                        await self._call(
+                            self.on_llm_retry,
+                            attempt + 2,
+                            max_retries,
+                            err_text,
+                        )
                     wait = 2 ** attempt
                     await asyncio.sleep(wait)
                     continue
@@ -713,11 +953,14 @@ class Engine:
             if validation_error:
                 return validation_error
 
-            # Execute with timeout
-            result = await asyncio.wait_for(
-                self._run_tool_inner(tool, name, args),
-                timeout=timeout,
-            )
+            # Execute — skip timeout wrapper for tools that block indefinitely
+            if timeout is None:
+                result = await self._run_tool_inner(tool, name, args)
+            else:
+                result = await asyncio.wait_for(
+                    self._run_tool_inner(tool, name, args),
+                    timeout=timeout,
+                )
 
             # Cache result for read-only tools
             if cache_key and not result.startswith("Error"):
@@ -813,12 +1056,18 @@ class Engine:
             fixed += "]" * open_s
 
         try:
-            return json.loads(fixed)
+            parsed = json.loads(fixed)
+            # Validate that write_file results actually have file_path
+            if tool_name == "write_file" and isinstance(parsed, dict):
+                if "file_path" not in parsed:
+                    # Strategy 1 produced a dict without file_path; fall through
+                    raise json.JSONDecodeError("missing file_path", fixed, 0)
+            return parsed
         except json.JSONDecodeError:
             pass
 
-        # --- Strategy 2: regex extraction for write_file ---
-        if tool_name == "write_file":
+        # --- Strategy 2: regex extraction for write_file / edit_file ---
+        if tool_name in ("write_file", "edit_file"):
             fp_match = re.search(
                 r'"file_path"\s*:\s*"([^"]+)"', text
             )
@@ -836,6 +1085,12 @@ class Engine:
                 return {
                     "file_path": fp_match.group(1),
                     "content": content_raw,
+                }
+            # file_path found but content completely missing or truncated
+            if fp_match:
+                return {
+                    "file_path": fp_match.group(1),
+                    "content": "",
                 }
 
         return None
@@ -877,6 +1132,7 @@ class Engine:
             workspace=self.workspace,
             user_io=self.user_io,
             on_text_delta=self.on_text_delta,
+            on_llm_retry=self.on_llm_retry,
             on_tool_call=self.on_tool_call,
             on_tool_result=self.on_tool_result,
         )

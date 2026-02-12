@@ -89,6 +89,14 @@ def _get_str_list(key: str, default: list[str]) -> list[str]:
     return result or list(default)
 
 
+def _resolve_database_url() -> str:
+    url = _get_env("DATABASE_URL", "sqlite:///./instant-coffee.db")
+    # Railway/Render may provide postgres:// which SQLAlchemy 2.0 doesn't accept
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return url
+
+
 def _resolve_default_model_id() -> str:
     return _get_env("MODEL") or _get_env("DEFAULT_MODEL") or get_default_model_id()
 
@@ -103,16 +111,16 @@ def _resolve_default_base_url() -> str:
 DEFAULT_MODEL_POOLS: dict[str, Any] = {
     "classifier": ["gpt-5-mini", "gemini-3-flash-preview", "grok-code-fast-1"],
     "writer": {
-        "default": ["glm-4.7", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
-        "landing": ["gemini-3-flash-preview", "gpt-5-mini", "glm-4.7"],
-        "card": ["gemini-3-flash-preview", "gpt-5-mini", "glm-4.7"],
-        "invitation": ["gemini-3-flash-preview", "gpt-5-mini", "glm-4.7"],
-        "ecommerce": ["glm-4.7", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
-        "booking": ["glm-4.7", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
-        "dashboard": ["glm-4.7", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
+        "default": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
+        "landing": ["gemini-3-flash-preview", "gpt-5-mini", "glm-5"],
+        "card": ["gemini-3-flash-preview", "gpt-5-mini", "glm-5"],
+        "invitation": ["gemini-3-flash-preview", "gpt-5-mini", "glm-5"],
+        "ecommerce": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
+        "booking": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
+        "dashboard": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
     },
-    "expander": ["gpt-5-mini", "gemini-3-flash-preview", "glm-4.7", "DeepSeek-V3.2"],
-    "validator": ["glm-4.7", "DeepSeek-V3.2", "qwen-max-latest"],
+    "expander": ["gpt-5-mini", "gemini-3-flash-preview", "glm-5", "DeepSeek-V3.2"],
+    "validator": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest"],
     "style_refiner": {
         "default": ["gemini-3-flash-preview", "gpt-5-mini", "kimi-k2.5"],
         "landing": ["gemini-3-flash-preview", "kimi-k2.5", "gpt-5-mini"],
@@ -139,7 +147,7 @@ TOOL_POLICY_DEFAULT_ALLOWED_CMD_PREFIXES = [
 
 @dataclass
 class Settings:
-    database_url: str = field(default_factory=lambda: _get_env("DATABASE_URL", "sqlite:///./instant-coffee.db"))
+    database_url: str = field(default_factory=_resolve_database_url)
     app_data_pg_pool_min_size: int = field(default_factory=lambda: _get_int("APP_DATA_PG_POOL_MIN_SIZE", 1))
     app_data_pg_pool_max_size: int = field(default_factory=lambda: _get_int("APP_DATA_PG_POOL_MAX_SIZE", 15))
     app_data_pg_pool_command_timeout: float = field(
@@ -207,7 +215,7 @@ class Settings:
     model_failure_ttl_seconds: int = field(default_factory=lambda: _get_int("MODEL_FAILURE_TTL_SECONDS", 900))
     model_fallback_attempts: int = field(default_factory=lambda: _get_int("MODEL_FALLBACK_ATTEMPTS", 3))
     temperature: float = field(default_factory=lambda: _get_float("TEMPERATURE", 0.7))
-    max_tokens: int = field(default_factory=lambda: _get_int("MAX_TOKENS", 8000))
+    max_tokens: int = field(default_factory=lambda: _get_int("MAX_TOKENS", 32000))
     auto_save: bool = field(default_factory=lambda: _get_bool("AUTO_SAVE", True))
     skills_dir: str | None = field(default_factory=lambda: _get_env("SKILLS_DIR"))
     mcp_enabled: bool = field(default_factory=lambda: _get_bool("ENABLE_MCP", _get_bool("USE_MCP", False)))

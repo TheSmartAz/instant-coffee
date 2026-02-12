@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import httpx
+import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
@@ -54,12 +56,14 @@ def _clean_messages_for_api(messages: list[dict[str, Any]]) -> list[dict[str, An
 
     - Removes ``cache_control`` from content blocks (Anthropic prompt caching).
     - Unwraps single-element content block arrays back to plain strings.
+    - Ensures assistant ``tool_calls[].function.arguments`` is valid JSON text.
     - Preserves ``reasoning_content`` — required by some proxies (e.g. DMXAPI)
       when thinking mode is enabled.
     """
     import logging
     _log = logging.getLogger("ic.llm")
     _stripped_count = 0
+    _invalid_tool_args_count = 0
     cleaned: list[dict[str, Any]] = []
     for msg in messages:
         m = dict(msg)
@@ -86,9 +90,51 @@ def _clean_messages_for_api(messages: list[dict[str, Any]]) -> list[dict[str, An
             else:
                 m["content"] = new_blocks
 
+        # Escape Unicode line separators in tool call arguments — U+2028 and
+        # U+2029 are valid in JavaScript strings but NOT in JSON.  Some API
+        # proxies (e.g. DMXAPI) perform strict JSON validation and reject
+        # requests containing these characters with "invalid function arguments
+        # json string".
+        if m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function")
+                if not isinstance(fn, dict):
+                    continue
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    normalized = args.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+                elif isinstance(args, (dict, list)):
+                    normalized = json.dumps(args, ensure_ascii=False)
+                else:
+                    normalized = "{}"
+
+                try:
+                    json.loads(normalized)
+                    fn["arguments"] = normalized
+                except json.JSONDecodeError:
+                    # Keep API payload valid even if prior assistant tool_call args
+                    # were malformed/truncated.
+                    placeholder: dict[str, Any] = {
+                        "_invalid_json_args": True,
+                        "note": "original tool arguments were malformed and replaced",
+                        "original_length": len(normalized),
+                    }
+                    file_path_match = re.search(r'"file_path"\s*:\s*"([^"]+)"', normalized)
+                    if file_path_match:
+                        placeholder["file_path"] = file_path_match.group(1)
+                    fn["arguments"] = json.dumps(placeholder, ensure_ascii=False)
+                    _invalid_tool_args_count += 1
+
         cleaned.append(m)
     if _stripped_count:
         _log.debug("cleaned %d cache_control fields from %d messages", _stripped_count, len(messages))
+    if _invalid_tool_args_count:
+        _log.warning(
+            "sanitized %d malformed tool_call arguments before API request",
+            _invalid_tool_args_count,
+        )
     return cleaned
 
 
