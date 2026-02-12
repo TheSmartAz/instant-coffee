@@ -4,7 +4,120 @@
 
 This document provides an overview of all development phases organized by category (Frontend, Backend, Database). The project is organized into **spec versions**.
 
-**Latest Version**: v0.9 - Soul Agentic Loop (LangGraph → Tool-Calling Loop Refactor)
+**Latest Version**: v1.0 - Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment Export + Analytics
+
+---
+
+## Version 1.0: Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment Export + Analytics
+
+**Last Updated**: 2026-02-13 (Breakdown created)
+
+### Database Phases (v10)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| D1 | Cross-Session Memory + Analytics Schema | P0 | Medium | ✅ | - | B8, B11 |
+
+### Backend Phases (v10)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| B1 | Exact Token Calculation (tiktoken) | P0 | Medium | ✅ | - | B2, B5 |
+| B2 | Structured HTML Generation Tool | P0 | High | ⚠️ | B1 | B3 |
+| B3 | Atomic Multi-file Operations | P0 | High | ⚠️ | B2 | - |
+| B4 | Provider Fallback Chain | P0 | Medium | ✅ | - | - |
+| B5 | Structured Compaction | P1 | High | ⚠️ | B1 | - |
+| B6 | AskUser Timeout + Graceful Degradation | P0 | Medium | ✅ | - | B7 |
+| B7 | Interview Progress Indicator | P1 | Low | ⚠️ | B6 | F3 |
+| B8 | Cross-Session Memory | P0 | High | ⚠️ | D1 | - |
+| B9 | Richer Context Injection | P1 | Medium | ✅ | - | - |
+| B10 | One-Click Deployment Service | P0 | High | ⚠️ | F2 | F4 |
+| B11 | Analytics Service | P0 | High | ⚠️ | D1 | F6 |
+
+### Frontend Phases (v10)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| F1 | Zustand State Management | P0 | High | ✅ | - | F2 |
+| F2 | Split ProjectPage | P0 | High | ⚠️ | F1 | B10, F4 |
+| F3 | Interview Progress Indicator UI | P1 | Low | ⚠️ | B7 | - |
+| F4 | Deploy Button UI | P0 | Medium | ⚠️ | F2, B10 | F5 |
+| F5 | QR Code Sharing | P1 | Low | ⚠️ | F4 | - |
+| F6 | Data Tab Dashboard | P0 | High | ⚠️ | B11 | - |
+
+### Output Phases (v10)
+
+| Phase ID | Name | Priority | Complexity | Parallel? | Depends On | Blocks |
+|----------|------|----------|------------|-----------|------------|--------|
+| O1 | Analytics Tracking Script Template | P0 | Medium | ⚠️ | B11 | - |
+
+### v10 Dependency Graph
+
+```
+Wave 1 - Start Immediately (no dependencies):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+D1 (Database Schema)
+B1 (Token Calculation)
+B4 (Provider Fallback)
+B6 (AskUser Timeout)
+F1 (Zustand)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Wave 2 - After D1:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B8 (Cross-Session Memory - DB dependent)
+B11 (Analytics Service - DB dependent)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Wave 3 - After B1:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B2 (Structured HTML Tool)
+B5 (Structured Compaction)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Wave 4 - After B2:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B3 (Atomic Batch Operations)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Wave 5 - After F1:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+F2 (Split ProjectPage)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Wave 6 - After F2:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B10 (Deploy Service)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Wave 7 - After B10:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+F4 (Deploy Button UI)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Wave 8 - After B11:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+F6 (Data Tab Dashboard)
+O1 (Analytics Script)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Parallel Development Guide (v10)
+
+You can run **3 Claude Code instances in parallel**:
+
+1. **Agent Reliability Agent**: B1 → B2 → B3 → B4 → B5
+2. **Frontend Architecture Agent**: F1 → F2 → F4 → F5
+3. **Dialogue & Intelligence Agent**: B6 → B7 → B8 → B9
+
+Or alternatively:
+
+1. **Backend Agent**: B1 → B2 → B3 → B4 → B5 → B6 → B7 → B9 → B10 → B11
+2. **Frontend Agent**: F1 → F2 → F3 → F4 → F5 → F6
+3. **Database Agent**: D1 (standalone)
+
+**Critical Path**: D1 → B8 → (nothing blocks) or F1 → F2 → B10 → F4
+**Independent Work**: B1, B4, B6, F1 (can start immediately)
 
 ---
 
@@ -513,6 +626,31 @@ docs/
 ├── phases/
 │   ├── INDEX.md (this file)
 │   │
+│   ├── v10 - Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment + Analytics
+│   │   ├── database/
+│   │   │   └── v10-phase-d1-memory-analytics-schema.md
+│   │   ├── backend/
+│   │   │   ├── v10-phase-b1-token-calculation.md
+│   │   │   ├── v10-phase-b2-structured-html-tool.md
+│   │   │   ├── v10-phase-b3-atomic-batch-operations.md
+│   │   │   ├── v10-phase-b4-provider-fallback.md
+│   │   │   ├── v10-phase-b5-structured-compaction.md
+│   │   │   ├── v10-phase-b6-askuser-timeout.md
+│   │   │   ├── v10-phase-b7-interview-progress.md
+│   │   │   ├── v10-phase-b8-cross-session-memory.md
+│   │   │   ├── v10-phase-b9-context-injection.md
+│   │   │   ├── v10-phase-b10-deploy-service.md
+│   │   │   └── v10-phase-b11-analytics-service.md
+│   │   ├── frontend/
+│   │   │   ├── v10-phase-f1-zustand-state.md
+│   │   │   ├── v10-phase-f2-split-projectpage.md
+│   │   │   ├── v10-phase-f3-interview-progress-ui.md
+│   │   │   ├── v10-phase-f4-deploy-button.md
+│   │   │   ├── v10-phase-f5-qr-code.md
+│   │   │   └── v10-phase-f6-data-tab-dashboard.md
+│   │   └── output/
+│   │       └── v10-phase-o1-analytics-script.md
+│   │
 │   ├── v09 - Soul Agentic Loop (LangGraph → Tool-Calling Loop)
 │   │   ├── backend/
 │   │   │   ├── v09-phase-b1-tool-foundation.md
@@ -673,6 +811,43 @@ cat docs/phases/frontend/v09-phase-f1-product-doc-update-card.md
 
 ---
 
+## Quick Start Commands for v1.0
+
+```bash
+# Database Developer
+cat docs/phases/database/v10-phase-d1-memory-analytics-schema.md
+
+# Backend Developer (Generation Reliability)
+cat docs/phases/backend/v10-phase-b1-token-calculation.md
+cat docs/phases/backend/v10-phase-b2-structured-html-tool.md
+cat docs/phases/backend/v10-phase-b3-atomic-batch-operations.md
+cat docs/phases/backend/v10-phase-b4-provider-fallback.md
+cat docs/phases/backend/v10-phase-b5-structured-compaction.md
+
+# Backend Developer (Dialogue Intelligence)
+cat docs/phases/backend/v10-phase-b6-askuser-timeout.md
+cat docs/phases/backend/v10-phase-b7-interview-progress.md
+cat docs/phases/backend/v10-phase-b8-cross-session-memory.md
+cat docs/phases/backend/v10-phase-b9-context-injection.md
+
+# Backend Developer (Deployment & Analytics)
+cat docs/phases/backend/v10-phase-b10-deploy-service.md
+cat docs/phases/backend/v10-phase-b11-analytics-service.md
+
+# Frontend Developer
+cat docs/phases/frontend/v10-phase-f1-zustand-state.md
+cat docs/phases/frontend/v10-phase-f2-split-projectpage.md
+cat docs/phases/frontend/v10-phase-f3-interview-progress-ui.md
+cat docs/phases/frontend/v10-phase-f4-deploy-button.md
+cat docs/phases/frontend/v10-phase-f5-qr-code.md
+cat docs/phases/frontend/v10-phase-f6-data-tab-dashboard.md
+
+# Output Developer
+cat docs/phases/output/v10-phase-o1-analytics-script.md
+```
+
+---
+
 ## Version Compatibility
 
 | Version | Spec | Status | Key Features |
@@ -684,12 +859,13 @@ cat docs/phases/frontend/v09-phase-f1-product-doc-update-card.md
 | v0.5 | spec-05.md | ✅ Complete | Version management, Responses API |
 | v0.6 | spec-06.md | ✅ Complete | Skills, Orchestrator, Multi-model, Data Protocol, Style Ref |
 | v0.7 | spec-07.md | ✅ Complete | LangGraph, React SSG, Scene Capabilities, Component Registry |
-| v0.8 | spec-08.md | 🚧 In Progress | Run-Centric Backend, App Data Layer, Verify Gate, Tool Policy |
-| v0.9 | spec-09-soul-agentic-loop.md | ⏳ Planned | Soul Agentic Loop, Tool Registry, Interview V2, LangGraph Removal |
+| v0.8 | spec-08.md | ✅ Complete | Run-Centric Backend, App Data Layer, Verify Gate, Tool Policy |
+| v0.9 | spec-09.md | ✅ Complete | Soul Agentic Loop, Tool Registry, Interview V2, LangGraph Removal |
+| v1.0 | spec-10.md | ⏳ Planned | Generation Reliability, Dialogue Intelligence, Frontend Upgrade, Deployment, Analytics |
 
 ---
 
-**Document Version**: v7.0
-**Last Updated**: 2026-02-07
-**Total Phases (v09)**: 8 (7 Backend, 1 Frontend)
-**Current Spec**: v0.9 - Soul Agentic Loop (LangGraph → Tool-Calling Loop Refactor)
+**Document Version**: v8.0
+**Last Updated**: 2026-02-13
+**Total Phases (v10)**: 21 (1 Database, 11 Backend, 6 Frontend, 1 Output)
+**Current Spec**: v1.0 - Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment Export + Analytics

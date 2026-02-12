@@ -63,12 +63,6 @@ MODEL_GROUPS: list[ModelGroup] = [
                 "max_tokens": 131072,
             },
             {
-                "id": "hunyuan-2.0-instruct-20251111",
-                "label": "HY 2.0",
-                "capabilities": ["text"],
-                "max_tokens": 256000,
-            },
-            {
                 "id": "DeepSeek-V3.2",
                 "label": "DeepSeek-V3.2",
                 "capabilities": ["text"],

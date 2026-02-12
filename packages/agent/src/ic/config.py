@@ -31,7 +31,6 @@ DMXAPI_MODELS = [
     ("DeepSeek-V3.2", 128000),
     ("gpt-5-mini", 128000),
     ("qwen3-max-2026-01-23", 131072),
-    ("hunyuan-2.0-instruct-20251111", 256000),
     ("gemini-3-flash-preview", 128000),
     ("grok-code-fast-1", 128000),
 ]
@@ -49,7 +48,6 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gpt-5-mini":                   (1.50, 6.00),
     "glm-5":                      (1.00, 4.00),
     "qwen3-max-2026-01-23":         (1.60, 6.40),
-    "hunyuan-2.0-instruct-20251111":(1.00, 4.00),
     "gemini-3-flash-preview":       (0.15, 0.60),
     "grok-code-fast-1":             (2.00, 10.00),
 }
