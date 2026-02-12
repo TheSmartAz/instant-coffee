@@ -23,7 +23,8 @@ from ..events.models import DoneEvent, ErrorEvent
 from ..services.message import MessageService
 
 from .config_bridge import backend_settings_to_agent_config
-from .db_tools import DBEditFile, DBWriteFile, persist_html_page
+from .db_tools import DBEditFile, DBMultiEditFile, DBWriteFile, persist_html_page
+from .deferred_buffer import DeferredPersistenceBuffer
 from .event_bridge import EventBridge
 from .prompts import build_system_prompt
 from .registry import engine_registry
@@ -53,6 +54,7 @@ class EngineOrchestrator:
         self._engine = None
         self.thread_id: str | None = None
         self._sub_agent_sessions: list[DbSession] = []
+        self._deferred_buffer = DeferredPersistenceBuffer()
 
     @property
     def has_pending_question(self) -> bool:
@@ -80,6 +82,7 @@ class EngineOrchestrator:
                 session_id=self.session.id,
                 emitter=self.event_emitter,
                 engine=sub_engine,
+                deferred_buffer=self._deferred_buffer,
             ),
             DBEditFile(
                 workspace=ws,
@@ -87,6 +90,7 @@ class EngineOrchestrator:
                 session_id=self.session.id,
                 emitter=self.event_emitter,
                 engine=sub_engine,
+                deferred_buffer=self._deferred_buffer,
             ),
         ]
 
@@ -177,10 +181,16 @@ class EngineOrchestrator:
         skill_tool._update_description()  # Update with available skills
         engine.toolset.add(skill_tool)
 
-        # Add MultiEditFile tool
+        # Add MultiEditFile tool — use DB-backed version with deferred buffer
         from ic.tools.file import MultiEditFile
-        multi_edit = MultiEditFile(workspace=ws_path)
-        engine.toolset.add(multi_edit)
+        db_multi_edit = DBMultiEditFile(
+            workspace=ws_path,
+            db_session=self.db,
+            session_id=self.session.id,
+            emitter=self.event_emitter,
+            deferred_buffer=self._deferred_buffer,
+        )
+        engine.toolset.add(db_multi_edit)
 
         # Replace the plain WriteFile and EditFile with DB-backed versions
         db_write = DBWriteFile(
@@ -189,6 +199,7 @@ class EngineOrchestrator:
             session_id=self.session.id,
             emitter=self.event_emitter,
             engine=engine,
+            deferred_buffer=self._deferred_buffer,
         )
         db_edit = DBEditFile(
             workspace=ws_path,
@@ -196,6 +207,7 @@ class EngineOrchestrator:
             session_id=self.session.id,
             emitter=self.event_emitter,
             engine=engine,
+            deferred_buffer=self._deferred_buffer,
         )
         engine.toolset.add(db_write)
         engine.toolset.add(db_edit)
@@ -371,6 +383,9 @@ class EngineOrchestrator:
 
             result = await self._engine.run_turn(user_message, images=images_for_engine)
 
+            # Flush deferred writes — one version per file for this turn
+            self._deferred_buffer.flush(self.db, self.session.id, self.event_emitter)
+
             # Emit file change events
             if self._engine.file_changes:
                 self._bridge.emit_files_changed(self._engine.file_changes)
@@ -428,6 +443,11 @@ class EngineOrchestrator:
 
         except Exception as exc:
             logger.exception("Engine run failed")
+            # Flush deferred writes to preserve partial work
+            try:
+                self._deferred_buffer.flush(self.db, self.session.id, self.event_emitter)
+            except Exception:
+                logger.exception("Deferred buffer flush failed during error handling")
             # Try to sync any files written before the error
             try:
                 synced_slugs = self._sync_workspace_html(workspace)
@@ -494,6 +514,9 @@ class EngineOrchestrator:
         (e.g. ``cat > index.html``) instead of ``write_file``, bypassing
         DB persistence entirely.
 
+        If the deferred buffer is still active (hasn't been flushed yet),
+        writes go through the buffer.  Otherwise falls back to direct persist.
+
         Returns the list of slugs that were newly synced.
         """
         from ..services.page import PageService
@@ -512,6 +535,8 @@ class EngineOrchestrator:
                 continue
             try:
                 content = Path(html_path).read_text(encoding="utf-8")
+                # Use direct persist here — _sync runs after buffer.flush()
+                # so these are truly orphaned files not captured by tools.
                 persist_html_page(
                     self.db,
                     self.session.id,
@@ -559,7 +584,12 @@ class EngineOrchestrator:
             if affected_pages:
                 return "pages_generated"
         if wrote_product_doc:
-            return "product_doc_updated"
+            edited_product_doc = any(
+                tc.get("name") == "edit_file"
+                and "product" in str(tc.get("arguments", "")).lower()
+                for tc in result.tool_calls
+            )
+            return "product_doc_updated" if edited_product_doc else "product_doc_generated"
 
         # Fallback: workspace sync found orphaned HTML files
         if synced_slugs:

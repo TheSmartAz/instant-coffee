@@ -5,6 +5,7 @@ import type {
   InterviewBatch,
   InterviewSummary,
   Message,
+  MessageImage,
   SessionDetail,
   Version,
 } from '@/types'
@@ -21,6 +22,7 @@ import {
 import {
   buildInterviewBatchesFromEvents,
   buildStepsFromEvents,
+  buildWidgetDataFromEvents,
   mapInterviewActionToStatus,
   STEP_EVENT_TYPES,
 } from '@/lib/eventProcessors'
@@ -57,6 +59,10 @@ type ApiMessage = {
   active_page_slug?: string | null
   created_at?: string
   timestamp?: string
+  metadata?: {
+    images?: Array<{ url?: string; intent?: string; id?: string | null; source?: string; content_type?: string }>
+    image_intent?: string
+  } | null
 }
 
 type ApiVersion = {
@@ -339,10 +345,43 @@ const attachStepsToMessages = (
   events: SessionEvent[]
 ): Message[] => {
   const stepsByRun = buildStepsFromEvents(events)
-  if (stepsByRun.size === 0) return messages
+  const widgetData = buildWidgetDataFromEvents(events)
 
   let next = messages
-  for (const [, steps] of stepsByRun) {
+
+  // Attach widget data (plan, fileChanges, subAgents, productDoc) to the last
+  // assistant message that doesn't already have them.
+  const hasWidgets =
+    widgetData.plan ||
+    widgetData.planTasks ||
+    widgetData.fileChanges ||
+    widgetData.subAgents ||
+    widgetData.action ||
+    widgetData.productDocUpdated
+  if (hasWidgets) {
+    for (let i = next.length - 1; i >= 0; i--) {
+      const msg = next[i]
+      if (msg.role !== 'assistant') continue
+      if (next === messages) next = [...messages]
+      next[i] = {
+        ...next[i],
+        plan: next[i].plan ?? widgetData.plan,
+        planTasks: next[i].planTasks ?? widgetData.planTasks,
+        fileChanges: next[i].fileChanges ?? widgetData.fileChanges,
+        subAgents: next[i].subAgents ?? widgetData.subAgents,
+        action: next[i].action ?? widgetData.action as Message['action'],
+        productDocUpdated: next[i].productDocUpdated ?? widgetData.productDocUpdated,
+        productDocChangeSummary: next[i].productDocChangeSummary ?? widgetData.productDocChangeSummary,
+        productDocSectionName: next[i].productDocSectionName ?? widgetData.productDocSectionName,
+        productDocSectionContent: next[i].productDocSectionContent ?? widgetData.productDocSectionContent,
+      }
+      break
+    }
+  }
+
+  if (stepsByRun.size === 0) return next
+
+  for (const [, { steps, segments }] of stepsByRun) {
     // Find the assistant message whose timestamp is closest to the events
     const eventTimes = events
       .filter((e) => STEP_EVENT_TYPES.has(e.type))
@@ -378,20 +417,37 @@ const attachStepsToMessages = (
 
     if (bestIndex < 0) continue
     if (next === messages) next = [...messages]
-    next[bestIndex] = { ...next[bestIndex], steps }
+
+    // Build full segments: prepend existing text content, then tool groups
+    const existingContent = next[bestIndex].content?.trim()
+    const fullSegments = existingContent
+      ? [{ type: 'text' as const, content: existingContent }, ...segments]
+      : segments
+
+    next[bestIndex] = { ...next[bestIndex], steps, segments: fullSegments }
   }
 
   return next
 }
+
+const ENGINE_ERROR_RE = /^Engine error:\s/
 
 const buildBaseMessages = (
   sessionId: string | undefined,
   rawMessages: ApiMessage[],
   threadId?: string
 ) => {
-  const mappedMessages = rawMessages.map(mapMessage)
-  const payloadMap = buildInterviewPayloadMap(rawMessages, mappedMessages)
-  let nextMessages = applyStoredInterview(sessionId, rawMessages, mappedMessages)
+  // Filter out persisted engine error messages — these are transient LLM
+  // failures (e.g. bad tool-call JSON) that shouldn't clutter the chat.
+  const filtered = rawMessages.filter(
+    (msg) => {
+      const content = msg.content ?? msg.message ?? ''
+      return !(msg.role === 'assistant' && ENGINE_ERROR_RE.test(content))
+    }
+  )
+  const mappedMessages = filtered.map(mapMessage)
+  const payloadMap = buildInterviewPayloadMap(filtered, mappedMessages)
+  let nextMessages = applyStoredInterview(sessionId, filtered, mappedMessages)
   nextMessages = reconcileInterviewSummaries(nextMessages, payloadMap)
   nextMessages = applyPendingMessage(sessionId, nextMessages, threadId)
   return { messages: nextMessages, payloadMap }
@@ -479,6 +535,15 @@ const mapMessage = (message: ApiMessage, index: number): Message => {
     getCaseValue<boolean>(message, 'product_doc_updated') === true ||
     action === 'product_doc_updated'
 
+  // Extract images from metadata
+  const images: MessageImage[] | undefined = message.metadata?.images?.length
+    ? message.metadata.images.map((img) => ({
+        data: img.url ?? '',
+        intent: img.intent ?? message.metadata?.image_intent,
+        name: img.id ?? undefined,
+      }))
+    : undefined
+
   return {
     id: message.id ?? `m-${index}-${Date.now()}`,
     role: role === 'user' ? 'user' : 'assistant',
@@ -496,6 +561,7 @@ const mapMessage = (message: ApiMessage, index: number): Message => {
       role === 'user' &&
       parsedInterview.isInterviewOnly &&
       parsedInterview.interviewAction !== 'update_answers',
+    images,
   }
 }
 

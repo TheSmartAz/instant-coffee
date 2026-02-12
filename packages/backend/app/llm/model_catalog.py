@@ -39,22 +39,22 @@ MODEL_GROUPS: list[ModelGroup] = [
         "base_url": "https://www.dmxapi.cn/v1",
         "models": [
             {
-                "id": "kimi-k2.5",
-                "label": "KIMI-K2.5",
-                "capabilities": ["text", "vision"],
-                "max_tokens": 256000,
-            },
-            {
-                "id": "MiniMax-M2.1",
-                "label": "MiniMax M2.1",
+                "id": "MiniMax-M2.5",
+                "label": "MiniMax M2.5",
                 "capabilities": ["text"],
                 "max_tokens": 204800,
             },
             {
-                "id": "glm-4.7",
-                "label": "GLM-4.7",
+                "id": "glm-5",
+                "label": "GLM-5",
                 "capabilities": ["text"],
                 "max_tokens": 202752,
+            },
+            {
+                "id": "kimi-k2.5",
+                "label": "KIMI-K2.5",
+                "capabilities": ["text", "vision"],
+                "max_tokens": 256000,
             },
             {
                 "id": "qwen3-max-2026-01-23",

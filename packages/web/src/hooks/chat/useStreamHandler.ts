@@ -4,7 +4,7 @@ import type {
   Message,
   SubAgentInfo,
 } from '@/types'
-import type { ToolCallEvent, ToolResultEvent } from '@/types/events'
+import type { ToolCallEvent, ToolResultEvent, ToolProgressEvent } from '@/types/events'
 import {
   buildAgentLabel,
   buildToolLabel,
@@ -29,6 +29,7 @@ export interface StreamHandlerDeps {
   maybeNotifySessionCreated: (value: unknown) => void
   applyInterviewQuestions: (payload: InterviewPayloadLike) => boolean
   appendStep: (step: ChatStep, options?: { updateKey?: string }) => void
+  appendTextSegment: (text: string) => void
   updateMessageById: (id: string, updater: (msg: Message) => Message) => void
   dispatchProductDocEvent: (payload: {
     type: string
@@ -41,8 +42,62 @@ export interface StreamHandlerDeps {
   onPreview?: (payload: { html?: string; previewUrl?: string | null }) => void
 }
 
+/**
+ * Delta buffer that batches incoming text deltas and flushes them
+ * on the next animation frame for smooth, jank-free streaming.
+ */
+class DeltaBuffer {
+  private buffer = ''
+  private rafId: number | null = null
+  private flushFn: ((accumulated: string) => void) | null = null
+
+  setFlushFn(fn: (accumulated: string) => void) {
+    this.flushFn = fn
+  }
+
+  push(delta: string) {
+    this.buffer += delta
+    if (this.rafId === null) {
+      this.rafId = requestAnimationFrame(() => {
+        this.flush()
+      })
+    }
+  }
+
+  flush() {
+    this.rafId = null
+    if (this.buffer && this.flushFn) {
+      const text = this.buffer
+      this.buffer = ''
+      this.flushFn(text)
+    }
+  }
+
+  destroy() {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId)
+      this.rafId = null
+    }
+    this.flush()
+  }
+}
+
 export function createStreamDataHandler(deps: StreamHandlerDeps) {
-  return (data: string) => {
+  const deltaBuffer = new DeltaBuffer()
+
+  // Flush buffered deltas into the message state
+  deltaBuffer.setFlushFn((accumulated) => {
+    const messageId = deps.streamMessageIdRef.current
+    if (!messageId) return
+    deps.updateMessageById(messageId, (message) => ({
+      ...message,
+      content: message.interview ? '' : `${message.content}${accumulated}`,
+    }))
+    deps.appendTextSegment(accumulated)
+    deps.receivedDeltaRef.current = true
+  })
+
+  const handler = (data: string) => {
     if (data === '[DONE]') {
       deps.stopStream()
       return
@@ -119,23 +174,41 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
         }
       }
       if (payload.type.startsWith('tool_')) {
-        const toolEvent = payload as ToolCallEvent | ToolResultEvent
+        const toolEvent = payload as ToolCallEvent | ToolResultEvent | ToolProgressEvent
         const toolKey = `tool:${toolEvent.agent_id}:${toolEvent.tool_name}`
-        const step: ChatStep = {
-          id: createId(),
-          label: buildToolLabel(toolEvent),
-          status:
-            toolEvent.type === 'tool_call'
-              ? 'in_progress'
-              : toolEvent.success
-                ? 'done'
-                : 'failed',
-          kind: 'tool',
-        }
-        if (toolEvent.type === 'tool_call') {
-          deps.appendStep({ ...step, key: toolKey })
-        } else {
+        if (toolEvent.type === 'tool_progress') {
+          const progressEvent = toolEvent as ToolProgressEvent
+          const step: ChatStep = {
+            id: createId(),
+            label: buildToolLabel(toolEvent as ToolCallEvent),
+            status: 'in_progress',
+            kind: 'tool',
+            toolName: progressEvent.tool_name,
+            progressMessage: progressEvent.progress_message,
+            progressPercent: progressEvent.progress_percent,
+          }
           deps.appendStep(step, { updateKey: toolKey })
+        } else {
+          const step: ChatStep = {
+            id: createId(),
+            label: buildToolLabel(toolEvent as ToolCallEvent | ToolResultEvent),
+            status:
+              toolEvent.type === 'tool_call'
+                ? 'in_progress'
+                : (toolEvent as ToolResultEvent).success
+                  ? 'done'
+                  : 'failed',
+            kind: 'tool',
+            toolName: toolEvent.tool_name,
+            toolInput: toolEvent.type === 'tool_call' ? (toolEvent as ToolCallEvent).tool_input : undefined,
+            toolOutput: toolEvent.type === 'tool_result' ? (toolEvent as ToolResultEvent).tool_output : undefined,
+            error: toolEvent.type === 'tool_result' ? (toolEvent as ToolResultEvent).error : undefined,
+          }
+          if (toolEvent.type === 'tool_call') {
+            deps.appendStep({ ...step, key: toolKey })
+          } else {
+            deps.appendStep(step, { updateKey: toolKey })
+          }
         }
       }
       // Handle files_changed events — attach to current message
@@ -152,10 +225,65 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
       if (payload.type === 'plan_update') {
         const messageId = deps.streamMessageIdRef.current
         if (messageId && Array.isArray(payload.steps)) {
+          // Normalize steps: LLM may use "title"/"description" instead of "step"
+          const normalized = (payload.steps as Array<Record<string, unknown>>).map(
+            (s, i) => ({
+              step: (s.step || s.title || s.description || s.name || s.text || `Step ${i + 1}`) as string,
+              status: (s.status ?? 'pending') as string,
+            })
+          )
           deps.updateMessageById(messageId, (message) => ({
             ...message,
-            plan: payload.steps as Message['plan'],
+            plan: normalized as Message['plan'],
           }))
+        }
+      }
+      // Handle plan_created events — attach tasks to current message
+      if (payload.type === 'plan_created') {
+        const messageId = deps.streamMessageIdRef.current
+        if (messageId && payload.plan?.tasks) {
+          deps.updateMessageById(messageId, (message) => ({
+            ...message,
+            planTasks: payload.plan.tasks as Message['planTasks'],
+          }))
+        }
+      }
+      // Handle task status events — update planTasks on the message
+      if (
+        payload.type === 'task_started' ||
+        payload.type === 'task_done' ||
+        payload.type === 'task_completed' ||
+        payload.type === 'task_failed' ||
+        payload.type === 'task_blocked' ||
+        payload.type === 'task_retrying' ||
+        payload.type === 'task_skipped' ||
+        payload.type === 'task_aborted'
+      ) {
+        const messageId = deps.streamMessageIdRef.current
+        const taskId = payload.task_id as string | undefined
+        if (messageId && taskId) {
+          const statusMap: Record<string, string> = {
+            task_started: 'in_progress',
+            task_done: 'done',
+            task_completed: 'done',
+            task_failed: 'failed',
+            task_blocked: 'blocked',
+            task_retrying: 'retrying',
+            task_skipped: 'skipped',
+            task_aborted: 'aborted',
+          }
+          const newStatus = statusMap[payload.type]
+          if (newStatus) {
+            deps.updateMessageById(messageId, (message) => {
+              if (!message.planTasks) return message
+              return {
+                ...message,
+                planTasks: message.planTasks.map((t) =>
+                  t.id === taskId ? { ...t, status: newStatus as typeof t.status } : t
+                ),
+              }
+            })
+          }
         }
       }
       // Handle bg_task events — dispatch for BackgroundTasksPanel
@@ -302,10 +430,13 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
     }
 
     if (typeof fullContent === 'string' && messageId) {
+      // Full content replacement — flush any buffered deltas first
+      deltaBuffer.flush()
       deps.receivedDeltaRef.current = false
       deps.updateMessageById(messageId, (message) => ({
         ...message,
         content: message.interview ? '' : fullContent,
+        segments: message.interview ? message.segments : [{ type: 'text' as const, content: fullContent }],
         action: messageFields.action ?? message.action,
         productDocUpdated: messageFields.productDocUpdated || message.productDocUpdated,
         productDocChangeSummary:
@@ -320,10 +451,13 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
     } else if (typeof contentDelta === 'string' && messageId) {
       const fullMessage = (payload as { message?: unknown }).message
       if (typeof fullMessage === 'string' && deps.receivedDeltaRef.current) {
+        // Full message override — flush buffer first
+        deltaBuffer.flush()
         deps.receivedDeltaRef.current = false
         deps.updateMessageById(messageId, (message) => ({
           ...message,
           content: message.interview ? '' : fullMessage,
+          segments: message.interview ? message.segments : [{ type: 'text' as const, content: fullMessage }],
           action: messageFields.action ?? message.action,
           productDocUpdated: messageFields.productDocUpdated || message.productDocUpdated,
           productDocChangeSummary:
@@ -336,22 +470,33 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
           activePageSlug: messageFields.activePageSlug ?? message.activePageSlug,
         }))
       } else {
-        deps.updateMessageById(messageId, (message) => ({
-          ...message,
-          content: message.interview ? '' : `${message.content}${contentDelta}`,
-          action: messageFields.action ?? message.action,
-          productDocUpdated: messageFields.productDocUpdated || message.productDocUpdated,
-          productDocChangeSummary:
-            messageFields.productDocChangeSummary ?? message.productDocChangeSummary,
-          productDocSectionName:
-            messageFields.productDocSectionName ?? message.productDocSectionName,
-          productDocSectionContent:
-            messageFields.productDocSectionContent ?? message.productDocSectionContent,
-          affectedPages: messageFields.affectedPages ?? message.affectedPages,
-          activePageSlug: messageFields.activePageSlug ?? message.activePageSlug,
-        }))
-        if (hasDelta) {
-          deps.receivedDeltaRef.current = true
+        const hasMetadata = messageFields.action || messageFields.productDocUpdated ||
+          messageFields.productDocChangeSummary || messageFields.affectedPages ||
+          messageFields.activePageSlug
+        if (hasDelta && !hasMetadata) {
+          // Pure text delta — buffer it for smooth rAF-based rendering
+          deltaBuffer.push(contentDelta)
+        } else {
+          // Delta with metadata — flush buffer and apply together
+          deltaBuffer.flush()
+          deps.appendTextSegment(contentDelta)
+          deps.updateMessageById(messageId, (message) => ({
+            ...message,
+            content: message.interview ? '' : `${message.content}${contentDelta}`,
+            action: messageFields.action ?? message.action,
+            productDocUpdated: messageFields.productDocUpdated || message.productDocUpdated,
+            productDocChangeSummary:
+              messageFields.productDocChangeSummary ?? message.productDocChangeSummary,
+            productDocSectionName:
+              messageFields.productDocSectionName ?? message.productDocSectionName,
+            productDocSectionContent:
+              messageFields.productDocSectionContent ?? message.productDocSectionContent,
+            affectedPages: messageFields.affectedPages ?? message.affectedPages,
+            activePageSlug: messageFields.activePageSlug ?? message.activePageSlug,
+          }))
+          if (hasDelta) {
+            deps.receivedDeltaRef.current = true
+          }
         }
       }
     }
@@ -364,10 +509,16 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
     }
 
     if (done) {
+      // Flush any remaining buffered deltas before signaling done
+      deltaBuffer.destroy()
       if (action) {
         deps.handleActionTabSwitch(action, activePageSlug)
       }
       deps.stopStream()
     }
   }
+
+  // Expose destroy for cleanup
+  handler.destroy = () => deltaBuffer.destroy()
+  return handler
 }

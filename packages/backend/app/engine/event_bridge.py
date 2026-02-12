@@ -33,6 +33,68 @@ _AGENT_ID = "engine"
 _AGENT_TYPE = "engine"
 
 
+class _ThinkTagStripper:
+    """Streaming-aware stripper for <think>...</think> blocks.
+
+    Some models (DeepSeek, Qwen3, etc.) emit thinking content inside
+    ``<think>`` tags in the regular content stream instead of using the
+    ``reasoning_content`` field.  This class buffers incoming deltas and
+    strips out everything between ``<think>`` and ``</think>`` (inclusive),
+    returning only the visible portion for each ``feed()`` call.
+    """
+
+    def __init__(self) -> None:
+        self._inside_think = False
+        # Partial tag buffer — holds chars that *might* be the start of
+        # ``<think>`` or ``</think>`` but we haven't seen enough yet.
+        self._partial: str = ""
+
+    def feed(self, delta: str) -> str:
+        """Process *delta* and return the portion that should be visible."""
+        out: list[str] = []
+        buf = self._partial + delta
+        self._partial = ""
+        i = 0
+
+        while i < len(buf):
+            if self._inside_think:
+                # Look for </think>
+                close_idx = buf.find("</think>", i)
+                if close_idx == -1:
+                    # Might be a partial closing tag at the tail
+                    # Keep up to 8 chars (len("</think>")) as partial
+                    tail = buf[max(i, len(buf) - 8):]
+                    if "<" in tail:
+                        self._partial = tail[tail.index("<"):]
+                    # Everything consumed — still inside think
+                    break
+                else:
+                    # Skip past </think>
+                    i = close_idx + len("</think>")
+                    self._inside_think = False
+            else:
+                # Look for <think>
+                open_idx = buf.find("<think>", i)
+                if open_idx == -1:
+                    # Might be a partial opening tag at the tail
+                    tail = buf[max(i, len(buf) - 7):]  # len("<think>") == 7
+                    if "<" in tail:
+                        # Could be start of <think> — hold it back
+                        cut = i + (len(buf) - i) - len(tail) + tail.index("<")
+                        out.append(buf[i:cut])
+                        self._partial = buf[cut:]
+                    else:
+                        out.append(buf[i:])
+                    break
+                else:
+                    # Emit everything before <think>
+                    out.append(buf[i:open_idx])
+                    i = open_idx + len("<think>")
+                    self._inside_think = True
+
+        return "".join(out)
+
+
 class EventBridge:
     """Translates Engine streaming callbacks into EventEmitter events.
 
@@ -56,16 +118,24 @@ class EventBridge:
         self._emitter = emitter
         self._session_id = session_id
         self._text_buffer: list[str] = []
+        self._think_stripper = _ThinkTagStripper()
         self._pending_approvals: dict[str, asyncio.Future] = {}
         self._active_sub_agents: dict[str, str] = {}  # agent_id → task description
 
     async def on_text_delta(self, delta: str) -> None:
-        """Emit a TextDeltaEvent for real-time streaming and buffer for final text."""
+        """Emit a TextDeltaEvent for real-time streaming and buffer for final text.
+
+        Strips ``<think>...</think>`` blocks so thinking content from models
+        like DeepSeek / Qwen3 never reaches the frontend.
+        """
         self._text_buffer.append(delta)
+        visible = self._think_stripper.feed(delta)
+        if not visible:
+            return
         self._emitter.emit(
             TextDeltaEvent(
                 session_id=self._session_id,
-                delta=delta,
+                delta=visible,
             )
         )
 
@@ -230,10 +300,20 @@ class EventBridge:
         )
 
     def get_accumulated_text(self) -> str:
-        """Return and clear the accumulated text buffer."""
+        """Return and clear the accumulated text buffer.
+
+        Strips any ``<think>...</think>`` blocks from the final text so
+        thinking content is never persisted in the assistant message.
+        """
+        import re
+
         text = "".join(self._text_buffer)
         self._text_buffer.clear()
-        return text
+        # Strip complete think blocks (dotall so . matches newlines)
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        # Strip unclosed trailing <think> block (model was cut off mid-think)
+        text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL)
+        return text.strip()
 
     # ── Phase 9: Agent improvement callbacks ──────────────────
 

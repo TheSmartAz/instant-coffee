@@ -20,7 +20,7 @@ export function ProductDocUpdateCard({
   const safeSectionContent = sectionContent.trim() || FALLBACK_SECTION_CONTENT
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
+    <div className="mt-2 rounded-lg border border-border/60 bg-muted/30 p-3">
       <button
         type="button"
         className="flex w-full items-center justify-between gap-2 text-left"

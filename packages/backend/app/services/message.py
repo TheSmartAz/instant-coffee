@@ -17,6 +17,7 @@ class MessageService:
         role: str,
         content: str,
         thread_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
     ) -> Message:
         normalized = role.strip().lower()
         if normalized not in {"user", "assistant"}:
@@ -26,6 +27,7 @@ class MessageService:
             thread_id=thread_id,
             role=normalized,
             content=content,
+            metadata_=metadata,
         )
         self.db.add(record)
         self.db.flush()

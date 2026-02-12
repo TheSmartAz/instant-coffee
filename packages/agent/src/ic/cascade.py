@@ -52,6 +52,15 @@ class ConfigLayer:
     def from_env(cls) -> ConfigLayer:
         """Load config from environment variables."""
         data = {}
+        raw_timeout = os.getenv("MODEL_TIMEOUT") or os.getenv("LLM_TIMEOUT")
+        model_timeout: float | None = None
+        if raw_timeout:
+            try:
+                parsed = float(raw_timeout)
+                if parsed > 0:
+                    model_timeout = parsed
+            except ValueError:
+                pass
 
         # DMXAPI key → register all known DMXAPI models
         dmx_key = (
@@ -63,34 +72,46 @@ class ConfigLayer:
             base = os.getenv("DEFAULT_BASE_URL", "https://www.dmxapi.cn/v1")
             models = data.setdefault("models", {})
             for mid in [
-                "kimi-k2.5", "DeepSeek-V3.2", "gpt-5-mini", "glm-4.7",
+                "kimi-k2.5", "DeepSeek-V3.2", "gpt-5-mini", "glm-5",
                 "qwen3-max-2026-01-23", "MiniMax-M2.1",
                 "hunyuan-2.0-instruct-20251111", "gemini-3-flash-preview",
                 "grok-code-fast-1",
             ]:
-                models[mid] = {"api_key": dmx_key, "base_url": base}
+                model_cfg = {"api_key": dmx_key, "base_url": base}
+                if model_timeout is not None:
+                    model_cfg["timeout"] = model_timeout
+                models[mid] = model_cfg
 
         # Model configs from env
         if api_key := os.getenv("ANTHROPIC_API_KEY"):
             models = data.setdefault("models", {})
             for mid in ["claude-sonnet-4-20250514", "claude-haiku-4-20250514"]:
-                models[mid] = {
+                model_cfg = {
                     "api_key": api_key,
                     "base_url": "https://api.anthropic.com/v1/",
                 }
+                if model_timeout is not None:
+                    model_cfg["timeout"] = model_timeout
+                models[mid] = model_cfg
 
         if api_key := os.getenv("OPENAI_API_KEY"):
             models = data.setdefault("models", {})
             for mid in ["gpt-4o", "gpt-4o-mini", "o3-mini"]:
-                models[mid] = {"api_key": api_key}
+                model_cfg = {"api_key": api_key}
+                if model_timeout is not None:
+                    model_cfg["timeout"] = model_timeout
+                models[mid] = model_cfg
 
         if api_key := os.getenv("DEEPSEEK_API_KEY"):
             models = data.setdefault("models", {})
             for mid in ["deepseek-chat", "deepseek-reasoner"]:
-                models[mid] = {
+                model_cfg = {
                     "api_key": api_key,
                     "base_url": "https://api.deepseek.com/v1",
                 }
+                if model_timeout is not None:
+                    model_cfg["timeout"] = model_timeout
+                models[mid] = model_cfg
 
         if default_model := (os.getenv("MODEL") or os.getenv("DEFAULT_MODEL")):
             data["default_model"] = default_model

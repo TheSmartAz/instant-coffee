@@ -250,13 +250,15 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
   }
 
   return (
-    <div className="rounded-lg border border-border bg-background/80 p-4">
+    <div className="mt-2 rounded-lg border border-border/60 bg-muted/30 p-3">
       <div className="flex items-center justify-between">
         <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Interview
         </div>
         <div className="text-xs text-muted-foreground">
-          {displayIndex}/{displayTotal}
+          {readOnly
+            ? `${batch.answers?.length ?? 0}/${displayTotal}`
+            : `${displayIndex}/${displayTotal}`}
         </div>
       </div>
       {batch.prompt ? (
@@ -282,7 +284,23 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
         </div>
       ) : null}
 
-      {!expanded && batch.status !== 'active' ? null : (
+      {!expanded && batch.status !== 'active' ? null : batch.status !== 'active' ? (
+        /* ── Submitted: show answer summary inside the widget ── */
+        <div className="mt-3 space-y-1.5">
+          {(batch.answers ?? []).map((item) => {
+            const answer =
+              item.labels?.join(', ') ?? item.label ?? String(item.value)
+            return (
+              <div key={item.id} className="text-sm">
+                <span className="text-muted-foreground">{item.question}</span>
+                <span className="text-muted-foreground"> — </span>
+                <span className="font-semibold text-foreground">{answer}</span>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        /* ── Active: show interactive question form ── */
         <div className="mt-4 space-y-4">
           <div
             className="text-sm font-medium text-foreground"
@@ -309,23 +327,65 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
                   )
                 )}
                 {forceOther ? (
-                  <div className="space-y-2">
-                    {hasOptions ? renderOption(
-                      effectiveQuestion,
-                      { id: OTHER_OPTION_ID, label: 'Other' },
-                      selectedValue,
-                      setAnswerValue,
-                      readOnly
-                    ) : null}
+                  hasOptions ? (
+                    <label
+                      className={cn(
+                        'flex items-center gap-2 rounded-md border border-border/70 px-3 py-1.5 text-sm transition',
+                        otherSelected ? 'border-primary/60 bg-primary/5 text-foreground' : 'text-muted-foreground',
+                        readOnly ? 'opacity-80' : 'hover:border-primary/50 hover:text-foreground'
+                      )}
+                    >
+                      <input
+                        type={effectiveQuestion.type === 'multi' ? 'checkbox' : 'radio'}
+                        name={effectiveQuestion.id}
+                        disabled={readOnly}
+                        checked={otherSelected}
+                        onChange={() => {
+                          if (readOnly) return
+                          if (effectiveQuestion.type === 'multi') {
+                            const ids = toArray(selectedValue)
+                            const set = new Set(ids)
+                            if (otherSelected) set.delete(OTHER_OPTION_ID)
+                            else set.add(OTHER_OPTION_ID)
+                            setAnswerValue(Array.from(set))
+                          } else {
+                            setAnswerValue(OTHER_OPTION_ID)
+                          }
+                        }}
+                        aria-label="Other"
+                        className="h-3.5 w-3.5 shrink-0 accent-primary"
+                      />
+                      <Input
+                        value={currentAnswer?.other ?? ''}
+                        onChange={(event) => setOtherValue(event.target.value)}
+                        onFocus={() => {
+                          if (readOnly) return
+                          if (!otherSelected) {
+                            if (effectiveQuestion.type === 'multi') {
+                              const ids = toArray(selectedValue)
+                              setAnswerValue([...new Set([...ids, OTHER_OPTION_ID])])
+                            } else {
+                              setAnswerValue(OTHER_OPTION_ID)
+                            }
+                          }
+                        }}
+                        placeholder={question.other_placeholder ?? question.placeholder ?? 'Enter your other answer'}
+                        disabled={readOnly}
+                        aria-label={`${question.title} (Other)`}
+                        aria-describedby={`interview-question-${question.id}`}
+                        className="h-7 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+                      />
+                    </label>
+                  ) : (
                     <Input
-                      value={hasOptions ? (currentAnswer?.other ?? '') : (typeof selectedValue === 'string' ? selectedValue : '')}
-                      onChange={(event) => hasOptions ? setOtherValue(event.target.value) : setAnswerValue(event.target.value)}
+                      value={typeof selectedValue === 'string' ? selectedValue : ''}
+                      onChange={(event) => setAnswerValue(event.target.value)}
                       placeholder={question.other_placeholder ?? question.placeholder ?? 'Enter your answer'}
-                      disabled={readOnly || (hasOptions && !otherSelected)}
-                      aria-label={hasOptions ? `${question.title} (Other)` : question.title}
+                      disabled={readOnly}
+                      aria-label={question.title}
                       aria-describedby={`interview-question-${question.id}`}
                     />
-                  </div>
+                  )
                 ) : null}
               </div>
             )
@@ -351,7 +411,7 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
             ) : (
               <Button
                 size="sm"
-                className="bg-emerald-600 text-white hover:bg-emerald-500"
+                className="bg-foreground text-background hover:bg-foreground/90"
                 onClick={() => handleSubmit('submit')}
                 disabled={readOnly}
               >
@@ -360,24 +420,22 @@ export function InterviewWidget({ batch, onAction }: InterviewWidgetProps) {
             )}
           </div>
 
-          {batch.status === 'active' ? (
-            <div className="flex items-center justify-between border-t border-border/60 pt-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleSubmit('skip')}
-              >
-                Skip questions
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleSubmit('generate')}
-              >
-                Generate now
-              </Button>
-            </div>
-          ) : null}
+          <div className="flex items-center justify-between border-t border-border/60 pt-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleSubmit('skip')}
+            >
+              Skip questions
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleSubmit('generate')}
+            >
+              Generate now
+            </Button>
+          </div>
         </div>
       )}
     </div>

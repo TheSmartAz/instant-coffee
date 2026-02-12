@@ -405,6 +405,64 @@ class TestPartialResponseRecovery:
         assert tr.cost["total_cost_usd"] == 0.01
 
 
+class TestGenerationArtifactRecovery:
+    def test_partial_generation_retries_until_index_exists(self):
+        tmpdir = Path(tempfile.mkdtemp())
+        (tmpdir / "PRODUCT.md").write_text("# Product")
+        engine = _make_engine(workspace=str(tmpdir))
+        calls = {"count": 0}
+
+        async def _fake_step():
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return {
+                    "text": "Let me build the page now",
+                    "tool_calls": [],
+                    "tool_results": [],
+                    "usage": {},
+                    "finish_reason": "partial",
+                }
+            (tmpdir / "index.html").write_text("<!doctype html><html></html>")
+            return {
+                "text": "Created index.html",
+                "tool_calls": [],
+                "tool_results": [],
+                "usage": {},
+                "finish_reason": "stop",
+            }
+
+        engine._step = _fake_step  # type: ignore[method-assign]
+        result = asyncio.run(engine.run_turn("Generate a webpage"))
+
+        assert calls["count"] == 2
+        assert (tmpdir / "index.html").exists()
+        assert result.finish_reason == "stop"
+
+    def test_partial_generation_exhausted_marks_missing_artifact(self):
+        tmpdir = Path(tempfile.mkdtemp())
+        (tmpdir / "PRODUCT.md").write_text("# Product")
+        engine = _make_engine(workspace=str(tmpdir))
+        calls = {"count": 0}
+
+        async def _fake_step():
+            calls["count"] += 1
+            return {
+                "text": "Let me build the page now",
+                "tool_calls": [],
+                "tool_results": [],
+                "usage": {},
+                "finish_reason": "partial",
+            }
+
+        engine._step = _fake_step  # type: ignore[method-assign]
+        result = asyncio.run(engine.run_turn("Generate a webpage"))
+
+        # Initial attempt + 2 automatic recovery attempts.
+        assert calls["count"] == 3
+        assert result.finish_reason == "missing_artifact"
+        assert "index.html" in result.text
+
+
 # ===================================================================
 # Feature #11 — Prompt caching
 # ===================================================================
@@ -823,6 +881,19 @@ class TestCascadeConfig:
             assert cfg.model_pointers.compact == "cheap-model"
         finally:
             del os.environ["DMXAPI_API_KEY"]
+
+    def test_model_timeout_loaded_from_workspace_config(self):
+        tmpdir = Path(tempfile.mkdtemp())
+        ic_dir = tmpdir / ".instant-coffee"
+        ic_dir.mkdir()
+        (ic_dir / "config.toml").write_text(
+            'default_model = "test-model"\n'
+            '[models."test-model"]\n'
+            'api_key = "test-key"\n'
+            'timeout = 321\n'
+        )
+        cfg = Config.load(workspace=tmpdir)
+        assert cfg.models["test-model"].timeout == 321.0
 
     def test_deep_merge(self):
         from ic.cascade import CascadingConfig

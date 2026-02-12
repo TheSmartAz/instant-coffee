@@ -109,7 +109,15 @@ async def _run_orchestrator_stream(
         _enqueue_stream_item(queue, exc)
     finally:
         try:
-            if final_message:
+            # Don't persist pure error messages as chat history — they are
+            # transient engine failures (e.g. bad tool-call JSON) that clutter
+            # the conversation on reload.
+            is_engine_error = (
+                final_response is not None
+                and getattr(final_response, "action", None) in ("error", "partial_complete")
+                and final_message.startswith("Engine error:")
+            )
+            if final_message and not is_engine_error:
                 MessageService(orchestrator.db).add_message(
                     orchestrator.session.id, "assistant", final_message,
                     thread_id=thread_id,
@@ -674,7 +682,10 @@ async def chat(
         trigger_interview = len(history_records) == 0
     else:
         trigger_interview = bool(payload.interview)
-    message_service.add_message(session.id, "user", payload.message, thread_id=active_thread_id)
+    message_service.add_message(
+        session.id, "user", payload.message, thread_id=active_thread_id,
+        metadata={"images": image_refs, "image_intent": resolved_intent} if image_refs else None,
+    )
     db.commit()
 
     # Auto-set thread title from first user message
@@ -779,7 +790,7 @@ async def chat(
                     if should_drain_responses:
                         try:
                             item = await asyncio.wait_for(
-                                response_queue.get(), timeout=0.05
+                                response_queue.get(), timeout=0.01
                             )
                         except asyncio.TimeoutError:
                             item = None
@@ -873,8 +884,13 @@ async def chat(
 
     final = responses[-1] if responses else None
     assistant_message = final.message if final else ""
-    if assistant_message:
-        message_service.add_message(session.id, "assistant", assistant_message)
+    is_engine_error = (
+        final is not None
+        and getattr(final, "action", None) in ("error", "partial_complete")
+        and assistant_message.startswith("Engine error:")
+    )
+    if assistant_message and not is_engine_error:
+        message_service.add_message(session.id, "assistant", assistant_message, thread_id=active_thread_id)
 
     _finalize_adapter_run(
         db=db,
@@ -1019,7 +1035,10 @@ async def stream_post(
         trigger_interview = len(history_records) == 0
     else:
         trigger_interview = bool(payload.interview)
-    message_service.add_message(session.id, "user", payload.message, thread_id=active_thread_id)
+    message_service.add_message(
+        session.id, "user", payload.message, thread_id=active_thread_id,
+        metadata={"images": image_refs, "image_intent": resolved_intent} if image_refs else None,
+    )
     db.commit()
 
     # Auto-set thread title from first user message
@@ -1105,7 +1124,7 @@ async def stream_post(
                 if should_drain_responses:
                     try:
                         item = await asyncio.wait_for(
-                            response_queue.get(), timeout=0.05
+                            response_queue.get(), timeout=0.005
                         )
                     except asyncio.TimeoutError:
                         item = None
@@ -1157,6 +1176,7 @@ async def stream(
     message: Optional[str] = None,
     interview: Optional[bool] = None,
     generate_now: Optional[bool] = None,
+    thread_id: Optional[str] = None,
     db: DbSession = Depends(_get_db_session),
 ):
     settings = get_settings()
@@ -1171,13 +1191,22 @@ async def stream(
             db.refresh(session)
 
         message_service = MessageService(db)
-        history_records = message_service.get_messages(session.id, limit=50)
+        thread_service = ThreadService(db)
+        if thread_id:
+            thread = thread_service.get_thread(thread_id)
+            if thread is None or thread.session_id != session.id:
+                thread = thread_service.ensure_default_thread(session.id)
+        else:
+            thread = thread_service.ensure_default_thread(session.id)
+        db.commit()
+        active_thread_id = thread.id
+        history_records = message_service.get_messages(session.id, thread_id=active_thread_id, limit=50)
         history = [{"role": msg.role, "content": msg.content} for msg in history_records]
         if interview is None:
             trigger_interview = len(history_records) == 0
         else:
             trigger_interview = bool(interview)
-        message_service.add_message(session.id, "user", message)
+        message_service.add_message(session.id, "user", message, thread_id=active_thread_id)
         db.commit()
 
         run_context = _prepare_chat_run_context(
@@ -1234,6 +1263,7 @@ async def stream(
                     generate_now=bool(generate_now),
                     resume=run_context.resume_payload,
                     run_context=run_context,
+                    thread_id=active_thread_id,
                 )
             )
             stream_task.add_done_callback(_log_stream_task_result)
@@ -1252,7 +1282,7 @@ async def stream(
                     if should_drain_responses:
                         try:
                             item = await asyncio.wait_for(
-                                response_queue.get(), timeout=0.05
+                                response_queue.get(), timeout=0.005
                             )
                         except asyncio.TimeoutError:
                             item = None

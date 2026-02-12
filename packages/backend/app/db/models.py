@@ -168,6 +168,7 @@ class Message(Base):
     thread_id = Column(String, ForeignKey("threads.id", ondelete="CASCADE"), nullable=True)
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
+    metadata_ = Column("metadata", JSON, nullable=True)
     timestamp = Column(DateTime, default=utcnow)
 
     session = relationship("Session", back_populates="messages")

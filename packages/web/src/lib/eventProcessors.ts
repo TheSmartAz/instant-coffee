@@ -1,4 +1,4 @@
-import type { ChatStep, InterviewBatch } from '@/types'
+import type { ChatStep, InterviewBatch, MessageSegment } from '@/types'
 import {
   mergeInterviewAnswerList,
   normalizeInterviewAnswers,
@@ -147,7 +147,7 @@ export { STEP_EVENT_TYPES }
 
 export const buildStepsFromEvents = (
   events: SessionEvent[],
-): Map<string, ChatStep[]> => {
+): Map<string, { steps: ChatStep[]; segments: MessageSegment[] }> => {
   const grouped = new Map<string, SessionEvent[]>()
   for (const event of events) {
     if (!STEP_EVENT_TYPES.has(event.type)) continue
@@ -160,7 +160,7 @@ export const buildStepsFromEvents = (
     }
   }
 
-  const result = new Map<string, ChatStep[]>()
+  const result = new Map<string, { steps: ChatStep[]; segments: MessageSegment[] }>()
   for (const [runId, group] of grouped) {
     const sorted = [...group].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
     const steps: ChatStep[] = []
@@ -208,12 +208,155 @@ export const buildStepsFromEvents = (
               ? 'done'
               : (fakeEvent.success ? 'done' : 'failed'),
           kind: 'tool',
+          toolName: fakeEvent.tool_name || undefined,
+          toolInput: fakeEvent.tool_input,
+          toolOutput: fakeEvent.tool_output as ChatStep['toolOutput'],
+          error: fakeEvent.error,
         })
       }
     }
     if (steps.length > 0) {
-      result.set(runId, steps)
+      // Put all steps into a single tool_group — during streaming, tools are
+      // grouped together unless text appears between them.  Since we can't
+      // reconstruct the original text interleaving from events alone, a single
+      // group matches the streaming UX better than fragmenting by agent_id.
+      const segments: MessageSegment[] = [{ type: 'tool_group', steps }]
+      result.set(runId, { steps, segments })
     }
   }
   return result
+}
+
+/* ── Widget data reconstruction from events ── */
+
+const WIDGET_EVENT_TYPES = new Set([
+  'plan_update',
+  'plan_created',
+  'files_changed',
+  'agent_spawned',
+  'agent_end',
+  'product_doc_generated',
+  'product_doc_updated',
+  'product_doc_confirmed',
+])
+
+interface WidgetData {
+  plan?: Array<{ step: string; status: string }>
+  planTasks?: Array<{ id: string; title: string; status: string; description?: string }>
+  fileChanges?: Array<{ path: string; action: string; language?: string }>
+  subAgents?: Array<{ id: string; task: string; status: 'running' | 'completed' | 'failed'; summary?: string }>
+  action?: string
+  productDocUpdated?: boolean
+  productDocChangeSummary?: string
+  productDocSectionName?: string
+  productDocSectionContent?: string
+}
+
+export const buildWidgetDataFromEvents = (events: SessionEvent[]): WidgetData => {
+  const sorted = [...events]
+    .filter((e) => WIDGET_EVENT_TYPES.has(e.type))
+    .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+
+  const data: WidgetData = {}
+  const agentMap = new Map<string, WidgetData['subAgents']>()
+
+  for (const event of sorted) {
+    const payload = isRecord(event.payload) ? event.payload : {}
+
+    switch (event.type) {
+      case 'plan_update': {
+        const steps = Array.isArray(payload.steps) ? payload.steps : []
+        if (steps.length > 0) {
+          data.plan = (steps as Array<Record<string, unknown>>).map((s, i) => ({
+            step: String(s.step || s.title || s.description || s.name || s.text || `Step ${i + 1}`),
+            status: String(s.status ?? 'pending'),
+          }))
+        }
+        break
+      }
+      case 'plan_created': {
+        const plan = isRecord(payload.plan) ? payload.plan : payload
+        const tasks = Array.isArray(plan.tasks) ? plan.tasks : []
+        if (tasks.length > 0) {
+          data.planTasks = (tasks as Array<Record<string, unknown>>).map((t) => ({
+            id: String(t.id ?? ''),
+            title: String(t.title ?? t.name ?? ''),
+            status: String(t.status ?? 'pending'),
+            description: getString(t.description),
+          }))
+        }
+        break
+      }
+      case 'files_changed': {
+        const files = Array.isArray(payload.files) ? payload.files : []
+        if (files.length > 0) {
+          data.fileChanges = (files as Array<Record<string, unknown>>).map((f) => ({
+            path: String(f.path ?? ''),
+            action: String(f.action ?? 'modified'),
+            language: getString(f.language),
+          }))
+        }
+        break
+      }
+      case 'agent_spawned': {
+        const agentId = String(payload.agent_id ?? '')
+        if (agentId) {
+          const info = {
+            id: agentId,
+            task: String(payload.task_description ?? payload.task ?? ''),
+            status: 'running' as const,
+          }
+          const existing = agentMap.get(agentId)
+          if (existing) {
+            const idx = existing.findIndex((a) => a.id === agentId)
+            if (idx >= 0) existing[idx] = info
+            else existing.push(info)
+          } else {
+            agentMap.set(agentId, [info])
+          }
+        }
+        break
+      }
+      case 'agent_end': {
+        const agentId = String(payload.agent_id ?? '')
+        if (agentId) {
+          for (const [, agents] of agentMap) {
+            for (const agent of agents) {
+              if (agent.id === agentId) {
+                agent.status = payload.status === 'success' ? 'completed' : 'failed'
+                agent.summary = getString(payload.summary) ?? ''
+              }
+            }
+          }
+        }
+        break
+      }
+      case 'product_doc_generated':
+        data.action = 'product_doc_generated'
+        data.productDocUpdated = true
+        data.productDocChangeSummary = getString(payload.change_summary) ?? getString(payload.changeSummary)
+        break
+      case 'product_doc_updated':
+        data.action = data.action ?? 'product_doc_updated'
+        data.productDocUpdated = true
+        data.productDocChangeSummary = getString(payload.change_summary) ?? getString(payload.changeSummary) ?? data.productDocChangeSummary
+        data.productDocSectionName = getString(payload.section_name) ?? getString(payload.sectionName) ?? data.productDocSectionName
+        data.productDocSectionContent = getString(payload.section_content) ?? getString(payload.sectionContent) ?? data.productDocSectionContent
+        break
+      case 'product_doc_confirmed':
+        data.action = data.action ?? 'product_doc_confirmed'
+        break
+    }
+  }
+
+  // Flatten agent map
+  const allAgents: NonNullable<WidgetData['subAgents']> = []
+  for (const [, agents] of agentMap) {
+    allAgents.push(...agents)
+  }
+  if (allAgents.length > 0) {
+    data.subAgents = allAgents
+  }
+
+  return data
 }

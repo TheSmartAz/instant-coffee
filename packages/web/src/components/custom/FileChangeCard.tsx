@@ -8,17 +8,17 @@ const ACTION_CONFIG: Record<
   created: {
     icon: FilePlus,
     label: 'Created',
-    className: 'text-emerald-500',
+    className: 'text-muted-foreground',
   },
   modified: {
     icon: FileEdit,
     label: 'Modified',
-    className: 'text-blue-500',
+    className: 'text-muted-foreground',
   },
   deleted: {
     icon: FileX,
     label: 'Deleted',
-    className: 'text-red-500',
+    className: 'text-muted-foreground',
   },
 }
 

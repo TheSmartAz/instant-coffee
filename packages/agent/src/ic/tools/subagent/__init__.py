@@ -80,6 +80,50 @@ class CreateParallelSubAgents(BaseTool):
     def __init__(self, engine: Engine | None = None):
         self._engine = engine
 
+    def to_openai_schema(self) -> dict[str, Any]:
+        """Custom schema since tasks has nested structure."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tasks": {
+                            "type": "array",
+                            "description": (
+                                "Array of task objects. Each object has: "
+                                "'task' (string, required) — description of what to build; "
+                                "'model' (string, optional) — model override; "
+                                "'max_turns' (integer, optional, default 30) — turn limit."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "task": {
+                                        "type": "string",
+                                        "description": "Description of the task for the sub-agent",
+                                    },
+                                    "model": {
+                                        "type": "string",
+                                        "description": "Model to use (optional)",
+                                    },
+                                    "max_turns": {
+                                        "type": "integer",
+                                        "description": "Max turns for the sub-agent (default: 30)",
+                                    },
+                                },
+                                "required": ["task"],
+                            },
+                            "minItems": 1,
+                        },
+                    },
+                    "required": ["tasks"],
+                },
+            },
+        }
+
     async def execute(self, **kwargs: Any) -> ToolResult:
         if not self._engine:
             return ToolResult(error="Sub-agent engine not available", is_error=True)

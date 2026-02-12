@@ -13,13 +13,24 @@ interface AgentStatusPanelProps {
   agents: AgentInfo[]
 }
 
+const summarizeAgentText = (value: string) => {
+  const cleaned = value
+    .replace(/<\/?think>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (cleaned.length <= 160) return cleaned
+  return `${cleaned.slice(0, 157)}...`
+}
+
 const STATUS_CONFIG: Record<
   AgentStatus,
   { icon: typeof Loader2; className: string }
 > = {
-  running: { icon: Loader2, className: 'text-blue-500 animate-spin' },
-  completed: { icon: CheckCircle2, className: 'text-emerald-500' },
-  failed: { icon: XCircle, className: 'text-red-500' },
+  running: { icon: Loader2, className: 'text-foreground animate-spin' },
+  completed: { icon: CheckCircle2, className: 'text-foreground' },
+  failed: { icon: XCircle, className: 'text-destructive' },
 }
 
 export function AgentStatusPanel({ agents }: AgentStatusPanelProps) {
@@ -34,15 +45,24 @@ export function AgentStatusPanel({ agents }: AgentStatusPanelProps) {
         {agents.map((agent) => {
           const config = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.running
           const Icon = config.icon
+          const message = summarizeAgentText(agent.message ?? agent.task)
 
           return (
             <div
               key={agent.id}
-              className="flex items-center gap-2 text-xs"
+              className="flex min-w-0 items-center gap-2 text-xs"
             >
               <Icon className={`h-3.5 w-3.5 shrink-0 ${config.className}`} />
-              <span className="truncate text-foreground">
-                {agent.message ?? agent.task}
+              <span
+                className="min-w-0 flex-1 overflow-hidden break-words text-foreground"
+                style={{
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                }}
+                title={message}
+              >
+                {message}
               </span>
             </div>
           )

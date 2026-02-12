@@ -248,9 +248,9 @@ class PageVersionService:
                 PageVersion.html: None,
             },
             synchronize_session=False,
-        )
+        ).rowcount
         if release_count and release_count > 0:
-            updated_count += int(release_count)
+            updated_count += release_count
 
         released_to_prune = (
             self.db.query(PageVersion)
@@ -265,9 +265,9 @@ class PageVersionService:
                 PageVersion.html: None,
             },
             synchronize_session=False,
-        )
+        ).rowcount
         if prune_count and prune_count > 0:
-            updated_count += int(prune_count)
+            updated_count += prune_count
 
         self.db.flush()
         return updated_count

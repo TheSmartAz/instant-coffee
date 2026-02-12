@@ -93,7 +93,7 @@ export const api = {
     streamUrl: (
       sessionId: string | undefined,
       message?: string,
-      options?: { interview?: boolean; generateNow?: boolean }
+      options?: { interview?: boolean; generateNow?: boolean; threadId?: string }
     ) => {
       const params = new URLSearchParams()
       if (sessionId) {
@@ -105,6 +105,9 @@ export const api = {
       }
       if (options?.generateNow !== undefined) {
         params.set('generate_now', options.generateNow ? 'true' : 'false')
+      }
+      if (options?.threadId) {
+        params.set('thread_id', options.threadId)
       }
       return buildUrl(`/api/chat/stream?${params.toString()}`)
     },

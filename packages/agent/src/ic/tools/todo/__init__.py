@@ -43,6 +43,48 @@ class Todo(BaseTool):
     def current_plan(self) -> dict[str, Any]:
         return self._current_plan
 
+    def to_openai_schema(self) -> dict[str, Any]:
+        """Custom schema since steps has nested structure."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "explanation": {
+                            "type": "string",
+                            "description": "Brief explanation of the plan or what changed",
+                        },
+                        "steps": {
+                            "type": "array",
+                            "description": (
+                                "List of plan steps. Each step has 'step' (description) "
+                                "and 'status' (pending/in_progress/completed)."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "step": {
+                                        "type": "string",
+                                        "description": "Description of this step",
+                                    },
+                                    "status": {
+                                        "type": "string",
+                                        "enum": ["pending", "in_progress", "completed"],
+                                        "description": "Current status of this step",
+                                    },
+                                },
+                                "required": ["step", "status"],
+                            },
+                        },
+                    },
+                    "required": ["steps"],
+                },
+            },
+        }
+
     async def execute(self, **kwargs: Any) -> ToolResult:
         explanation = kwargs.get("explanation", "")
         steps_raw = kwargs.get("steps", [])
@@ -54,8 +96,17 @@ class Todo(BaseTool):
         steps = []
         for s in steps_raw:
             if isinstance(s, dict):
+                # LLM may use various key names for the step description
+                label = (
+                    s.get("step")
+                    or s.get("title")
+                    or s.get("description")
+                    or s.get("name")
+                    or s.get("text")
+                    or ""
+                )
                 steps.append({
-                    "step": s.get("step", ""),
+                    "step": label,
                     "status": s.get("status", "pending"),
                 })
             elif isinstance(s, str):

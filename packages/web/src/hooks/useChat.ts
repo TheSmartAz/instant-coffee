@@ -7,7 +7,7 @@ import type { SendMessageOptions } from '@/hooks/chat/useStreamConnection'
 import { clearInterviewBatch } from '@/lib/interviewStorage'
 import { savePendingMessage, toStoredMessage } from '@/lib/pendingMessageStorage'
 import { createId, buildInterviewPayload } from '@/hooks/useChatUtils'
-import type { InterviewActionPayload, Message } from '@/types'
+import type { InterviewActionPayload, Message, MessageImage } from '@/types'
 
 export interface UseChatOptions {
   sessionId?: string
@@ -211,6 +211,15 @@ export function useChat({
         role: 'user',
         content: trimmed,
         timestamp: new Date(),
+        images: options?.attachments?.length
+          ? options.attachments.map((a): MessageImage => ({
+              data: a.previewUrl ?? a.data,
+              intent: options.imageIntent,
+              name: a.name,
+              width: a.width,
+              height: a.height,
+            }))
+          : undefined,
       }
       const assistantMessage: Message = {
         id: createId(),

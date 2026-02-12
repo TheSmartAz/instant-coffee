@@ -25,12 +25,12 @@ except ImportError:
 
 # Known models available through DMXAPI proxy (same key, same base_url)
 DMXAPI_MODELS = [
+    ("MiniMax-M2.5", 204800),
+    ("glm-5", 202752),
     ("kimi-k2.5", 256000),
     ("DeepSeek-V3.2", 128000),
     ("gpt-5-mini", 128000),
-    ("glm-4.7", 202752),
     ("qwen3-max-2026-01-23", 131072),
-    ("MiniMax-M2.1", 204800),
     ("hunyuan-2.0-instruct-20251111", 256000),
     ("gemini-3-flash-preview", 128000),
     ("grok-code-fast-1", 128000),
@@ -43,25 +43,15 @@ DMXAPI_BASE_URL = "https://www.dmxapi.cn/v1"
 # Source: provider pricing pages as of 2025-06
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     # DMXAPI / Chinese models
+    "MiniMax-M2.5":                 (1.00, 4.00),
     "kimi-k2.5":                    (2.00, 8.00),
     "DeepSeek-V3.2":                (0.27, 1.10),
     "gpt-5-mini":                   (1.50, 6.00),
-    "glm-4.7":                      (1.00, 4.00),
+    "glm-5":                      (1.00, 4.00),
     "qwen3-max-2026-01-23":         (1.60, 6.40),
-    "MiniMax-M2.1":                 (1.00, 4.00),
     "hunyuan-2.0-instruct-20251111":(1.00, 4.00),
     "gemini-3-flash-preview":       (0.15, 0.60),
     "grok-code-fast-1":             (2.00, 10.00),
-    # OpenAI
-    "gpt-4o":                       (2.50, 10.00),
-    "gpt-4o-mini":                  (0.15, 0.60),
-    "o3-mini":                      (1.10, 4.40),
-    # Anthropic
-    "claude-sonnet-4-20250514":     (3.00, 15.00),
-    "claude-haiku-4-20250514":      (0.80, 4.00),
-    # DeepSeek
-    "deepseek-chat":                (0.27, 1.10),
-    "deepseek-reasoner":            (0.55, 2.19),
 }
 
 
@@ -191,6 +181,7 @@ class Config:
                 base_url=m.get("base_url"),
                 max_tokens=m.get("max_tokens", 32768),
                 temperature=m.get("temperature", 0.0),
+                timeout=self._parse_positive_float(m.get("timeout"), 120.0),
             )
 
         self.default_model = cascade.get("default_model", "")
@@ -237,6 +228,22 @@ class Config:
             self._parse_dotenv(p)
 
     @staticmethod
+    def _parse_positive_float(value: Any, default: float) -> float:
+        """Parse a positive float with safe fallback."""
+        try:
+            parsed = float(value)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            pass
+        return default
+
+    def _env_model_timeout(self) -> float:
+        """Get model timeout from env with sensible defaults."""
+        raw = os.environ.get("MODEL_TIMEOUT") or os.environ.get("LLM_TIMEOUT")
+        return self._parse_positive_float(raw, 120.0)
+
+    @staticmethod
     def _parse_dotenv(path: Path):
         for line in path.read_text().splitlines():
             line = line.strip()
@@ -260,6 +267,7 @@ class Config:
                 base_url=m.get("base_url"),
                 max_tokens=m.get("max_tokens", 4096),
                 temperature=m.get("temperature", 0.0),
+                timeout=self._parse_positive_float(m.get("timeout"), 120.0),
             )
 
         if not self.default_model and self.models:
@@ -282,6 +290,8 @@ class Config:
 
     def _load_from_env(self):
         """Auto-detect models from env vars. Model-centric: each model is its own entry."""
+        model_timeout = self._env_model_timeout()
+
         # DMXAPI key → register all known DMXAPI models
         dmx_key = (
             os.environ.get("DMXAPI_API_KEY")
@@ -292,14 +302,20 @@ class Config:
             base = os.environ.get("DEFAULT_BASE_URL", DMXAPI_BASE_URL)
             for model_id, max_tok in DMXAPI_MODELS:
                 self.models[model_id] = ModelConfig(
-                    name=model_id, api_key=dmx_key, base_url=base, max_tokens=max_tok,
+                    name=model_id,
+                    api_key=dmx_key,
+                    base_url=base,
+                    max_tokens=max_tok,
+                    timeout=model_timeout,
                 )
 
         # OpenAI key → register common OpenAI models
         if oai_key := os.environ.get("OPENAI_API_KEY"):
             for mid in ["gpt-4o", "gpt-4o-mini", "o3-mini"]:
                 if mid not in self.models:
-                    self.models[mid] = ModelConfig(name=mid, api_key=oai_key)
+                    self.models[mid] = ModelConfig(
+                        name=mid, api_key=oai_key, timeout=model_timeout
+                    )
 
         # Anthropic key
         if ant_key := os.environ.get("ANTHROPIC_API_KEY"):
@@ -308,6 +324,7 @@ class Config:
                     self.models[mid] = ModelConfig(
                         name=mid, api_key=ant_key,
                         base_url="https://api.anthropic.com/v1/",
+                        timeout=model_timeout,
                     )
 
         # DeepSeek key
@@ -317,6 +334,7 @@ class Config:
                     self.models[mid] = ModelConfig(
                         name=mid, api_key=ds_key,
                         base_url="https://api.deepseek.com/v1",
+                        timeout=model_timeout,
                     )
 
         # Pick default
@@ -402,10 +420,27 @@ class Config:
             raise ValueError(f"Model '{name}' not found. Available: {list(self.models.keys())}")
         return self.models[name]
 
-    def save_model(self, name: str, api_key: str, base_url: str, model: str):
+    def save_model(
+        self,
+        name: str,
+        api_key: str,
+        base_url: str,
+        model: str,
+        timeout: float | str | None = None,
+    ):
         """Add/update a model and persist to config.toml."""
+        existing_timeout = self.models[name].timeout if name in self.models else 120.0
+        model_timeout = (
+            self._parse_positive_float(timeout, 120.0)
+            if timeout is not None
+            else existing_timeout
+        )
         self.models[name] = ModelConfig(
-            name=name, model=model or name, api_key=api_key, base_url=base_url or None,
+            name=name,
+            model=model or name,
+            api_key=api_key,
+            base_url=base_url or None,
+            timeout=model_timeout,
         )
         if not self.default_model:
             self.default_model = name
@@ -424,6 +459,7 @@ class Config:
                 lines.append(f'model = "{m.model}"')
             lines.append(f"max_tokens = {m.max_tokens}")
             lines.append(f"temperature = {m.temperature}")
+            lines.append(f"timeout = {m.timeout}")
             lines.append("")
         self.config_path.write_text("\n".join(lines))
 
@@ -448,10 +484,12 @@ def run_setup(config: Config) -> bool:
         return False
 
     base_url = input("  Base URL (Enter for OpenAI default): ").strip()
+    timeout_input = input("  Timeout seconds [120]: ").strip()
+    timeout = Config._parse_positive_float(timeout_input, 120.0)
 
     name = input(f"  Short name [{model}]: ").strip() or model
 
-    config.save_model(name, api_key, base_url, model)
+    config.save_model(name, api_key, base_url, model, timeout=timeout)
     print(f"\n  Saved to {config.config_path}")
     print(f"  Default model: {name}")
     print()

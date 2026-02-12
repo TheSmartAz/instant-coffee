@@ -37,6 +37,7 @@ def init_db(database: Database | None = None) -> None:
     migrate_v08_event_run_columns(db_instance)
     migrate_v09_threads(db_instance)
     migrate_v10_project_memory(db_instance)
+    migrate_v11_message_metadata(db_instance)
 
 
 def migrate_v04_product_doc_pages(database: Database | None = None) -> None:
@@ -586,6 +587,20 @@ def migrate_v10_project_memory(database: Database | None = None) -> None:
         )
 
 
+def migrate_v11_message_metadata(database: Database | None = None) -> None:
+    """Add metadata JSON column to messages table."""
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    inspector = inspect(engine)
+    if "messages" not in inspector.get_table_names():
+        return
+    columns = {col["name"] for col in inspector.get_columns("messages")}
+    if "metadata" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE messages ADD COLUMN metadata JSON"))
+
+
 __all__ = [
     "init_db",
     "migrate_v04_product_doc_pages",
@@ -597,5 +612,6 @@ __all__ = [
     "migrate_v08_event_run_columns",
     "migrate_v09_threads",
     "migrate_v10_project_memory",
+    "migrate_v11_message_metadata",
     "downgrade_v04_product_doc_pages",
 ]

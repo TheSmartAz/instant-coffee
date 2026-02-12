@@ -15,6 +15,7 @@ from ic.ui.io import UserIO, Question, Option, Answer
 
 class AskUser(BaseTool):
     name = "ask_user"
+    timeout_seconds = None  # Block indefinitely — waits for user input
     description = (
         "Ask the user one or more multiple-choice questions to clarify "
         "requirements. Each question includes options the user can pick "

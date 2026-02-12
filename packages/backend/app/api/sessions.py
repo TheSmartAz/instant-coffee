@@ -265,6 +265,7 @@ def get_messages(
                 "content": message.content,
                 "timestamp": message.timestamp,
                 "thread_id": message.thread_id,
+                "metadata": message.metadata_,
             }
             for message in messages
         ]

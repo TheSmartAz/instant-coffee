@@ -5,7 +5,7 @@ import { TokenDisplay } from '@/components/TokenDisplay'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { useVirtualList } from '@/hooks/useVirtualList'
+import { useChatVirtualList } from '@/hooks/useVirtualList'
 import type {
   InterviewActionPayload,
   Message,
@@ -56,6 +56,8 @@ export function ChatPanel({
   const rootRef = React.useRef<HTMLDivElement | null>(null)
   const [scrollElement, setScrollElement] = React.useState<HTMLDivElement | null>(null)
   const [autoScroll, setAutoScroll] = React.useState(true)
+  // Track refs for each message to measure their height
+  const messageRefs = React.useRef<Map<number, HTMLDivElement>>(new Map())
 
   React.useEffect(() => {
     const root = rootRef.current
@@ -76,13 +78,42 @@ export function ChatPanel({
     scrollTop,
     viewportHeight,
     shouldVirtualize,
-  } = useVirtualList({
-    count: visibleMessages.length,
-    estimateSize: 120,
-    overscan: 8,
-    minItems: 80,
+    updateItemHeight,
+  } = useChatVirtualList(
+    visibleMessages.length,
     scrollElement,
-  })
+    200, // estimateSize
+    8, // overscan
+    80 // minItems
+  )
+
+  // Observe message heights using ResizeObserver
+  React.useEffect(() => {
+    if (!scrollElement || visibleMessages.length === 0) return
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const target = entry.target as HTMLElement
+        // Find the message index from the ref map
+        for (const [index, el] of messageRefs.current.entries()) {
+          if (el === target) {
+            const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
+            if (height > 0) {
+              updateItemHeight(index, height)
+            }
+            break
+          }
+        }
+      }
+    })
+
+    // Observe all message elements
+    messageRefs.current.forEach((el) => {
+      if (el) observer.observe(el)
+    })
+
+    return () => observer.disconnect()
+  }, [visibleMessages.length, updateItemHeight, scrollElement])
 
   const effectiveTotalHeight =
     scrollElement && !shouldVirtualize ? scrollElement.scrollHeight : totalHeight
@@ -129,7 +160,7 @@ export function ChatPanel({
                   What would you like to build?
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  Describe your idea and I'll create a mobile-optimized page for you.
+                  Describe your idea and I&apos;ll create a mobile-optimized page for you.
                 </p>
               </div>
               <div className="grid w-full max-w-md gap-2">
@@ -153,14 +184,24 @@ export function ChatPanel({
           ) : null}
           <div className="px-4 py-4">
             <div style={{ paddingTop, paddingBottom }} className="space-y-3">
-              {windowedMessages.map((message, index) => (
-                <ChatMessage
-                  key={`${message.id}-${start + index}`}
-                  {...message}
-                  onInterviewAction={onInterviewAction}
-                  onTabChange={onTabChange}
-                />
-              ))}
+              {windowedMessages.map((message, index) => {
+                const messageIndex = start + index
+                return (
+                  <div
+                    key={message.id}
+                    ref={(el) => {
+                      if (el) messageRefs.current.set(messageIndex, el)
+                      else messageRefs.current.delete(messageIndex)
+                    }}
+                  >
+                    <ChatMessage
+                      {...message}
+                      onInterviewAction={onInterviewAction}
+                      onTabChange={onTabChange}
+                    />
+                  </div>
+                )
+              })}
             </div>
           </div>
           <div ref={bottomRef} />

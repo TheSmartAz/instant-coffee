@@ -8,6 +8,7 @@ export type EventType =
   | 'agent_error'
   | 'tool_call'
   | 'tool_result'
+  | 'tool_progress'
   | 'page_created'
   | 'page_version_created'
   | 'page_preview_ready'
@@ -292,6 +293,15 @@ export interface ToolResultEvent extends BaseEvent {
   success: boolean
   tool_output?: Record<string, unknown>
   error?: string
+}
+
+export interface ToolProgressEvent extends BaseEvent {
+  type: 'tool_progress'
+  task_id?: string
+  agent_id: string
+  tool_name: string
+  progress_message?: string
+  progress_percent?: number
 }
 
 export type TaskStatus =
@@ -620,6 +630,7 @@ export type ExecutionEvent =
   | AgentErrorEvent
   | ToolCallEvent
   | ToolResultEvent
+  | ToolProgressEvent
   | PageCreatedEvent
   | PageVersionCreatedEvent
   | PagePreviewReadyEvent

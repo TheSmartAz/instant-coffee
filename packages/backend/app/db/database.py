@@ -12,6 +12,9 @@ class Database:
     def __init__(self, url: Optional[str] = None) -> None:
         settings = get_settings()
         resolved_url = url or settings.database_url
+        # Railway/Render may provide postgres:// which SQLAlchemy 2.0 doesn't accept
+        if resolved_url.startswith("postgres://"):
+            resolved_url = resolved_url.replace("postgres://", "postgresql://", 1)
         connect_args = {}
         if resolved_url.startswith("sqlite"):
             connect_args = {"check_same_thread": False, "timeout": 30}

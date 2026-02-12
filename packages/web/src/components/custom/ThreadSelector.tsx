@@ -61,14 +61,17 @@ export function ThreadSelector({
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground ml-auto" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
+      <DropdownMenuContent
+        align="start"
+        className="w-[var(--radix-dropdown-menu-trigger-width,_14rem)]"
+      >
         {threads.map((thread, index) => {
           const isActive = thread.id === activeThreadId
           const label = thread.title || `Thread ${index + 1}`
           return (
             <DropdownMenuItem
               key={thread.id}
-              className={`flex items-center justify-between gap-2 ${isActive ? 'bg-accent' : ''}`}
+              className={`h-[3rem] flex items-center justify-between gap-2 hover:!bg-muted focus:!bg-muted data-[highlighted]:!bg-muted ${index > 0 ? 'mt-1' : ''} ${isActive ? 'bg-accent' : ''}`}
               onSelect={() => onSwitchThread(thread.id)}
             >
               <div className="flex items-center gap-2 min-w-0">
@@ -91,7 +94,10 @@ export function ThreadSelector({
           )
         })}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={onNewThread}>
+        <DropdownMenuItem
+          className="h-[3rem] hover:!bg-muted focus:!bg-muted data-[highlighted]:!bg-muted"
+          onSelect={onNewThread}
+        >
           <Plus className="h-4 w-4 mr-2" />
           New thread
         </DropdownMenuItem>

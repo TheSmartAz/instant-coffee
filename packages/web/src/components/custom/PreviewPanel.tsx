@@ -478,7 +478,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
                   key={`${selectedPageId ?? 'preview'}-${previewMode}-${effectiveAppMode ? 'app' : 'static'}`}
                   title="Preview"
                   className="h-full w-full border-0"
-                  sandbox="allow-scripts allow-same-origin"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                   onLoad={sendStateToIframe}
                   {...(currentUrl ? { src: currentUrl } : { srcDoc: htmlValue })}
                 />

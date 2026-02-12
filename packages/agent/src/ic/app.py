@@ -43,18 +43,28 @@ You follow a **Product Doc first** workflow:
    - Assets & Media
    - Technical Constraints
 
-3. **Approval**: After creating/updating the Product Doc, show the user a
-   summary and ask for confirmation before generating code. Use `ask_user`
-   with a single question: "Ready to generate?" with options like
-   "Yes, generate", "Edit the doc first", "Ask me more questions".
+3. **Confirm before first generation**: After creating the Product Doc for the
+   first time, output a brief summary (2-4 sentences) of what was defined,
+   then ask the user in plain text whether to proceed with generation.
+   Example: "Product Doc is ready. Here's what I'll build: [summary].
+   Shall I start generating?"
+   IMPORTANT: Do NOT use the `ask_user` tool for this confirmation — just
+   write it as normal text and stop. Wait for the user to reply.
 
-4. **Generate**: Generate code based on the Product Doc. Write files to the
-   workspace directory.
+4. **Generate**: Once the user confirms, generate code based on the Product Doc.
+   Write files to the workspace directory.
 
 5. **Refine**: When the user requests changes:
-   - First update the relevant section(s) of PRODUCT.md (not the whole doc)
-   - Then decide scope: cosmetic changes (color, text) → surgical edit;
-     structural changes (layout, new sections) → full regeneration.
+   - First update the relevant section(s) of PRODUCT.md (not the whole doc).
+   - Output a brief summary (1-3 sentences) of what changed in the doc.
+   - For **minor changes** (color, text, spacing, copy tweaks, small layout
+     adjustments): immediately proceed to update the code in the same turn.
+     Do NOT wait for confirmation.
+   - For **major changes** (new sections, structural redesign, significant
+     feature additions — the kind that would normally trigger a new round of
+     interview questions): output the summary and ask in plain text whether
+     to proceed, then stop and wait. Do NOT use `ask_user` for this — just
+     write it as normal text.
 
 ## Rules
 
@@ -63,9 +73,11 @@ You follow a **Product Doc first** workflow:
   clarifying questions first via `ask_user`.
 - When updating PRODUCT.md, only update the affected section(s), not the
   entire document. Use the edit_file tool for surgical updates.
+- ALWAYS briefly summarize what was created or changed in the Product Doc
+  before generating or updating code. Keep it concise (1-4 sentences).
 - The Product Doc is the contract. Code must match the doc.
-- Use `ask_user` for clarification, NOT plain text questions. The tool
-  provides a structured UI for the user.
+- Use `ask_user` ONLY for interview questions (gathering requirements).
+  NEVER use `ask_user` for generation confirmation — use plain text instead.
 """
 
 
@@ -99,6 +111,7 @@ class App:
             agent_config=agent_cfg,
             workspace=str(workspace),
             on_text_delta=self._on_text_delta,
+            on_llm_retry=self._on_llm_retry,
             on_tool_call=self._on_tool_call,
             on_tool_result=self._on_tool_result,
             on_tool_progress=self._on_tool_progress,
@@ -189,7 +202,9 @@ class App:
                 if self._streaming_started:
                     self.console.end_streaming()
                 self.engine.stop()
-                self.console.print_info("Interrupted.")
+                # Show "Interrupted" in the separator so the user knows
+                # they can type a new instruction (like Claude Code / Codex)
+                self.prompt.set_status("Interrupted — tell the model what to do instead")
             except Exception as e:
                 self.console.stop_spinner()
                 if self._streaming_started:
@@ -366,8 +381,10 @@ class App:
                 self.console.print_error("API key is required.")
                 return
             base_url = input("  Base URL (Enter for OpenAI default): ").strip()
+            timeout_input = input("  Timeout seconds [120]: ").strip()
+            timeout = self.config._parse_positive_float(timeout_input, 120.0)
             name = input(f"  Short name [{model}]: ").strip() or model
-            self.config.save_model(name, api_key, base_url, model)
+            self.config.save_model(name, api_key, base_url, model, timeout=timeout)
             self.console.print_info(f"Added: {name}. Use '/model {name}' to switch.")
         except (EOFError, KeyboardInterrupt):
             pass
@@ -407,6 +424,19 @@ class App:
             self.console.start_streaming()
             self._streaming_started = True
         self.console.stream_text(delta)
+
+    async def _on_llm_retry(self, next_attempt: int, max_attempts: int, reason: str):
+        if self._streaming_started:
+            self.console.end_streaming()
+            self._streaming_started = False
+        self.console.stop_spinner()
+        short_reason = reason.splitlines()[0].strip()
+        if len(short_reason) > 140:
+            short_reason = short_reason[:137] + "..."
+        self.console.print_info(
+            f"LLM retry {next_attempt}/{max_attempts}: {short_reason}"
+        )
+        self.console.start_spinner("Thinking...")
 
     async def _on_tool_call(self, name: str, tc: dict):
         self.console.stop_spinner()

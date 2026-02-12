@@ -4,7 +4,7 @@ import { createStreamDataHandler } from '@/hooks/chat/useStreamHandler'
 import { createStreamConnection, type SendMessageOptions } from '@/hooks/chat/useStreamConnection'
 import { clearPendingMessage } from '@/lib/pendingMessageStorage'
 import { extractProductDocUpdateFields, PRODUCT_DOC_ACTIONS, type InterviewPayloadLike } from '@/hooks/useChatUtils'
-import type { ChatAction, ChatRequestPayload, ChatResponse, ChatStep, Message } from '@/types'
+import type { ChatAction, ChatRequestPayload, ChatResponse, ChatStep, Message, MessageSegment } from '@/types'
 
 type ConnectionState = 'idle' | 'connecting' | 'open' | 'error' | 'closed'
 
@@ -78,6 +78,7 @@ export function useChatStream({
       const messageId = streamMessageIdRef.current
       if (!messageId) return
       updateMessageById(messageId, (message) => {
+        // Update flat steps array (backward compat)
         const steps = message.steps ? [...message.steps] : []
         if (options?.updateKey) {
           const index = [...steps]
@@ -85,10 +86,52 @@ export function useChatStream({
             .lastIndexOf(options.updateKey)
           if (index >= 0) {
             steps[index] = { ...steps[index], ...step, id: steps[index].id }
-            return { ...message, steps }
+          } else {
+            steps.push(step)
           }
+        } else {
+          steps.push(step)
         }
-        return { ...message, steps: [...steps, step] }
+
+        // Update segments — ensure last segment is a tool_group
+        const segments = message.segments ? [...message.segments] : []
+        const lastSeg = segments[segments.length - 1]
+        if (lastSeg && lastSeg.type === 'tool_group') {
+          const groupSteps = [...lastSeg.steps]
+          if (options?.updateKey) {
+            const idx = groupSteps.map((s) => s.key).lastIndexOf(options.updateKey)
+            if (idx >= 0) {
+              groupSteps[idx] = { ...groupSteps[idx], ...step, id: groupSteps[idx].id }
+            } else {
+              groupSteps.push(step)
+            }
+          } else {
+            groupSteps.push(step)
+          }
+          segments[segments.length - 1] = { type: 'tool_group', steps: groupSteps }
+        } else {
+          segments.push({ type: 'tool_group', steps: [step] })
+        }
+
+        return { ...message, steps, segments }
+      })
+    },
+    [streamMessageIdRef, updateMessageById]
+  )
+
+  const appendTextSegment = React.useCallback(
+    (text: string) => {
+      const messageId = streamMessageIdRef.current
+      if (!messageId) return
+      updateMessageById(messageId, (message) => {
+        const segments = message.segments ? [...message.segments] : []
+        const lastSeg = segments[segments.length - 1]
+        if (lastSeg && lastSeg.type === 'text') {
+          segments[segments.length - 1] = { type: 'text', content: lastSeg.content + text }
+        } else {
+          segments.push({ type: 'text', content: text })
+        }
+        return { ...message, segments }
       })
     },
     [streamMessageIdRef, updateMessageById]
@@ -103,10 +146,30 @@ export function useChatStream({
               item.status === 'in_progress' ? { ...item, status: 'done' as const } : item
             )
           : message.steps
+
+        // Also finalize segments
+        const segments = message.segments?.map((seg) => {
+          if (seg.type !== 'tool_group') return seg
+          const hasInProgress = seg.steps.some((s) => s.status === 'in_progress')
+          if (!hasInProgress) return seg
+          return {
+            ...seg,
+            steps: seg.steps.map((s) =>
+              s.status === 'in_progress' ? { ...s, status: 'done' as const } : s
+            ),
+          }
+        })
+
+        // Filter out empty text segments
+        const cleanSegments = segments?.filter(
+          (seg) => seg.type !== 'text' || seg.content.trim().length > 0
+        )
+
         return {
           ...message,
           isStreaming: false,
           steps,
+          segments: cleanSegments,
         }
       })
     }
@@ -343,8 +406,10 @@ export function useChatStream({
     ]
   )
 
-  const handleStreamDataRef = React.useRef<(data: string) => void>(() => undefined)
+  const handleStreamDataRef = React.useRef<((data: string) => void) & { destroy?: () => void }>(() => undefined)
   React.useEffect(() => {
+    // Destroy previous handler's delta buffer
+    handleStreamDataRef.current.destroy?.()
     handleStreamDataRef.current = createStreamDataHandler({
       streamMessageIdRef,
       receivedEventRef,
@@ -355,6 +420,7 @@ export function useChatStream({
       maybeNotifySessionCreated,
       applyInterviewQuestions,
       appendStep,
+      appendTextSegment,
       updateMessageById,
       dispatchProductDocEvent,
       handleActionTabSwitch,
@@ -370,6 +436,7 @@ export function useChatStream({
     maybeNotifySessionCreated,
     applyInterviewQuestions,
     appendStep,
+    appendTextSegment,
     updateMessageById,
     dispatchProductDocEvent,
     handleActionTabSwitch,

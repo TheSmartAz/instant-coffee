@@ -80,6 +80,7 @@ class EventType(str, Enum):
     FILES_CHANGED = "files_changed"
     CONTEXT_COMPACTED = "context_compacted"
     PLAN_UPDATE = "plan_update"
+    PLAN_CREATED = "plan_created"
     AGENT_SPAWNED = "agent_spawned"
     BG_TASK_STARTED = "bg_task_started"
     BG_TASK_COMPLETED = "bg_task_completed"

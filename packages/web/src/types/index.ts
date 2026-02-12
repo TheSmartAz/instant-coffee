@@ -1,4 +1,4 @@
-import type { FileChange, PlanStep } from './events'
+import type { FileChange, PlanStep, PlanTaskSnapshot } from './events'
 
 export type MessageRole = 'user' | 'assistant'
 
@@ -11,6 +11,24 @@ export interface ChatStep {
   timestamp?: Date
   kind?: 'agent' | 'tool'
   key?: string
+  toolName?: string
+  toolInput?: Record<string, unknown>
+  toolOutput?: Record<string, unknown>
+  error?: string
+  progressMessage?: string
+  progressPercent?: number
+}
+
+export type MessageSegment =
+  | { type: 'text'; content: string }
+  | { type: 'tool_group'; steps: ChatStep[] }
+
+export interface MessageImage {
+  data: string
+  intent?: string
+  name?: string
+  width?: number
+  height?: number
 }
 
 export type InterviewQuestionType = 'single' | 'multi' | 'text'
@@ -98,6 +116,9 @@ export interface Message {
   fileChanges?: FileChange[]
   plan?: PlanStep[]
   subAgents?: SubAgentInfo[]
+  images?: MessageImage[]
+  planTasks?: PlanTaskSnapshot[]
+  segments?: MessageSegment[]
 }
 
 export interface SubAgentInfo {

@@ -105,6 +105,7 @@ export function createStreamConnection(deps: StreamConnectionDeps) {
       api.chat.streamUrl(deps.sessionIdRef.current, content, {
         interview: options?.triggerInterview,
         generateNow: options?.generateNow,
+        threadId: deps.threadIdRef.current ?? undefined,
       })
     )
     deps.eventSourceRef.current = eventSource
