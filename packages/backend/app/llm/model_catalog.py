@@ -3,19 +3,9 @@ from __future__ import annotations
 from typing import TypedDict
 
 
-_DEFAULT_MAX_TOKENS = 128000
+_DEFAULT_MAX_TOKENS = 1_000_000
 _DEFAULT_CAPABILITIES = ["text"]
-_VISION_MARKERS = (
-    "vision",
-    "gpt-4o",
-    "gpt-4.1",
-    "gpt-4-turbo",
-    "gpt-4v",
-    "gemini",
-    "qwen-vl",
-    "glm-4v",
-    "llava",
-)
+_VISION_MARKERS = ("vision",)
 
 
 class ModelOption(TypedDict, total=False):
@@ -31,60 +21,17 @@ class ModelGroup(TypedDict):
     models: list[ModelOption]
 
 
-# NOTE: Update this list to match your DMXAPI platform catalog.
-# Keep base_url here so .env only needs the API key.
+# DeepSeek is the only configured provider for this project.
 MODEL_GROUPS: list[ModelGroup] = [
     {
-        "category": "dmxapi",
-        "base_url": "https://www.dmxapi.cn/v1",
+        "category": "deepseek",
+        "base_url": "https://api.deepseek.com",
         "models": [
             {
-                "id": "MiniMax-M2.5",
-                "label": "MiniMax M2.5",
+                "id": "deepseek-v4-pro",
+                "label": "DeepSeek V4 Pro",
                 "capabilities": ["text"],
-                "max_tokens": 204800,
-            },
-            {
-                "id": "glm-5",
-                "label": "GLM-5",
-                "capabilities": ["text"],
-                "max_tokens": 202752,
-            },
-            {
-                "id": "kimi-k2.5",
-                "label": "KIMI-K2.5",
-                "capabilities": ["text", "vision"],
-                "max_tokens": 256000,
-            },
-            {
-                "id": "qwen3-max-2026-01-23",
-                "label": "Qwen3-Max",
-                "capabilities": ["text"],
-                "max_tokens": 131072,
-            },
-            {
-                "id": "DeepSeek-V3.2",
-                "label": "DeepSeek-V3.2",
-                "capabilities": ["text"],
-                "max_tokens": 128000,
-            },
-            {
-                "id": "gpt-5-mini",
-                "label": "GPT-5-Mini",
-                "capabilities": ["text", "vision"],
-                "max_tokens": 400000,
-            },
-            {
-                "id": "gemini-3-flash-preview",
-                "label": "Gemini 3 Flash",
-                "capabilities": ["text", "vision"],
-                "max_tokens": 1000000,
-            },
-            {
-                "id": "grok-code-fast-1",
-                "label": "grok-code-fast-1",
-                "capabilities": ["text"],
-                "max_tokens": 256000,
+                "max_tokens": 1_000_000,
             },
         ],
     },
@@ -135,13 +82,13 @@ def get_model_entry(model_id: str | None) -> dict[str, str] | None:
 def get_default_model_id() -> str:
     for entry in get_model_catalog():
         return entry["id"]
-    return "gpt-4o-mini"
+    return "deepseek-v4-pro"
 
 
 def get_default_base_url() -> str:
     for entry in get_model_catalog():
         return entry["base_url"]
-    return "https://api.dmxapi.com/v1"
+    return "https://api.deepseek.com"
 
 
 def get_model_capabilities(model_id: str | None) -> list[str]:

@@ -35,7 +35,7 @@ class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
 
 
-class RollbackRequest(BaseModel):
+class VersionRollbackRequest(BaseModel):
     version: int
 
 
@@ -429,7 +429,7 @@ def get_preview(
 @router.post("/{session_id}/rollback")
 def rollback_session(
     session_id: str,
-    payload: RollbackRequest,
+    payload: VersionRollbackRequest,
     request: Request,
     db: DbSession = Depends(_get_db_session),
 ) -> dict:
@@ -452,7 +452,7 @@ def rollback_session(
         "success": True,
         "current_version": payload.version,
         "preview_url": build_preview_url(request, session_id),
-            "preview_html": strip_prompt_artifacts(version.html),
+        "preview_html": strip_prompt_artifacts(version.html),
     }
 
 
@@ -654,7 +654,7 @@ def get_all_sessions_cost(
 
 # ── Undo / Branch endpoints ──────────────────────────────────
 
-class RollbackRequest(BaseModel):
+class TurnRollbackRequest(BaseModel):
     turns: int = 1
 
 
@@ -675,8 +675,8 @@ def undo_turn(session_id: str):
     return {"success": ok, "message": "Undid last turn." if ok else "Nothing to undo."}
 
 
-@router.post("/{session_id}/rollback")
-def rollback_turns(session_id: str, body: RollbackRequest):
+@router.post("/{session_id}/agent/rollback")
+def rollback_turns(session_id: str, body: TurnRollbackRequest):
     """Rollback the last N turns."""
     from ..engine.registry import engine_registry
 

@@ -118,17 +118,7 @@ def get_product_doc(
     if record is None:
         disk_doc = _load_disk_product_doc(session_id)
         if disk_doc is None:
-            now = datetime.now(timezone.utc)
-            return ProductDocResponse(
-                id=f"placeholder:{session_id}",
-                session_id=session_id,
-                content="",
-                structured={},
-                version=0,
-                status=_status_value(ProductDocStatus.DRAFT),
-                created_at=now,
-                updated_at=now,
-            )
+            raise HTTPException(status_code=404, detail="Product doc not found")
         content, sections, timestamp = disk_doc
         return ProductDocResponse(
             id=f"disk:{session_id}",

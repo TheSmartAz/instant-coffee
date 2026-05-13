@@ -16,7 +16,10 @@ from ..config import get_settings
 from ..db.database import get_database
 from ..db.models import SessionEvent, SessionRun
 from ..db.utils import get_db
-from ..schemas.run import RunCreate, RunResponse, RunResumeRequest, RunStatus
+from ..events.emitter import EventEmitter
+from ..events.models import run_lifecycle_event
+from ..events.types import EventType
+from ..schemas.run import RunCreate, RunListResponse, RunResponse, RunResumeRequest, RunStatus
 from ..services.event_store import EventStoreService
 from ..services.run import RunNotFoundError, RunService, RunStateConflictError
 
@@ -96,8 +99,47 @@ def _serialize_event(event: SessionEvent) -> RunEventResponse:
     )
 
 
+def _coordinator_state(run: SessionRun) -> dict:
+    metrics = run.metrics if isinstance(run.metrics, dict) else {}
+    coordinator = metrics.get("coordinator")
+    return coordinator if isinstance(coordinator, dict) else {}
+
+
+def _review_payload(run: SessionRun) -> Optional[dict]:
+    state = _coordinator_state(run)
+    artifacts = state.get("artifacts")
+    if isinstance(artifacts, dict):
+        review = artifacts.get("review")
+        if isinstance(review, dict):
+            return dict(review)
+    last_review = state.get("last_review")
+    if isinstance(last_review, dict):
+        return dict(last_review)
+    return None
+
+
 def _run_to_response(run: SessionRun) -> RunResponse:
     latest_error = run.latest_error if isinstance(run.latest_error, dict) else None
+    metrics = run.metrics if isinstance(run.metrics, dict) else {}
+    state = _coordinator_state(run)
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    phase_metadata = RunService.get_phase_metadata(run)
+    review = _review_payload(run)
+    review_summary = None
+    review_issues: list[dict] = []
+    if isinstance(review, dict):
+        summary = review.get("summary")
+        if isinstance(summary, dict):
+            review_summary = summary
+        issues = review.get("issues")
+        if isinstance(issues, list):
+            review_issues = [issue for issue in issues if isinstance(issue, dict)]
+
+    heartbeat = metrics.get("heartbeat")
+    heartbeat_at = None
+    if isinstance(heartbeat, dict) and heartbeat.get("at") is not None:
+        heartbeat_at = str(heartbeat["at"])
+
     waiting_reason: Optional[str] = None
     if isinstance(latest_error, dict):
         candidate = latest_error.get("waiting_reason") or latest_error.get("reason")
@@ -108,13 +150,37 @@ def _run_to_response(run: SessionRun) -> RunResponse:
         run_id=run.id,
         session_id=run.session_id,
         status=RunStatus(run.status),
+        created_at=run.created_at,
+        updated_at=run.updated_at,
         started_at=run.started_at,
         finished_at=run.finished_at,
         latest_error=latest_error,
-        metrics=run.metrics if isinstance(run.metrics, dict) else None,
+        metrics=metrics,
         checkpoint_thread=run.checkpoint_thread,
         checkpoint_ns=run.checkpoint_ns,
         waiting_reason=waiting_reason,
+        current_phase=(
+            str(state.get("current_phase"))
+            if state.get("current_phase") is not None
+            else phase_metadata.get("phase")
+        ),
+        phase_status=(
+            str(phase_metadata.get("status"))
+            if phase_metadata.get("status") is not None
+            else None
+        ),
+        phase_metadata=phase_metadata,
+        phase_history=(
+            list(state.get("phase_history"))
+            if isinstance(state.get("phase_history"), list)
+            else []
+        ),
+        artifacts=dict(artifacts),
+        fix_attempts=int(state.get("fix_attempts") or 0),
+        last_review=review,
+        review_summary=review_summary,
+        review_issues=review_issues,
+        heartbeat_at=heartbeat_at,
     )
 
 
@@ -165,6 +231,16 @@ def create_run(
         return cached
 
     service = RunService(db)
+    service.fail_stale_runs(
+        session_id=payload.session_id,
+        stale_after_seconds=get_settings().run_stale_timeout_seconds,
+    )
+    active_run = service.get_latest_active_run(payload.session_id)
+    if active_run is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Run {active_run.id} is already {active_run.status}",
+        )
     try:
         run = service.create_run(
             session_id=payload.session_id,
@@ -177,6 +253,8 @@ def create_run(
             ),
             target_pages=payload.target_pages,
         )
+    except RunStateConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
         if detail == "Session not found":
@@ -188,6 +266,21 @@ def create_run(
     body = response.model_dump(mode="json")
     _idempotency_set(scope, key, 201, body)
     return body
+
+
+@router.get("", response_model=RunListResponse)
+def list_runs(
+    session_id: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: DbSession = Depends(_get_db_session),
+):
+    _ensure_run_api_enabled()
+    service = RunService(db)
+    runs = service.list_runs(session_id, limit=limit)
+    return RunListResponse(
+        runs=[_run_to_response(run) for run in runs],
+        total=service.count_runs(session_id),
+    )
 
 
 @router.get("/{run_id}", response_model=RunResponse)
@@ -245,6 +338,18 @@ def cancel_run(
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
 
+    if accepted:
+        EventEmitter(
+            session_id=run.session_id,
+            run_id=run.id,
+            event_store=EventStoreService(db),
+        ).emit(
+            run_lifecycle_event(
+                EventType.RUN_CANCELLED,
+                phase="done",
+                status=RunStatus.CANCELLED.value,
+            )
+        )
     db.commit()
     response.status_code = 202 if accepted else 200
     return _run_to_response(run)

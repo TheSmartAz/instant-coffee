@@ -16,14 +16,31 @@ class Database:
         if resolved_url.startswith("postgres://"):
             resolved_url = resolved_url.replace("postgres://", "postgresql://", 1)
         connect_args = {}
+        engine_kwargs: dict = {
+            "pool_pre_ping": True,
+            "future": True,
+        }
         if resolved_url.startswith("sqlite"):
             connect_args = {"check_same_thread": False, "timeout": 30}
+        elif resolved_url.startswith("postgresql"):
+            # Fail fast when DB connectivity degrades instead of hanging requests.
+            connect_args = {"connect_timeout": 5}
+            pool_min = max(2, int(settings.app_data_pg_pool_min_size))
+            pool_max = max(pool_min + 1, int(settings.app_data_pg_pool_max_size))
+            engine_kwargs.update(
+                {
+                    "pool_size": pool_min,
+                    "max_overflow": max(1, pool_max - pool_min),
+                    "pool_timeout": 5,
+                    "pool_recycle": 1800,
+                    "pool_use_lifo": True,
+                }
+            )
         self.url = resolved_url
+        engine_kwargs["connect_args"] = connect_args
         self.engine = create_engine(
             self.url,
-            connect_args=connect_args,
-            pool_pre_ping=True,
-            future=True,
+            **engine_kwargs,
         )
         if resolved_url.startswith("sqlite"):
             @event.listens_for(self.engine, "connect")

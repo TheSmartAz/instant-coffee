@@ -248,7 +248,7 @@ class PageVersionService:
                 PageVersion.html: None,
             },
             synchronize_session=False,
-        ).rowcount
+        )
         if release_count and release_count > 0:
             updated_count += release_count
 
@@ -265,7 +265,7 @@ class PageVersionService:
                 PageVersion.html: None,
             },
             synchronize_session=False,
-        ).rowcount
+        )
         if prune_count and prune_count > 0:
             updated_count += prune_count
 

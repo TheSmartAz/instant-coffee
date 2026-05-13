@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from threading import Lock
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.exc import IntegrityError
 
 from ..utils.datetime import utcnow
 from ..db.models import Session as SessionModel
 from ..db.models import SessionRun
+from ..schemas.run import RunPhase, RunStatus
 
 
 class RunNotFoundError(ValueError):
@@ -25,8 +28,9 @@ class RunCancelledError(RuntimeError):
 
 class RunService:
     TERMINAL_STATES = {"completed", "failed", "cancelled"}
+    ACTIVE_STATES = {"queued", "running"}
     ALLOWED_TRANSITIONS = {
-        "queued": {"running", "cancelled"},
+        "queued": {"running", "failed", "cancelled"},
         "running": {"waiting_input", "completed", "failed", "cancelled"},
         "waiting_input": {"running", "cancelled"},
         "completed": set(),
@@ -77,8 +81,62 @@ class RunService:
             metrics=request_context,
         )
         self.db.add(run)
-        self.db.flush([run])
+        try:
+            self.db.flush([run])
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise RunStateConflictError(
+                f"Run already active for session {session_id}"
+            ) from exc
         return run
+
+    @staticmethod
+    def normalize_phase(phase: RunPhase | str) -> str:
+        try:
+            return phase.value if isinstance(phase, RunPhase) else RunPhase(str(phase)).value
+        except ValueError as exc:
+            allowed = ", ".join(item.value for item in RunPhase)
+            raise ValueError(f"phase must be one of: {allowed}") from exc
+
+    @staticmethod
+    def normalize_status(status: RunStatus | str) -> str:
+        try:
+            return status.value if isinstance(status, RunStatus) else RunStatus(str(status)).value
+        except ValueError as exc:
+            allowed = ", ".join(item.value for item in RunStatus)
+            raise ValueError(f"status must be one of: {allowed}") from exc
+
+    @classmethod
+    def phase_metadata(
+        cls,
+        *,
+        phase: RunPhase | str,
+        status: Optional[RunStatus | str] = None,
+        **metadata: Any,
+    ) -> dict[str, Any]:
+        payload = {
+            "phase": cls.normalize_phase(phase),
+            **{key: value for key, value in metadata.items() if value is not None},
+        }
+        if status is not None:
+            payload["status"] = cls.normalize_status(status)
+        return payload
+
+    @staticmethod
+    def get_phase_metadata(run: SessionRun) -> dict[str, Any]:
+        metrics = run.metrics if isinstance(run.metrics, dict) else {}
+        phase_metadata = metrics.get("phase_metadata")
+        if isinstance(phase_metadata, dict):
+            return dict(phase_metadata)
+
+        phase = metrics.get("phase")
+        if phase is None:
+            return {}
+
+        metadata = {"phase": phase}
+        if isinstance(metrics.get("phase_status"), str):
+            metadata["status"] = metrics["phase_status"]
+        return metadata
 
     def get_run(self, run_id: str) -> SessionRun:
         run = self.db.get(SessionRun, run_id)
@@ -86,12 +144,21 @@ class RunService:
             raise RunNotFoundError("Run not found")
         return run
 
-    def list_runs(self, session_id: str) -> list[SessionRun]:
-        return (
+    def list_runs(self, session_id: str, *, limit: Optional[int] = None) -> list[SessionRun]:
+        query = (
             self.db.query(SessionRun)
             .filter(SessionRun.session_id == session_id)
             .order_by(SessionRun.created_at.desc())
-            .all()
+        )
+        if limit is not None:
+            query = query.limit(limit)
+        return query.all()
+
+    def count_runs(self, session_id: str) -> int:
+        return (
+            self.db.query(SessionRun)
+            .filter(SessionRun.session_id == session_id)
+            .count()
         )
 
     def get_latest_waiting_run(self, session_id: str) -> Optional[SessionRun]:
@@ -104,6 +171,57 @@ class RunService:
             .order_by(SessionRun.updated_at.desc(), SessionRun.created_at.desc())
             .first()
         )
+
+    def get_latest_active_run(self, session_id: str) -> Optional[SessionRun]:
+        return (
+            self.db.query(SessionRun)
+            .filter(
+                SessionRun.session_id == session_id,
+                SessionRun.status.in_(self.ACTIVE_STATES),
+            )
+            .order_by(SessionRun.updated_at.desc(), SessionRun.created_at.desc())
+            .first()
+        )
+
+    def fail_stale_runs(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        stale_after_seconds: float,
+    ) -> list[SessionRun]:
+        if stale_after_seconds <= 0:
+            return []
+        cutoff = utcnow() - timedelta(seconds=float(stale_after_seconds))
+        query = self.db.query(SessionRun).filter(
+            SessionRun.status.in_(self.ACTIVE_STATES),
+            SessionRun.updated_at < cutoff,
+        )
+        if session_id:
+            query = query.filter(SessionRun.session_id == session_id)
+
+        stale_runs = query.all()
+        for run in stale_runs:
+            run.status = "failed"
+            run.finished_at = run.finished_at or utcnow()
+            run.latest_error = {
+                "code": "run_stale_timeout",
+                "message": "Run was marked failed after exceeding the stale timeout.",
+                "stale_after_seconds": stale_after_seconds,
+            }
+            metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
+            metrics["stale_timeout"] = {
+                "failed_at": utcnow().isoformat(),
+                "stale_after_seconds": stale_after_seconds,
+            }
+            run.metrics = metrics
+            self.clear_cancelled_marker(run.id)
+            self.db.add(run)
+        if stale_runs:
+            self.db.flush(stale_runs)
+            for run in stale_runs:
+                self.db.refresh(run)
+                self.db.expunge(run)
+        return stale_runs
 
     def resolve_resume_run(
         self,
@@ -185,6 +303,60 @@ class RunService:
             if hasattr(run, key):
                 setattr(run, key, value)
 
+        self.db.add(run)
+        try:
+            self.db.flush([run])
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise RunStateConflictError(
+                f"Run already active for session {run.session_id}"
+            ) from exc
+        return run
+
+    def persist_run_phase(
+        self,
+        run_id: str,
+        phase: RunPhase | str,
+        *,
+        status: Optional[RunStatus | str] = None,
+        **metadata: Any,
+    ) -> SessionRun:
+        run = self.get_run(run_id)
+        metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
+        phase_metadata = self.phase_metadata(
+            phase=phase,
+            status=status or run.status,
+            **metadata,
+        )
+        metrics["phase"] = phase_metadata["phase"]
+        metrics["phase_status"] = phase_metadata["status"]
+        metrics["phase_metadata"] = phase_metadata
+        run.metrics = metrics
+
+        self.db.add(run)
+        self.db.flush([run])
+        return run
+
+    def heartbeat_run(
+        self,
+        run_id: str,
+        *,
+        phase: Optional[RunPhase | str] = None,
+        status: Optional[RunStatus | str] = None,
+        **metadata: Any,
+    ) -> SessionRun:
+        run = self.get_run(run_id)
+        metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
+        heartbeat = {
+            "at": utcnow().isoformat(),
+            **{key: value for key, value in metadata.items() if value is not None},
+        }
+        if phase is not None:
+            heartbeat["phase"] = self.normalize_phase(phase)
+        if status is not None:
+            heartbeat["status"] = self.normalize_status(status)
+        metrics["heartbeat"] = heartbeat
+        run.metrics = metrics
         self.db.add(run)
         self.db.flush([run])
         return run

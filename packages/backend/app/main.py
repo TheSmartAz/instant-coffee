@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,6 +15,7 @@ from .api import (
     background_tasks_router,
     build_router,
     chat_router,
+    compat_router,
     data_router,
     events_router,
     files_router,
@@ -94,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(assets_router)
     app.include_router(build_router)
     app.include_router(chat_router)
+    app.include_router(compat_router)
     app.include_router(data_router)
     app.include_router(events_router)
     app.include_router(settings_router)
@@ -113,41 +116,42 @@ def create_app() -> FastAPI:
     app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
     @app.get("/health")
-    def health() -> dict:
+    def health(deep: bool = Query(False)) -> dict:
         checks: dict[str, str] = {}
         overall = "ok"
-
-        # DB check
-        try:
-            database = get_database()
-            with database.session() as session:
-                session.execute(__import__("sqlalchemy").text("SELECT 1"))
-            checks["database"] = "ok"
-        except Exception as exc:
-            checks["database"] = f"error: {exc}"
-            overall = "degraded"
 
         # API key check
         settings = get_settings()
         has_key = bool(
-            settings.anthropic_api_key
-            or settings.openai_api_key
+            settings.openai_api_key
             or settings.default_key
         )
         checks["api_key"] = "ok" if has_key else "missing"
         if not has_key:
             overall = "degraded"
 
-        # Disk check
-        try:
-            import shutil
-            usage = shutil.disk_usage(assets_dir)
-            free_gb = usage.free / (1024 ** 3)
-            checks["disk_free_gb"] = f"{free_gb:.1f}"
-            if free_gb < 1.0:
+        # Keep the default health endpoint lightweight for Railway edge checks.
+        # Run slower dependency probes only when explicitly requested.
+        if deep:
+            try:
+                database = get_database()
+                with database.session() as session:
+                    session.execute(__import__("sqlalchemy").text("SELECT 1"))
+                checks["database"] = "ok"
+            except Exception as exc:
+                checks["database"] = f"error: {exc}"
                 overall = "degraded"
-        except Exception:
-            checks["disk_free_gb"] = "unknown"
+
+            try:
+                usage = shutil.disk_usage(assets_dir)
+                free_gb = usage.free / (1024 ** 3)
+                checks["disk_free_gb"] = f"{free_gb:.1f}"
+                if free_gb < 1.0:
+                    overall = "degraded"
+            except Exception:
+                checks["disk_free_gb"] = "unknown"
+        else:
+            checks["mode"] = "live"
 
         return {"status": overall, "checks": checks}
 

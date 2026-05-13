@@ -1,6 +1,6 @@
 """AI-powered HTML to React + Tailwind converter.
 
-Calls Claude to convert raw HTML pages into React TSX components,
+Calls DeepSeek to convert raw HTML pages into React TSX components,
 extracting shared components and unifying design tokens.
 """
 
@@ -21,6 +21,7 @@ FILE_SEPARATOR_PATTERN = re.compile(
 )
 
 MAX_HTML_CHARS = 100_000
+DEEPSEEK_MAX_OUTPUT_TOKENS = 393_216
 
 
 @dataclass
@@ -151,9 +152,9 @@ def parse_converted_files(text: str) -> list[ConvertedFile]:
 
 
 class HtmlToReactConverter:
-    """Converts HTML pages to React + Tailwind via Claude API."""
+    """Converts HTML pages to React + Tailwind via DeepSeek."""
 
-    DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    DEFAULT_MODEL = "deepseek-v4-pro"
     MAX_RETRIES = 2
     BASE_DELAY = 2.0
 
@@ -166,19 +167,19 @@ class HtmlToReactConverter:
         model: str | None = None,
     ) -> None:
         settings = get_settings()
-        self._api_key = api_key or settings.anthropic_api_key
-        self._base_url = base_url or settings.anthropic_base_url
-        self._api_version = api_version or settings.anthropic_api_version
+        self._api_key = api_key or settings.openai_api_key or settings.default_key
+        self._base_url = base_url or settings.default_base_url or settings.openai_base_url
         self._model = model or self.DEFAULT_MODEL
+        self._max_tokens = min(settings.max_tokens, DEEPSEEK_MAX_OUTPUT_TOKENS)
         if not self._api_key:
-            raise ValueError("Anthropic API key is required for HTML-to-React conversion")
+            raise ValueError("DeepSeek API key is required for HTML-to-React conversion")
 
     async def convert(
         self,
         pages: list[PageHtml],
         product_doc_content: str | None = None,
     ) -> list[ConvertedFile]:
-        """Call Claude to convert HTML pages to React components."""
+        """Call DeepSeek to convert HTML pages to React components."""
         if not pages:
             raise ValueError("At least one HTML page is required")
 
@@ -237,18 +238,19 @@ class HtmlToReactConverter:
         return files
 
     async def _call_api(self, user_prompt: str) -> str:
-        """Make a single API call to Claude."""
+        """Make a single OpenAI-compatible API call to DeepSeek."""
         headers = {
-            "x-api-key": self._api_key,
-            "anthropic-version": self._api_version,
+            "authorization": f"Bearer {self._api_key}",
             "content-type": "application/json",
         }
         payload = {
             "model": self._model,
-            "max_tokens": 16000,
+            "max_tokens": self._max_tokens,
             "temperature": 0.2,
-            "system": SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": user_prompt}],
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
         }
 
         timeout = httpx.Timeout(180.0, connect=30.0)
@@ -256,16 +258,17 @@ class HtmlToReactConverter:
             base_url=self._base_url, timeout=timeout
         ) as client:
             response = await client.post(
-                "/v1/messages", json=payload, headers=headers
+                "/chat/completions", json=payload, headers=headers
             )
             response.raise_for_status()
             data = response.json()
 
-        content_blocks = data.get("content", [])
-        if not content_blocks:
-            raise ValueError("Empty response from Claude API")
+        choices = data.get("choices", [])
+        if not choices:
+            raise ValueError("Empty response from DeepSeek API")
 
-        return content_blocks[0].get("text", "")
+        message = choices[0].get("message", {})
+        return message.get("content", "")
 
 
 __all__ = [

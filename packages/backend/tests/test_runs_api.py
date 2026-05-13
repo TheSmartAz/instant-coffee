@@ -103,7 +103,17 @@ def test_runs_api_create_get_resume_cancel_and_idempotency(tmp_path, monkeypatch
 
         get_resp = client.get(f"/api/runs/{run_id}")
         assert get_resp.status_code == 200
-        assert get_resp.json()["run_id"] == run_id
+        get_payload = get_resp.json()
+        assert get_payload["run_id"] == run_id
+        assert get_payload["created_at"]
+        assert get_payload["updated_at"]
+        assert get_payload["phase_history"] == []
+
+        list_resp = client.get("/api/runs", params={"session_id": session_id})
+        assert list_resp.status_code == 200
+        list_payload = list_resp.json()
+        assert list_payload["total"] == 1
+        assert list_payload["runs"][0]["run_id"] == run_id
 
         resume_conflict = client.post(
             f"/api/runs/{run_id}/resume",
@@ -118,6 +128,64 @@ def test_runs_api_create_get_resume_cancel_and_idempotency(tmp_path, monkeypatch
         cancel_again = client.post(f"/api/runs/{run_id}/cancel")
         assert cancel_again.status_code == 200
         assert cancel_again.json()["status"] == "cancelled"
+
+    with get_db() as session:
+        events = (
+            session.query(SessionEvent)
+            .filter(SessionEvent.run_id == run_id, SessionEvent.type == "run_cancelled")
+            .all()
+        )
+        assert len(events) == 1
+        assert events[0].payload["payload"]["status"] == "cancelled"
+
+
+def test_runs_api_create_conflicts_with_active_run(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/runs",
+            json={"session_id": session_id, "message": "first"},
+        )
+        assert first.status_code == 201
+        run_id = first.json()["run_id"]
+
+        with get_db() as session:
+            from app.services.run import RunService
+
+            RunService(session).start_run(run_id)
+            session.commit()
+
+        second = client.post(
+            "/api/runs",
+            json={"session_id": session_id, "message": "second"},
+        )
+
+    assert second.status_code == 409
+    assert "already running" in second.json()["detail"]
+
+
+def test_runs_api_list_total_counts_runs_beyond_limit(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+
+    with get_db() as session:
+        from app.services.run import RunService
+
+        service = RunService(session)
+        first = service.create_run(session_id=session_id, message="first")
+        service.persist_run_state(first.id, "cancelled")
+        service.create_run(session_id=session_id, message="second")
+        session.commit()
+
+    with TestClient(app) as client:
+        list_resp = client.get("/api/runs", params={"session_id": session_id, "limit": 1})
+
+    assert list_resp.status_code == 200
+    list_payload = list_resp.json()
+    assert list_payload["total"] == 2
+    assert len(list_payload["runs"]) == 1
 
 
 def test_runs_api_resume_idempotency(tmp_path, monkeypatch) -> None:

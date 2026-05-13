@@ -41,7 +41,7 @@ def backend_settings_to_agent_config(
 
     api_key = s.openai_api_key or s.default_key or ""
     base_url = s.default_base_url or s.openai_base_url or ""
-    model_id = s.model or "gpt-4o"
+    model_id = s.model or "deepseek-v4-pro"
 
     if api_key:
         models[model_id] = ModelConfig(
@@ -53,18 +53,6 @@ def backend_settings_to_agent_config(
             temperature=s.temperature,
             timeout=s.openai_timeout_seconds,
         )
-
-    if s.anthropic_api_key:
-        for mid in ["claude-sonnet-4-20250514", "claude-haiku-4-20250514"]:
-            models[mid] = ModelConfig(
-                name=mid,
-                model=mid,
-                api_key=s.anthropic_api_key,
-                base_url=f"{s.anthropic_base_url}/v1/",
-                max_tokens=s.max_tokens,
-                temperature=s.temperature,
-                timeout=s.openai_timeout_seconds,
-            )
 
     default_model = model_id if model_id in models else (next(iter(models)) if models else "")
 

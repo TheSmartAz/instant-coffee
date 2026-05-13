@@ -1,7 +1,15 @@
 import asyncio
 
+import pytest
+
 from app.events.emitter import EventEmitter
-from app.events.models import AgentProgressEvent, AgentStartEvent, DoneEvent
+from app.events.models import (
+    AgentProgressEvent,
+    AgentStartEvent,
+    DoneEvent,
+    run_lifecycle_event,
+)
+from app.events.types import EventType
 
 
 def test_event_model_to_sse_contains_timestamp_and_message() -> None:
@@ -29,3 +37,25 @@ def test_event_emitter_stream_and_events_since() -> None:
 
     chunks = asyncio.run(collect())
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def test_run_lifecycle_event_accepts_supported_phase_metadata() -> None:
+    event = run_lifecycle_event(
+        EventType.RUN_STARTED,
+        phase="implement",
+        status="running",
+        payload={"checkpoint_thread": "thread-1"},
+        page=None,
+    )
+
+    assert event.type == EventType.RUN_STARTED
+    assert event.payload == {
+        "checkpoint_thread": "thread-1",
+        "phase": "implement",
+        "status": "running",
+    }
+
+
+def test_run_lifecycle_event_rejects_unknown_phase() -> None:
+    with pytest.raises(ValueError):
+        run_lifecycle_event(EventType.RUN_STARTED, phase="langgraph", status="running")

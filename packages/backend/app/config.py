@@ -98,7 +98,9 @@ def _resolve_database_url() -> str:
 
 
 def _resolve_default_model_id() -> str:
-    return _get_env("MODEL") or _get_env("DEFAULT_MODEL") or get_default_model_id()
+    env_model = _get_env("MODEL") or _get_env("DEFAULT_MODEL")
+    default_model = get_default_model_id()
+    return env_model if env_model == default_model else default_model
 
 
 def _resolve_default_base_url() -> str:
@@ -109,23 +111,23 @@ def _resolve_default_base_url() -> str:
 
 
 DEFAULT_MODEL_POOLS: dict[str, Any] = {
-    "classifier": ["gpt-5-mini", "gemini-3-flash-preview", "grok-code-fast-1"],
+    "classifier": ["deepseek-v4-pro"],
     "writer": {
-        "default": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
-        "landing": ["gemini-3-flash-preview", "gpt-5-mini", "glm-5"],
-        "card": ["gemini-3-flash-preview", "gpt-5-mini", "glm-5"],
-        "invitation": ["gemini-3-flash-preview", "gpt-5-mini", "glm-5"],
-        "ecommerce": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
-        "booking": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
-        "dashboard": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest", "hunyuan-2.0-instruct-20251111"],
+        "default": ["deepseek-v4-pro"],
+        "landing": ["deepseek-v4-pro"],
+        "card": ["deepseek-v4-pro"],
+        "invitation": ["deepseek-v4-pro"],
+        "ecommerce": ["deepseek-v4-pro"],
+        "booking": ["deepseek-v4-pro"],
+        "dashboard": ["deepseek-v4-pro"],
     },
-    "expander": ["gpt-5-mini", "gemini-3-flash-preview", "glm-5", "DeepSeek-V3.2"],
-    "validator": ["glm-5", "DeepSeek-V3.2", "qwen-max-latest"],
+    "expander": ["deepseek-v4-pro"],
+    "validator": ["deepseek-v4-pro"],
     "style_refiner": {
-        "default": ["gemini-3-flash-preview", "gpt-5-mini", "kimi-k2.5"],
-        "landing": ["gemini-3-flash-preview", "kimi-k2.5", "gpt-5-mini"],
-        "card": ["gemini-3-flash-preview", "kimi-k2.5", "gpt-5-mini"],
-        "invitation": ["gemini-3-flash-preview", "kimi-k2.5", "gpt-5-mini"],
+        "default": ["deepseek-v4-pro"],
+        "landing": ["deepseek-v4-pro"],
+        "card": ["deepseek-v4-pro"],
+        "invitation": ["deepseek-v4-pro"],
     },
 }
 
@@ -154,7 +156,10 @@ class Settings:
         default_factory=lambda: _get_float("APP_DATA_PG_POOL_COMMAND_TIMEOUT", 30.0)
     )
     run_api_enabled: bool = field(default_factory=lambda: _get_bool("RUN_API_ENABLED", True))
-    chat_use_run_adapter: bool = field(default_factory=lambda: _get_bool("CHAT_USE_RUN_ADAPTER", False))
+    chat_use_run_adapter: bool = field(default_factory=lambda: _get_bool("CHAT_USE_RUN_ADAPTER", True))
+    run_stale_timeout_seconds: float = field(
+        default_factory=lambda: _get_float("RUN_STALE_TIMEOUT_SECONDS", 30 * 60.0)
+    )
     tool_policy_enabled: bool = field(default_factory=lambda: _get_bool("TOOL_POLICY_ENABLED", True))
     tool_policy_mode: str = field(default_factory=lambda: _get_env("TOOL_POLICY_MODE", "log_only") or "log_only")
     tool_policy_allowed_cmd_prefixes: list[str] = field(
@@ -173,14 +178,12 @@ class Settings:
     cors_allow_credentials: bool = field(default_factory=lambda: _get_bool("CORS_ALLOW_CREDENTIALS", False))
     planner_provider: str | None = field(default_factory=lambda: _get_env("PLANNER_PROVIDER"))
     planner_model: str = field(
-        default_factory=lambda: _get_env("PLANNER_MODEL") or "kimi-k2.5"
+        default_factory=lambda: _get_env("PLANNER_MODEL") or "deepseek-v4-pro"
     )
     planner_timeout_seconds: float = field(default_factory=lambda: _get_float("PLANNER_TIMEOUT_SECONDS", 30.0))
 
     openai_api_key: str | None = field(
-        default_factory=lambda: _get_env("OPENAI_API_KEY")
-        or _get_env("DMX_API_KEY")
-        or _get_env("DMXAPI_API_KEY")
+        default_factory=lambda: _get_env("DEEPSEEK_API_KEY")
         or _get_env("DEFAULT_KEY")
     )
     openai_base_url: str = field(default_factory=_resolve_default_base_url)
@@ -189,16 +192,10 @@ class Settings:
     openai_base_delay: float = field(default_factory=lambda: _get_float("OPENAI_BASE_DELAY", 1.0))
     openai_api_mode: str = field(default_factory=lambda: _get_env("OPENAI_API_MODE", "responses") or "responses")
 
-    anthropic_api_key: str | None = field(default_factory=lambda: _get_env("ANTHROPIC_API_KEY"))
-    anthropic_base_url: str = field(default_factory=lambda: _get_env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"))
-    anthropic_api_version: str = field(default_factory=lambda: _get_env("ANTHROPIC_API_VERSION", "2023-06-01"))
-
     default_base_url: str | None = field(default_factory=lambda: _get_env("DEFAULT_BASE_URL"))
     default_key: str | None = field(
         default_factory=lambda: _get_env("DEFAULT_KEY")
-        or _get_env("DMXAPI_API_KEY")
-        or _get_env("DMX_API_KEY")
-        or _get_env("OPENAI_API_KEY")
+        or _get_env("DEEPSEEK_API_KEY")
     )
 
     model: str = field(default_factory=_resolve_default_model_id)
@@ -215,7 +212,7 @@ class Settings:
     model_failure_ttl_seconds: int = field(default_factory=lambda: _get_int("MODEL_FAILURE_TTL_SECONDS", 900))
     model_fallback_attempts: int = field(default_factory=lambda: _get_int("MODEL_FALLBACK_ATTEMPTS", 3))
     temperature: float = field(default_factory=lambda: _get_float("TEMPERATURE", 0.7))
-    max_tokens: int = field(default_factory=lambda: _get_int("MAX_TOKENS", 32000))
+    max_tokens: int = field(default_factory=lambda: _get_int("MAX_TOKENS", 1_000_000))
     auto_save: bool = field(default_factory=lambda: _get_bool("AUTO_SAVE", True))
     skills_dir: str | None = field(default_factory=lambda: _get_env("SKILLS_DIR"))
     mcp_enabled: bool = field(default_factory=lambda: _get_bool("ENABLE_MCP", _get_bool("USE_MCP", False)))

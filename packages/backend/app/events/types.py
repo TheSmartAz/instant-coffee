@@ -81,6 +81,16 @@ class EventType(str, Enum):
     CONTEXT_COMPACTED = "context_compacted"
     PLAN_UPDATE = "plan_update"
     PLAN_CREATED = "plan_created"
+    PLAN_UPDATED = "plan_updated"
+    TASK_STARTED = "task_started"
+    TASK_PROGRESS = "task_progress"
+    TASK_DONE = "task_done"
+    TASK_COMPLETED = "task_completed"
+    TASK_FAILED = "task_failed"
+    TASK_RETRYING = "task_retrying"
+    TASK_SKIPPED = "task_skipped"
+    TASK_BLOCKED = "task_blocked"
+    TASK_ABORTED = "task_aborted"
     AGENT_SPAWNED = "agent_spawned"
     BG_TASK_STARTED = "bg_task_started"
     BG_TASK_COMPLETED = "bg_task_completed"
@@ -113,4 +123,15 @@ RUN_SCOPED_EVENT_TYPES = {
     EventType.VERIFY_FAIL.value,
     EventType.TOOL_POLICY_BLOCKED.value,
     EventType.TOOL_POLICY_WARN.value,
+}
+
+
+RUN_PHASES = {
+    "plan",
+    "implement",
+    "build",
+    "review",
+    "fix",
+    "verify",
+    "done",
 }

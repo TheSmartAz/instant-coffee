@@ -15,7 +15,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from ..events.emitter import EventEmitter
@@ -34,10 +35,19 @@ class _PendingQuestion:
 class WebUserIO:
     """UserIO implementation for the web backend."""
 
-    def __init__(self, emitter: EventEmitter, session_id: str) -> None:
+    def __init__(
+        self,
+        emitter: EventEmitter,
+        session_id: str,
+        *,
+        on_waiting_input: Callable[[str, list[dict[str, Any]]], None] | None = None,
+        on_answer_resolved: Callable[[str, Any], None] | None = None,
+    ) -> None:
         self._emitter = emitter
         self._session_id = session_id
         self._pending: Optional[_PendingQuestion] = None
+        self._on_waiting_input = on_waiting_input
+        self._on_answer_resolved = on_answer_resolved
 
     @property
     def has_pending(self) -> bool:
@@ -71,6 +81,11 @@ class WebUserIO:
                 questions=serialized,
             )
         )
+        if self._on_waiting_input is not None:
+            try:
+                self._on_waiting_input(batch_id, serialized)
+            except Exception:
+                logger.exception("WebUserIO: failed to persist waiting_input state")
 
         logger.info(
             "WebUserIO: emitted %d questions (batch=%s), awaiting answer",
@@ -112,8 +127,14 @@ class WebUserIO:
         if self._pending.future.done():
             logger.warning("resolve_answer called but future already done")
             return False
+        batch_id = self._pending.batch_id
+        if self._on_answer_resolved is not None:
+            try:
+                self._on_answer_resolved(batch_id, answer_payload)
+            except Exception:
+                logger.exception("WebUserIO: failed to persist resumed state")
         self._pending.future.set_result(answer_payload)
-        logger.info("WebUserIO: resolved answer for batch=%s", self._pending.batch_id)
+        logger.info("WebUserIO: resolved answer for batch=%s", batch_id)
         return True
 
 

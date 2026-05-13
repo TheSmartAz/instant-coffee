@@ -10,6 +10,7 @@ import glob
 import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Sequence
 
@@ -19,8 +20,11 @@ from ..schemas.orchestrator_response import OrchestratorResponse
 from ..config import get_settings
 from ..db.models import Session as SessionModel
 from ..events.emitter import EventEmitter
-from ..events.models import DoneEvent, ErrorEvent
+from ..events.models import DoneEvent, ErrorEvent, run_lifecycle_event
+from ..events.types import EventType
+from ..schemas.run import RunPhase, RunStatus
 from ..services.message import MessageService
+from ..services.run import RunNotFoundError, RunService, RunStateConflictError
 
 from .config_bridge import backend_settings_to_agent_config
 from .db_tools import DBEditFile, DBMultiEditFile, DBWriteFile, persist_html_page
@@ -31,6 +35,20 @@ from .registry import engine_registry
 from .web_user_io import WebUserIO
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _waiting_reason_from_questions(questions: list[dict[str, Any]]) -> str:
+    if questions:
+        first = questions[0]
+        for key in ("question", "title", "message"):
+            value = first.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return "Waiting for user input"
 
 
 class EngineOrchestrator:
@@ -49,7 +67,10 @@ class EngineOrchestrator:
             session_id=session.id
         )
         self._web_user_io = WebUserIO(
-            self.event_emitter, session.id
+            self.event_emitter,
+            session.id,
+            on_waiting_input=self._mark_run_waiting_input,
+            on_answer_resolved=self._mark_run_resumed,
         )
         self._engine = None
         self.thread_id: str | None = None
@@ -63,6 +84,174 @@ class EngineOrchestrator:
     def resolve_answer(self, answer_payload: Any) -> bool:
         """Route a user answer to the pending ask_user call."""
         return self._web_user_io.resolve_answer(answer_payload)
+
+    def _mark_run_waiting_input(self, batch_id: str, questions: list[dict[str, Any]]) -> None:
+        run_id = self.event_emitter.run_id
+        if not run_id:
+            return
+
+        run_service = RunService(self.db)
+        try:
+            run = run_service.get_run(run_id)
+        except RunNotFoundError:
+            logger.warning("Cannot mark missing run %s as waiting_input", run_id)
+            return
+
+        if run.status == RunStatus.WAITING_INPUT.value:
+            return
+        if run.status != RunStatus.RUNNING.value:
+            logger.info("Skip waiting_input transition for run %s in state %s", run_id, run.status)
+            return
+
+        waiting_reason = _waiting_reason_from_questions(questions)
+        waiting_at = _utc_iso()
+        payload = {
+            "batch_id": batch_id,
+            "waiting_reason": waiting_reason,
+            "questions": questions,
+        }
+        try:
+            run_service.persist_run_phase(
+                run_id,
+                RunPhase.IMPLEMENT,
+                status=RunStatus.WAITING_INPUT,
+                waiting_reason=waiting_reason,
+                waiting_at=waiting_at,
+                result=payload,
+            )
+            run_service.heartbeat_run(
+                run_id,
+                phase=RunPhase.IMPLEMENT,
+                status=RunStatus.WAITING_INPUT,
+                step="waiting_input",
+            )
+            run_service.persist_run_state(
+                run_id,
+                RunStatus.WAITING_INPUT.value,
+                latest_error={
+                    "waiting_reason": waiting_reason,
+                    "batch_id": batch_id,
+                },
+            )
+            run = run_service.get_run(run_id)
+            self._record_coordinator_phase(
+                run,
+                phase=RunPhase.IMPLEMENT.value,
+                status=RunStatus.WAITING_INPUT.value,
+                waiting_reason=waiting_reason,
+                waiting_at=waiting_at,
+                output=payload,
+            )
+            self.event_emitter.emit(
+                run_lifecycle_event(
+                    EventType.RUN_WAITING_INPUT,
+                    phase=RunPhase.IMPLEMENT.value,
+                    status=RunStatus.WAITING_INPUT.value,
+                    waiting_reason=waiting_reason,
+                    batch_id=batch_id,
+                )
+            )
+            self.db.commit()
+        except RunStateConflictError:
+            logger.exception("Invalid waiting_input transition for run %s", run_id)
+
+    def _mark_run_resumed(self, batch_id: str, answer_payload: Any) -> None:
+        run_id = self.event_emitter.run_id
+        if not run_id:
+            return
+
+        run_service = RunService(self.db)
+        try:
+            run = run_service.get_run(run_id)
+        except RunNotFoundError:
+            logger.warning("Cannot resume missing run %s", run_id)
+            return
+
+        if run.status == RunStatus.WAITING_INPUT.value:
+            try:
+                run_service.resume_run(
+                    run_id,
+                    {
+                        "source": "ask_user",
+                        "batch_id": batch_id,
+                        "answers": answer_payload,
+                    },
+                )
+            except RunStateConflictError:
+                logger.exception("Invalid resume transition for run %s", run_id)
+                return
+        elif run.status != RunStatus.RUNNING.value:
+            logger.info("Skip resume transition for run %s in state %s", run_id, run.status)
+            return
+
+        try:
+            run_service.persist_run_phase(
+                run_id,
+                RunPhase.IMPLEMENT,
+                status=RunStatus.RUNNING,
+                resumed_at=_utc_iso(),
+            )
+            run_service.heartbeat_run(
+                run_id,
+                phase=RunPhase.IMPLEMENT,
+                status=RunStatus.RUNNING,
+                step="answer_received",
+            )
+            run = run_service.get_run(run_id)
+            self._record_coordinator_phase(
+                run,
+                phase=RunPhase.IMPLEMENT.value,
+                status=RunStatus.RUNNING.value,
+                resumed_at=_utc_iso(),
+                output={
+                    "source": "ask_user",
+                    "batch_id": batch_id,
+                    "answers": answer_payload,
+                },
+            )
+            self.event_emitter.emit(
+                run_lifecycle_event(
+                    EventType.RUN_RESUMED,
+                    phase=RunPhase.IMPLEMENT.value,
+                    status=RunStatus.RUNNING.value,
+                    batch_id=batch_id,
+                )
+            )
+            self.db.commit()
+        except RunStateConflictError:
+            logger.exception("Failed to persist resumed phase for run %s", run_id)
+
+    def _record_coordinator_phase(
+        self,
+        run,
+        *,
+        phase: str,
+        status: str,
+        **metadata: Any,
+    ) -> None:
+        metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
+        coordinator = dict(metrics.get("coordinator") or {})
+        phase_history = list(coordinator.get("phase_history") or [])
+        entry = {
+            "phase": phase,
+            "status": status,
+            **{key: value for key, value in metadata.items() if value is not None},
+        }
+        if (
+            phase_history
+            and phase_history[-1].get("phase") == phase
+            and phase_history[-1].get("status") != RunStatus.COMPLETED.value
+        ):
+            phase_history[-1] = {**phase_history[-1], **entry}
+        else:
+            phase_history.append(entry)
+        coordinator["current_phase"] = phase
+        coordinator["phase_history"] = phase_history
+        coordinator["fix_attempts"] = int(coordinator.get("fix_attempts") or 0)
+        coordinator["artifacts"] = dict(coordinator.get("artifacts") or {})
+        metrics["coordinator"] = coordinator
+        run.metrics = metrics
+        self.db.add(run)
 
     def _create_sub_agent_tools(self, sub_engine: Any) -> list:
         """Tool factory for sub-agents: returns DB-backed WriteFile/EditFile.
@@ -380,6 +569,16 @@ class EngineOrchestrator:
                         )
                 if file_context_parts:
                     user_message = "\n".join(file_context_parts) + "\n\n" + user_message
+
+            if not trigger_interview:
+                user_message = (
+                    "<interview_mode>\n"
+                    "Interview has already been completed or explicitly skipped.\n"
+                    "Do not ask additional clarifying questions with ask_user.\n"
+                    "Proceed directly with PRODUCT.md updates and generation/refinement.\n"
+                    "</interview_mode>\n\n"
+                    + user_message
+                )
 
             result = await self._engine.run_turn(user_message, images=images_for_engine)
 

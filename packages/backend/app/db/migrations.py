@@ -38,6 +38,7 @@ def init_db(database: Database | None = None) -> None:
     migrate_v09_threads(db_instance)
     migrate_v10_project_memory(db_instance)
     migrate_v11_message_metadata(db_instance)
+    migrate_v12_active_run_index(db_instance)
 
 
 def migrate_v04_product_doc_pages(database: Database | None = None) -> None:
@@ -216,6 +217,59 @@ def migrate_v08_run_model(database: Database | None = None) -> None:
     )
     _ensure_index(engine, "session_runs", "idx_session_runs_status", ["status"])
     _ensure_index(engine, "session_runs", "idx_session_runs_parent", ["parent_run_id"])
+    migrate_v12_active_run_index(db_instance)
+
+
+def migrate_v12_active_run_index(database: Database | None = None) -> None:
+    db_instance = database or get_database()
+    engine = db_instance.engine
+    inspector = inspect(engine)
+    if "session_runs" not in inspector.get_table_names():
+        return
+    existing = {idx.get("name") for idx in inspector.get_indexes("session_runs")}
+    if "idx_session_runs_one_active" in existing:
+        return
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            latest_error = (
+                '\'{"code":"duplicate_active_run_migration",'
+                '"message":"Run was marked failed before enforcing one active run per session."}\'::json'
+            )
+        else:
+            latest_error = (
+                '\'{"code":"duplicate_active_run_migration",'
+                '"message":"Run was marked failed before enforcing one active run per session."}\''
+            )
+        connection.execute(
+            text(
+                "UPDATE session_runs "
+                "SET status = 'failed', "
+                "finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP), "
+                "updated_at = CURRENT_TIMESTAMP, "
+                f"latest_error = COALESCE(latest_error, {latest_error}) "
+                "WHERE id IN ("
+                "SELECT id FROM ("
+                "SELECT id, ROW_NUMBER() OVER ("
+                "PARTITION BY session_id "
+                "ORDER BY COALESCE(updated_at, created_at) DESC, id DESC"
+                ") AS active_rank "
+                "FROM session_runs "
+                "WHERE status IN ('queued', 'running')"
+                ") ranked_active_runs "
+                "WHERE active_rank > 1"
+                ")"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_session_runs_one_active "
+                "ON session_runs (session_id) "
+                "WHERE status IN ('queued', 'running')"
+            )
+        )
 
 
 def migrate_v08_event_run_columns(database: Database | None = None) -> None:

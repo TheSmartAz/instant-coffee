@@ -1,12 +1,15 @@
 import uuid
+from datetime import timedelta
 
 import pytest
 
 from app.db.database import Database
 from app.db.migrations import init_db
-from app.db.models import Session as SessionModel
+from app.db.models import Session as SessionModel, SessionRun
 from app.db.utils import get_db, transaction_scope
+from app.schemas.run import RunPhase, RunStatus
 from app.services.run import RunNotFoundError, RunService, RunStateConflictError
+from app.utils.datetime import utcnow
 
 
 def _create_database(tmp_path, name: str) -> Database:
@@ -106,6 +109,64 @@ def test_run_state_transitions_and_conflicts(tmp_path) -> None:
             service.persist_run_state(run_id, "running")
 
 
+def test_create_run_rejects_second_active_run_for_session(tmp_path) -> None:
+    database = _create_database(tmp_path, "run-service-active-unique.db")
+    session_id = _seed_session(database)
+
+    with get_db(database) as session:
+        service = RunService(session)
+        service.create_run(session_id=session_id, message="first")
+        session.commit()
+
+    with get_db(database) as session:
+        service = RunService(session)
+        with pytest.raises(RunStateConflictError):
+            service.create_run(session_id=session_id, message="second")
+
+
+def test_run_phase_metadata_persisted_in_metrics(tmp_path) -> None:
+    database = _create_database(tmp_path, "run-service-phase.db")
+    session_id = _seed_session(database)
+
+    with get_db(database) as session:
+        service = RunService(session)
+        run = service.create_run(
+            session_id=session_id,
+            message="hello",
+            generate_now=True,
+            target_pages=["index"],
+        )
+        run_id = run.id
+        session.commit()
+
+    with get_db(database) as session:
+        service = RunService(session)
+        updated = service.persist_run_phase(
+            run_id,
+            RunPhase.BUILD,
+            status=RunStatus.RUNNING,
+            step="assets",
+        )
+        metrics = dict(updated.metrics)
+        phase_metadata = service.get_phase_metadata(updated)
+        session.commit()
+
+    assert metrics["generate_now"] is True
+    assert metrics["target_pages"] == ["index"]
+    assert metrics["phase"] == "build"
+    assert metrics["phase_status"] == "running"
+    assert phase_metadata == {"phase": "build", "status": "running", "step": "assets"}
+
+    with get_db(database) as session:
+        service = RunService(session)
+        stored = service.get_run(run_id)
+        assert service.get_phase_metadata(stored) == {
+            "phase": "build",
+            "status": "running",
+            "step": "assets",
+        }
+
+
 def test_resume_requires_waiting_input(tmp_path) -> None:
     database = _create_database(tmp_path, "run-service-resume.db")
     session_id = _seed_session(database)
@@ -146,6 +207,60 @@ def test_cancel_idempotency(tmp_path) -> None:
 
     assert accepted_again is False
     assert cancelled_again_status == "cancelled"
+
+
+def test_active_run_lookup_stale_failure_and_heartbeat(tmp_path) -> None:
+    database = _create_database(tmp_path, "run-service-active-stale.db")
+    session_id = _seed_session(database)
+
+    with get_db(database) as session:
+        service = RunService(session)
+        active = service.create_run(session_id=session_id, message="hello")
+        service.start_run(active.id)
+        heartbeat = service.heartbeat_run(
+            active.id,
+            phase=RunPhase.IMPLEMENT,
+            status=RunStatus.RUNNING,
+            step="thinking",
+        )
+        run_id = active.id
+        heartbeat_payload = heartbeat.metrics["heartbeat"]
+        session.commit()
+
+    assert heartbeat_payload["phase"] == "implement"
+    assert heartbeat_payload["status"] == "running"
+    assert heartbeat_payload["step"] == "thinking"
+
+    with get_db(database) as session:
+        service = RunService(session)
+        active = service.get_latest_active_run(session_id)
+        assert active is not None
+        assert active.id == run_id
+
+        stale = session.get(SessionRun, run_id)
+        assert stale is not None
+        stale.updated_at = utcnow() - timedelta(hours=2)
+        session.add(stale)
+        session.commit()
+
+    with get_db(database) as session:
+        service = RunService(session)
+        failed = service.fail_stale_runs(
+            session_id=session_id,
+            stale_after_seconds=60,
+        )
+        failed_ids = [run.id for run in failed]
+        session.commit()
+
+    assert failed_ids == [run_id]
+
+    with get_db(database) as session:
+        service = RunService(session)
+        stored = session.get(SessionRun, run_id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.latest_error["code"] == "run_stale_timeout"
+        assert service.get_latest_active_run(session_id) is None
 
 
 def test_get_run_not_found(tmp_path) -> None:

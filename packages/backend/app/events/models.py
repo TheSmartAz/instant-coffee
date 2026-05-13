@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .types import EventType
+from .types import EventType, RUN_PHASES
 
 
 class BaseEvent(BaseModel):
@@ -316,6 +316,46 @@ def _clean_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]
     if not payload:
         return {}
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _normalize_run_phase(phase: str) -> str:
+    normalized = str(phase)
+    if normalized not in RUN_PHASES:
+        allowed = ", ".join(sorted(RUN_PHASES))
+        raise ValueError(f"phase must be one of: {allowed}")
+    return normalized
+
+
+def run_phase_payload(
+    *,
+    phase: str,
+    status: Optional[str] = None,
+    **metadata: Any,
+) -> Dict[str, Any]:
+    payload = {
+        "phase": _normalize_run_phase(phase),
+        **{key: value for key, value in metadata.items() if value is not None},
+    }
+    if status is not None:
+        payload["status"] = str(status)
+    return payload
+
+
+def run_lifecycle_event(
+    event_type: EventType,
+    *,
+    phase: Optional[str] = None,
+    status: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    **metadata: Any,
+) -> WorkflowEvent:
+    resolved_payload = dict(payload or {})
+    if phase is not None:
+        resolved_payload.update(run_phase_payload(phase=phase, status=status, **metadata))
+    elif status is not None:
+        resolved_payload["status"] = str(status)
+        resolved_payload.update({key: value for key, value in metadata.items() if value is not None})
+    return workflow_event(event_type, resolved_payload)
 
 
 def workflow_event(event_type: EventType, payload: Optional[Dict[str, Any]] = None) -> WorkflowEvent:

@@ -36,6 +36,7 @@ from .models import (
     VersionCreatedEvent,
     WorkflowEvent,
 )
+from .types import RUN_SCOPED_EVENT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +108,23 @@ class EventEmitter:
             except RuntimeError:
                 loop = None
 
+            event_type = getattr(event.type, "value", event.type)
+
             def _record() -> None:
                 try:
-                    self._event_store.record_event(event)
+                    force_current_session = bool(
+                        event_type in RUN_SCOPED_EVENT_TYPES
+                        and getattr(self._event_store, "_use_separate_session", False)
+                    )
+                    if force_current_session:
+                        original_use_separate_session = self._event_store._use_separate_session
+                        self._event_store._use_separate_session = False
+                        try:
+                            self._event_store.record_event(event)
+                        finally:
+                            self._event_store._use_separate_session = original_use_separate_session
+                    else:
+                        self._event_store.record_event(event)
                 except Exception:
                     logger.exception("Failed to persist event")
 
@@ -117,6 +132,7 @@ class EventEmitter:
                 loop
                 and loop.is_running()
                 and getattr(self._event_store, "_use_separate_session", True)
+                and event_type not in RUN_SCOPED_EVENT_TYPES
             )
             if use_executor:
                 loop.run_in_executor(None, _record)
