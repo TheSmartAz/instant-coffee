@@ -13,6 +13,9 @@ from app.events.models import workflow_event
 from app.events.types import EventType
 from app.schemas.orchestrator_response import OrchestratorResponse
 from app.schemas.session_metadata import BuildInfo, BuildStatus
+from app.services.page import PageService
+from app.services.page_version import PageVersionService
+from app.services.product_doc import ProductDocService
 
 
 class _SmokeOrchestrator:
@@ -22,6 +25,23 @@ class _SmokeOrchestrator:
         self.event_emitter = emitter
 
     async def stream_responses(self, **_kwargs):
+        ProductDocService(self.db).create(
+            session_id=self.session.id,
+            content="# Smoke Product\n\nA tiny product doc for the smoke path.",
+            structured={"design_direction": {"tone": "concise"}},
+        )
+        page = PageService(self.db).create(
+            session_id=self.session.id,
+            title="Smoke Home",
+            slug="index",
+            description="Smoke-test landing page",
+        )
+        PageVersionService(self.db).create(
+            page.id,
+            "<!doctype html><html><body><main>Smoke export page</main></body></html>",
+            description="smoke page",
+        )
+        self.db.flush()
         yield OrchestratorResponse(
             session_id=self.session.id,
             phase="complete",
@@ -119,9 +139,11 @@ def test_chat_run_adapter_fake_e2e_smoke(tmp_path, monkeypatch) -> None:
         with get_db() as session:
             run = session.query(SessionRun).one()
             run_id = run.id
+            session_id = run.session_id
             assert run.status == "completed"
 
         run_detail = client.get(f"/api/runs/{run_id}")
+        export_response = client.post(f"/api/sessions/{session_id}/export")
 
     payloads = _sse_payloads(response_text)
     event_types = [payload["type"] for payload in payloads if "type" in payload]
@@ -145,3 +167,9 @@ def test_chat_run_adapter_fake_e2e_smoke(tmp_path, monkeypatch) -> None:
     assert detail["current_phase"] == "done"
     assert detail["artifacts"]["build"]["pages"] == ["index.html"]
     assert detail["review_summary"]["error_count"] == 0
+    assert export_response.status_code == 200
+    export_payload = export_response.json()
+    assert export_payload["success"] is True
+    assert export_payload["manifest"]["pages"][0]["slug"] == "index"
+    assert (tmp_path / "output" / session_id / "export" / "index.html").exists()
+    assert (tmp_path / "output" / session_id / "export" / "product-doc.md").exists()
