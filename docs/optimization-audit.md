@@ -1,8 +1,12 @@
 # Optimization Audit
 
+Last reviewed against current docs: 2026-05-13
+
 This document captures optimization opportunities spotted during a repo-wide scan.
 Each item includes a file reference to speed up implementation. Status is noted
 for anything already optimized.
+
+Note: this audit is a performance note, not an authoritative API or schema summary. Some historical wording may mention plan/task-era structures; current backend models and routes are summarized in `docs/project-summary.md`.
 
 ## Backend (Done)
 
@@ -28,7 +32,7 @@ for anything already optimized.
   - packages/backend/app/services/product_doc.py
 - [x] Snapshot rollback sets VersionSource.ROLLBACK.
   - packages/backend/app/services/project_snapshot.py
-- [x] Added DB indexes for messages/token usage/plan/task/page_versions.
+- [x] Added DB indexes for messages/token usage/page_versions. Historical plan/task-era indexes are not part of the current model set.
   - packages/backend/app/db/migrations.py
 
 ## Backend (Remaining)
@@ -68,3 +72,6 @@ for anything already optimized.
   - packages/cli/dist/utils/api-client.js
 - Streaming chat uses GET with query params; long prompts can exceed URL limits. Prefer POST streaming when possible.
   - packages/cli/dist/commands/chat.js
+- `export` and `stats` commands target backend endpoints that are not mounted in the current backend.
+  - packages/cli/dist/commands/export.js
+  - packages/cli/dist/commands/stats.js

@@ -1,5 +1,7 @@
 # Project Breakdown Index - v0.5
 
+> Historical note (2026-05-13): this is the v0.5 phase archive. Use `docs/phases/INDEX.md` for the overall roadmap archive and `docs/project-summary.md` for current implementation state.
+
 ## Overview
 
 本索引文档组织 **Spec v0.5** 的所有开发阶段，按类别 (Frontend、Backend、Database) 分类，支持多团队并行开发。

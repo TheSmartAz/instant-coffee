@@ -1,5 +1,7 @@
 # Version 0.8 Implementation Summary
 
+> Historical note (2026-05-13): this is a phase record. Run-centric concepts still exist, but current APIs and services should be verified against `docs/project-summary.md` and code.
+
 ## Overview
 
 **Version**: v0.8 - Run-Centric Backend Refactor + 可恢复执行 + 事件模型升级 + 工具策略钩子 + Verify Gate + App Data Layer

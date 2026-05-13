@@ -1,5 +1,7 @@
 # Design System Implementation Plan
 
+> Historical/current mix note (2026-05-13): this plan records frontend design-system implementation intent. Verify current component availability in `packages/web/src/components/ui` and current project layout in `docs/frontend_design/project_page.md` before treating a task as incomplete.
+
 ## Overview
 
 This document outlines the implementation plan for the Instant Coffee web application frontend. The plan is organized into phases, with dependencies clearly marked.

@@ -1,5 +1,7 @@
 # Version 0.9 Implementation Summary
 
+> Current status note (2026-05-13): this is a historical phase summary. The current codebase has moved to the embedded Python `ic` agent engine plus backend `EngineOrchestrator` and `RunCoordinator`. Some files named here, such as old `app/tools` or legacy phase scaffolding, may not exist in the current tree. Use `docs/project-summary.md` and `docs/v10-summary.md` for the current snapshot.
+
 ## Overview
 
 **Version**: v0.9 - Soul Agentic Loop (LangGraph → Tool-Calling Loop Refactor)

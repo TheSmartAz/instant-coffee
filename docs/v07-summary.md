@@ -1,5 +1,7 @@
 # Version 0.7 Implementation Summary
 
+> Historical note (2026-05-13): this is a phase record. The current backend is no longer centered on LangGraph; use `docs/project-summary.md` for the current embedded `ic` engine and run-coordinator architecture.
+
 ## Overview
 
 **Version**: v0.7 - LangGraph 编排 + React SSG 多文件产物 + 场景旅程能力 + 组件一致性 + Mobile Shell 自动修复

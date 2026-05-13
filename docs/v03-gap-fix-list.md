@@ -1,5 +1,7 @@
 # v0.3 Spec/Impl Gap Fix List
 
+> Historical note (2026-05-13): this gap list references the v0.3 implementation and legacy backend files. It remains useful for context, but current architecture and known issues are tracked in `docs/project-summary.md` and `docs/known_issue.md`.
+
 Source docs: `docs/spec/spec-03.md`, `docs/v03-summary.md` (2026-01-31)
 
 ## High priority (blocking UI/spec claims)

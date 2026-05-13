@@ -1,5 +1,7 @@
 # Zaoya CLI - Vibe Coding 实施计划
 
+> Historical note (2026-05-13): this is an early Zaoya/CLI-first plan. The current product is Instant Coffee, with FastAPI backend, embedded Python `ic` agent, React web UI, and legacy compiled Node CLI. Use `README.md`, `CLAUDE.md`, and `docs/project-summary.md` for current implementation details.
+
 **版本**: v2.0 - CLI First Approach
 **核心理念**: 先验证核心功能，再考虑 UI
 **日期**: 2025-01-30

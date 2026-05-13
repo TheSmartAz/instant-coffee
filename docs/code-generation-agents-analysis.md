@@ -1,5 +1,7 @@
 # AI 代码生成工具深度分析报告
 
+> Current status note (2026-05-13): this is external research/background material. It is not a current Instant Coffee implementation guide. Current architecture is summarized in `docs/project-summary.md`.
+
 > 基于 easy-coding-agents 和 nanocode 两个开源项目的深入研究
 >
 > 分析日期: 2025-02-06

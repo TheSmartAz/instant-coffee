@@ -1,5 +1,9 @@
 # Instant Coffee Design System v1.0
 
+Last reviewed: 2026-05-13
+
+This document describes the intended visual system for the web app. For current component layout and route-level UI structure, also see `docs/frontend_design/project_page.md` and `packages/web/README.md`.
+
 ## Overview
 
 This document defines the visual language and component specifications for the Instant Coffee web application. The app is desktop-first, uses React with shadcn/ui components, and follows a modern minimal aesthetic.

@@ -1,5 +1,7 @@
 # Instant Coffee v0.6 - E2E Test Plan
 
+> Historical note (2026-05-13): this is the v0.6 acceptance-test plan. Current test surfaces and commands are documented in `docs/e2e-test-plan.md`.
+
 **Version**: v0.6
 **Status**: Draft
 **Date**: 2026-02-04

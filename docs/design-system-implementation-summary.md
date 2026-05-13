@@ -1,5 +1,7 @@
 # Design System Implementation Summary
 
+> Historical/current mix note (2026-05-13): this summary records earlier web design-system work. Verify current component files in `packages/web/src/components/ui` and current layout in `docs/frontend_design/project_page.md`.
+
 更新时间：2026-01-31
 
 ## 完成情况概览

@@ -1,414 +1,94 @@
-# Version 1.0 Implementation Summary
+# Version 1.0 / v10 Status Summary
+
+Last updated: 2026-05-13
 
 ## Overview
 
-**Version**: v1.0 - Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment Export + Analytics
-**Status**: Not Started
-**Start Date**: TBD
-**Completion Date**: TBD
-
-## Implementation Progress
-
-### Database Phases
-
-| Phase ID | Name | Status | Completed Date |
-|----------|------|--------|----------------|
-| v10-D1 | Cross-Session Memory + Analytics Schema | ⏳ Pending | - |
-
-### Backend Phases
-
-| Phase ID | Name | Status | Completed Date |
-|----------|------|--------|----------------|
-| v10-B1 | Exact Token Calculation (tiktoken) | ⏳ Pending | - |
-| v10-B2 | Structured HTML Generation Tool | ⏳ Pending | - |
-| v10-B3 | Atomic Multi-file Operations | ⏳ Pending | - |
-| v10-B4 | Provider Fallback Chain | ⏳ Pending | - |
-| v10-B5 | Structured Compaction | ⏳ Pending | - |
-| v10-B6 | AskUser Timeout + Graceful Degradation | ⏳ Pending | - |
-| v10-B7 | Interview Progress Indicator | ⏳ Pending | - |
-| v10-B8 | Cross-Session Memory | ⏳ Pending | - |
-| v10-B9 | Richer Context Injection | ⏳ Pending | - |
-| v10-B10 | One-Click Deployment Service | ⏳ Pending | - |
-| v10-B11 | Analytics Service | ⏳ Pending | - |
-
-### Frontend Phases
-
-| Phase ID | Name | Status | Completed Date |
-|----------|------|--------|----------------|
-| v10-F1 | Zustand State Management | ⏳ Pending | - |
-| v10-F2 | Split ProjectPage | ⏳ Pending | - |
-| v10-F3 | Interview Progress Indicator UI | ⏳ Pending | - |
-| v10-F4 | Deploy Button UI | ⏳ Pending | - |
-| v10-F5 | QR Code Sharing | ⏳ Pending | - |
-| v10-F6 | Data Tab Dashboard | ⏳ Pending | - |
-
-### Output Phases
-
-| Phase ID | Name | Status | Completed Date |
-|----------|------|--------|----------------|
-| v10-O1 | Analytics Tracking Script Template | ⏳ Pending | - |
-
----
-
-## Phase Details
-
-### v10-D1: Cross-Session Memory + Analytics Schema
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] User preferences can be stored and retrieved
-- [ ] Schema is backward compatible with existing data
-- [ ] Analytics events can be stored
-- [ ] Queries for dashboard are performant (indexed)
-- [ ] Deployment history can be queried by session
-- [ ] Version rollback can trigger deployment rollback
-
----
-
-### v10-B1: Exact Token Calculation (tiktoken)
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Token count accuracy < 5% error vs actual
-- [ ] Performance acceptable with caching
-- [ ] All token counts use tiktoken
-- [ ] Compaction triggers at correct thresholds
-
----
-
-### v10-B2: Structured HTML Generation Tool
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Tool registered in tool registry
-- [ ] Returns structured JSON output
-- [ ] Validation failures prevent write
-- [ ] Validation results included in output
-
----
-
-### v10-B3: Atomic Multi-file Operations
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] All operations succeed → all committed
-- [ ] Any operation fails → rollback all
-- [ ] Rollback works correctly
-- [ ] Agent can use batch operations
-
----
-
-### v10-B4: Provider Fallback Chain
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Primary timeout triggers fallback
-- [ ] Rate limit triggers fallback
-- [ ] All failures return clear error
-
----
-
-### v10-B5: Structured Compaction
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] All key state is captured
-- [ ] Compaction preserves key state
-- [ ] LLM can continue working after compaction
-- [ ] Compression uses fast model
-
----
-
-### v10-B6: AskUser Timeout + Graceful Degradation
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] 5 minute timeout triggers
-- [ ] Defaults generated on timeout
-- [ ] Frontend receives timeout event
-- [ ] Defaults are contextually appropriate
-
----
-
-### v10-B7: Interview Progress Indicator
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] LLM can set progress metadata
-- [ ] Frontend receives round_number and total
-
----
-
-### v10-B8: Cross-Session Memory
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Preferences persist across sessions
-- [ ] Preferences loaded on session start
-- [ ] Agent sees preference context
-- [ ] Preferences improve over time
-
----
-
-### v10-B9: Richer Context Injection
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Tokens extracted from CSS
-- [ ] Page summaries available
-- [ ] Resources tracked and available
-
----
-
-### v10-B10: One-Click Deployment Service
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Successfully deploys to provider
-- [ ] Endpoint accepts deployment requests
-- [ ] History persisted
-
----
-
-### v10-B11: Analytics Service
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Events stored correctly
-- [ ] Data queryable for dashboard
-- [ ] Script < 2KB
-- [ ] Tracks all required metrics
-
----
-
-### v10-F1: Zustand State Management
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Zustand installed
-- [ ] All stores created
-- [ ] Types defined
-- [ ] Easy importing
-- [ ] Hooks become thin wrappers
-
----
-
-### v10-F2: Split ProjectPage
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] All containers created
-- [ ] ProjectPage < 100 lines
-- [ ] Each container works independently
-- [ ] State from Zustand
-- [ ] Tabs work correctly
-
----
-
-### v10-F3: Interview Progress Indicator UI
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Progress displayed correctly
-- [ ] User knows current phase
-- [ ] Test with missing data (optional fields)
-
----
-
-### v10-F4: Deploy Button UI
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Button visible
-- [ ] Deploys successfully
-- [ ] API called correctly
-- [ ] URL displayed
-- [ ] History visible
-
----
-
-### v10-F5: QR Code Sharing
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Library installed
-- [ ] QR code generated
-
----
-
-### v10-F6: Data Tab Dashboard
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Library installed
-- [ ] All charts render
-- [ ] Data displays correctly
-- [ ] Export works
-
----
-
-### v10-O1: Analytics Tracking Script Template
-
-**Status**: ⏳ Pending
-**Implementation Date**: -
-
-**Files Modified/Created**:
-- (to be filled on completion)
-
-**Features Implemented**:
-- (to be filled on completion)
-
-**Acceptance Criteria**:
-- [ ] Script < 2KB minified
-- [ ] Tracks all required metrics
-- [ ] Generated pages include tracking
-
----
-
-## Gap Fixes
-
-(Document any post-implementation fixes, scope adjustments, or integration patches here as they arise)
+The original v10 plan targeted generation reliability, dialogue intelligence, frontend upgrades, deployment export, and analytics. The current codebase implements part of that direction, but the scope shifted toward the embedded `ic` agent, durable run coordination, build/review gating, run observability, and DeepSeek-oriented configuration.
+
+This document is a status snapshot against the old v10 roadmap, not a new plan.
+
+## Current Status By Area
+
+| Area | Original v10 intent | Current status |
+| --- | --- | --- |
+| Cross-session memory | Persist preferences and analytics | Partially implemented as `project_memory` and context injection; analytics schema/dashboard are not implemented. |
+| Token calculation | Exact tiktoken accounting | Not implemented as exact tiktoken flow; token/cost events and tracking exist. |
+| Structured HTML generation | Dedicated structured output tool | Partially covered by agent tools and DB-backed write/edit tools; no standalone structured HTML tool matching the original phase doc. |
+| Atomic multi-file operations | All-or-nothing batch file writes | Partially covered by DB-backed deferred write/edit/multiedit behavior; full original atomic batch contract is not documented as complete. |
+| Provider fallback | Provider fallback chain | Config now defaults to DeepSeek-compatible model settings; legacy OpenAI/Anthropic assumptions are no longer authoritative. Fallback semantics should be verified before claiming original acceptance criteria. |
+| Structured compaction | Preserve state during context compression | Agent context compaction callbacks/events exist; original full v10 compaction acceptance criteria are only partially satisfied. |
+| AskUser timeout | Graceful degradation on unanswered questions | Ask-user and waiting-input run states exist; timeout/default behavior should be verified before claiming complete. |
+| Interview progress UI | Round/total metadata | Interview widget exists; exact v10 progress metadata is not confirmed complete. |
+| Richer context injection | Product doc, pages, tokens, resources | Implemented in the embedded engine path for Product Doc, page summaries, memory, mentioned files, and visual references. |
+| One-click deployment | Deploy endpoint + history | Not implemented. |
+| Analytics service | Persist and query analytics | Not implemented as the original v10 service. |
+| Zustand and ProjectPage split | Frontend state/layout refactor | Not implemented. ProjectPage remains the main composed surface. |
+| Deploy button and QR sharing | Deployment UX | Not implemented. |
+| Data dashboard | Rich data dashboard | Partially implemented through Data tab and app data APIs. |
+
+## Implemented Since Earlier Summaries
+
+### Backend
+
+- `RunCoordinator` for durable implement/build/review/fix/verify lifecycle.
+- `BuildRunner` for reusable build execution from persisted pages or fallback state.
+- `ReviewService` for deterministic product-doc/page/build review issues.
+- `/api/runs` API for create/list/get/resume/cancel/events.
+- Deep health check mode through `/health?deep=true`.
+- DeepSeek-oriented backend/agent configuration defaults.
+- Event types for run lifecycle, verify, tool policy, files changed, context compaction, plan updates, spawned agents, and background tasks.
+- Migration support through v12, including active queued/running run uniqueness.
+
+### Agent
+
+- Standalone `ic` package with interactive and prompt modes.
+- Tool-calling loop with file, shell, ask-user, think, todo, skill, subagent, parallel subagent, web search, and web fetch tools.
+- Project sessions, checkpoints, undo, rollback, branches, Product Doc context, token/cost tracking, and context compaction callbacks.
+
+### Web
+
+- Run Status Strip and Run Inspector.
+- Run/build/review/tool-policy handling in chat stream hooks.
+- Workbench tabs for preview, code, product doc, and data.
+- Playwright coverage for run status inspector and existing upload/data/preview flows.
+
+## Not Implemented Or Still Legacy
+
+- `/api/export`, `/api/sessions/{session_id}/export`, `/api/stats`, `/api/plan`, and `/api/task/...` are compatibility-backed.
+- Web task retry/skip and export client calls are legacy compatibility surfaces.
+- Node CLI `export` and `stats` are compatibility-backed with TypeScript source/tests; other CLI commands remain legacy.
+- One-click deployment, deployment history, QR sharing, and analytics dashboard are not implemented.
+- Zustand migration and large ProjectPage split are not implemented.
+
+## Current Verification Commands
+
+Backend:
+
+```bash
+cd packages/backend
+PYTHONPATH=.:../agent/src python -m pytest -q
+```
+
+Agent:
+
+```bash
+cd packages/agent
+python -m pytest -q
+```
+
+Web:
+
+```bash
+cd packages/web
+npm run lint
+npm run build
+npx playwright test
+```
+
+Real-provider smoke:
+
+```bash
+cd packages/backend
+RUN_REAL_CHAT_ADAPTER_SMOKE=true CHAT_USE_RUN_ADAPTER=true PYTHONPATH=.:../agent/src python -m pytest tests/e2e/test_real_chat_run_adapter_smoke.py -q
+```

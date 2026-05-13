@@ -1,5 +1,7 @@
 # Version 0.3 Implementation Summary
 
+> Historical note (2026-05-13): this is a phase completion record. It may reference legacy backend agent/planner/executor files that no longer exist. Use `docs/project-summary.md` for the current implementation snapshot.
+
 ## Overview
 
 **Version**: v0.3 - Agent LLM Calling + Tools System

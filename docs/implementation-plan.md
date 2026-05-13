@@ -1,5 +1,7 @@
 # Instant Coffee CLI - Vibe Coding 实施计划
 
+> Historical note (2026-05-13): this is an early CLI-first implementation plan from 2025. The current project is a FastAPI + embedded Python `ic` agent + React web app + legacy Node CLI monorepo. Use `README.md`, `CLAUDE.md`, and `docs/project-summary.md` for current setup, APIs, and architecture.
+
 **项目名称**: Instant Coffee (速溶咖啡)
 **版本**: v1.0 - CLI First Approach
 **核心理念**: 像和朋友聊天一样生成移动端页面

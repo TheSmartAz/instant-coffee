@@ -1,5 +1,7 @@
 # Version 0.6 Implementation Summary
 
+> Historical note (2026-05-13): this is a phase completion record. Use it for implementation history, not as an authoritative description of current routes or file layout. Current state lives in `docs/project-summary.md`.
+
 ## Overview
 
 **Version**: v0.6 - Skills 编排 + Orchestrator 路由 + 多模型路由 + 数据传递 + 风格参考 + 移动端约束

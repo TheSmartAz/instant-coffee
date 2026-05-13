@@ -1,77 +1,81 @@
 # Chat Event Steps Summary
 
+Last updated: 2026-05-13
+
 ## Goal
-Move agent and tool execution visibility from the Events panel into the chat stream, using a compact step list under the assistant response (Option C). Tool entries should be summarized; agent entries should be visible in chat but hidden from the Events tab.
 
-## What Changed
+Agent, tool, and run execution visibility should appear in the chat stream without overwhelming the user. The chat view should show compact sub-steps under the assistant response, while run-specific status and diagnostics are handled by `RunStatusStrip` and `RunInspector`.
 
-### Behavior
-- Chat now renders agent and tool execution events as sub-steps under the streaming assistant message.
-- Tool steps show a short summary (path/url/query/etc.) and avoid large content fields.
-- Events tab no longer shows agent events; tool/task/plan events remain.
+## Current Behavior
 
-### Files Touched
+- Agent and tool SSE events render as compact steps under streaming assistant messages.
+- Tool steps summarize important fields such as path, URL, query, command, and status.
+- Large or sensitive fields are omitted from chat display.
+- Assistant content can stream while steps update.
+- Interview questions render as chat widgets.
+- Run lifecycle/build/review/verify/tool-policy events update run status UI.
+- EventFlow views should avoid duplicating agent-only noise when the same information is already visible in chat.
+
+## Current Files
+
 - `packages/web/src/types/index.ts`
-  - Added `ChatStep` and `ChatStepStatus` types.
-  - Extended `Message` with optional `steps` field.
-
+  - chat message and step types
+- `packages/web/src/types/events.ts`
+  - frontend SSE event contract
 - `packages/web/src/components/custom/ChatMessage.tsx`
-  - Renders `steps` under assistant messages as a compact list.
-  - Shows streaming dots even when content is empty but steps are updating.
-
+  - assistant message and step rendering
+- `packages/web/src/components/custom/ChatPanel.tsx`
+  - chat composition and run UI placement
+- `packages/web/src/components/custom/InterviewWidget.tsx`
+  - structured question UI
+- `packages/web/src/components/custom/RunStatusStrip.tsx`
+  - compact run status
+- `packages/web/src/components/custom/RunInspector.tsx`
+  - phase history and review diagnostics
 - `packages/web/src/hooks/useChat.ts`
-  - Accepts `agent_*` and `tool_*` SSE events.
-  - Converts those events into `ChatStep` entries.
-  - Summarizes tool inputs/outputs (path/url/query/etc.) and avoids large/sensitive fields.
-  - Keeps assistant content streaming behavior unchanged.
-
+  - high-level chat state
+- `packages/web/src/hooks/chat/useChatStream.ts`
+  - stream setup
+- `packages/web/src/hooks/chat/useStreamHandler.ts`
+  - event-to-state conversion
 - `packages/web/src/components/EventFlow/EventList.tsx`
-  - Filters out `agent_*` events in both streaming and phase modes.
+  - event filtering/list rendering
+- `packages/web/src/components/EventFlow/EventItem.tsx`
+  - event item rendering
+- `packages/backend/app/events/types.py`
+  - backend event constants
+- `packages/backend/app/api/chat.py`
+  - chat streaming event source
+- `packages/backend/app/engine/orchestrator.py`
+  - embedded engine adapter
+- `packages/backend/app/engine/run_coordinator.py`
+  - run phase/lifecycle emission
 
-## Step Display (Option C)
+## Display Model
+
+```text
+[User]  Build a mobile landing page
+[Asst]  Working on it...
+        - agent_start: engine started
+        - tool_call: write_file path=/pages/index.html
+        - tool_result: write_file ok
+        - run_phase: build started
+        - verify: review passed
+[Asst]  Done. Preview is ready.
 ```
-[User]  生成一个落地页
-[Asst]  正在生成...
-        ↳ agent_start: generation agent started
-        ↳ tool_call: Calling filesystem_write (path=.../index.html)
-        ↳ tool_result: Result filesystem_write (written_bytes=12345)
-[Asst]  已完成页面生成，给你预览。
-```
+
+## Interview Payload
+
+The frontend submits interview answers in mixed mode:
+
+- structured JSON inside `<INTERVIEW_ANSWERS>...</INTERVIEW_ANSWERS>`
+- readable answer summary text
+- current user message for conflict resolution and context
+
+The backend can use structured answers while still preserving the latest natural-language instruction.
 
 ## Notes
-- Tool call/result pairing is implicit; there is no call_id in events. If pairing is needed, add a unique tool_call_id to event payloads.
-- This change only affects UI display; backend event emission is unchanged.
 
-## Interview Widget (Chat)
-
-### Behavior
-- Interview questions render inside the chat as a widget instead of plain text.
-- Supports single choice, multi choice, and short text inputs.
-- Shows 1 question at a time with Previous/Next; final question shows Submit.
-- Includes Skip questions and Generate now actions.
-- After submission, the widget collapses and only the answer summary remains (assistant bubble).
-- Question numbering is cumulative across batches (e.g., 4/7).
-
-### Payload
-- Frontend submits answers in mixed mode:
-  - Structured JSON inside `<INTERVIEW_ANSWERS>...</INTERVIEW_ANSWERS>`
-  - Plus a readable summary line
-- Backend parses structured answers and uses latest values when updated by user text.
-- Even when interview toggle is off, the latest chat message is sent alongside the collected answers for context.
-- Generation prioritizes the latest user message when conflicts exist.
-
-### Interview Toggle
-- Toggle is always visible in the chat input.
-- First user message defaults to interview ON, but the user can turn it off.
-- Later messages only trigger interview if the toggle is enabled.
-- Toggle resets to OFF after sending a message (user must opt in each time).
-- Frontend passes `interview=true/false` to the chat API; backend only uses the default-first-message rule when this param is absent.
-- When toggle is off, messages behave as normal chat (no interview questions), but still pass collected answers as context.
-
-### Files Touched
-- `packages/web/src/components/custom/InterviewWidget.tsx`
-- `packages/web/src/components/custom/ChatMessage.tsx`
-- `packages/web/src/hooks/useChat.ts`
-- `packages/backend/app/agents/interview.py`
-- `packages/backend/app/agents/orchestrator.py`
-- `packages/backend/app/agents/prompts.py`
+- Tool call/result pairing is still best-effort when no unique call id is available.
+- Run events may carry fields at top level or under `payload`; UI handlers should normalize both.
+- Keep backend event types and frontend event types synchronized.

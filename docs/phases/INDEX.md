@@ -1,14 +1,16 @@
 # Project Breakdown Index
 
+> Current status note (2026-05-13): this directory is a historical roadmap and phase breakdown archive. It is useful for intent and acceptance criteria, but it is not authoritative for the current code layout or mounted API surface. Use `README.md`, `CLAUDE.md`, and `docs/project-summary.md` for the current implementation snapshot. Current backend runtime is centered on `packages/backend/app/engine`, `packages/backend/app/services`, and the embedded `packages/agent` engine; the old `agents`/`planner`/`executor`/`graph` backend layout is no longer present.
+
 ## Overview
 
 This document provides an overview of all development phases organized by category (Frontend, Backend, Database). The project is organized into **spec versions**.
 
-**Latest Version**: v1.0 - Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment Export + Analytics
+**Archived latest roadmap label**: v1.0 - Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment Export + Analytics
 
 ---
 
-## Version 1.0: Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment Export + Analytics
+## Archived Version 1.0 Roadmap: Generation Reliability + Dialogue Intelligence + Frontend Upgrade + Deployment Export + Analytics
 
 **Last Updated**: 2026-02-13 (Breakdown created)
 
@@ -102,9 +104,9 @@ O1 (Analytics Script)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-### Parallel Development Guide (v10)
+### Historical Parallel Development Notes (v10)
 
-You can run **3 Claude Code instances in parallel**:
+Original planning note: this roadmap suggested **3 Claude Code instances in parallel**:
 
 1. **Agent Reliability Agent**: B1 → B2 → B3 → B4 → B5
 2. **Frontend Architecture Agent**: F1 → F2 → F4 → F5
@@ -121,7 +123,7 @@ Or alternatively:
 
 ---
 
-## Version 0.9: Soul Agentic Loop — LangGraph → Tool-Calling Loop Refactor
+## Archived Version 0.9 Roadmap: Soul Agentic Loop — LangGraph → Tool-Calling Loop Refactor
 
 **Last Updated**: 2026-02-07 (Breakdown created)
 
@@ -176,7 +178,7 @@ Wave 7 - After B7:
 F1 (Product Doc Update Card)
 ```
 
-### Parallel Development Guide (v09)
+### Historical Parallel Development Notes (v09)
 
 You can run **2 Claude Code instances in parallel**:
 
@@ -191,7 +193,7 @@ After B7 completes:
 
 ---
 
-## Version 0.8: Run-Centric Backend Refactor + App Data Layer
+## Archived Version 0.8 Roadmap: Run-Centric Backend Refactor + App Data Layer
 
 **Last Updated**: 2026-02-06 (D1 complete, D2 complete, B1 complete, B2 complete, B3 complete, B4 complete, B5 complete, B6 complete, B7 complete, B8 complete, F1 complete)
 
@@ -267,7 +269,7 @@ F1 (Data Tab Frontend Overhaul ✅)
 | M4 | B4 | Chat compatibility adapter (last to merge) |
 | M5 | B7, B8, F1 | App Data API + Generation integration + Data Tab UI |
 
-### Parallel Development Guide (v08)
+### Historical Parallel Development Notes (v08)
 
 You can run **3 Claude Code instances in parallel**:
 
@@ -281,7 +283,7 @@ You can run **3 Claude Code instances in parallel**:
 
 ---
 
-## Version 0.7: LangGraph 编排 + React SSG 多文件产物 + 场景旅程能力 + 组件一致性 + Mobile Shell 自动修复
+## Archived Version 0.7 Roadmap: LangGraph 编排 + React SSG 多文件产物 + 场景旅程能力 + 组件一致性 + Mobile Shell 自动修复
 
 **Last Updated**: 2026-02-05 (F4 build status UI complete with build SSE stream; build preview hosting endpoints added; B7 aesthetic scoring complete; F3 aesthetic score display complete with metadata preload; B2 scene/journey capabilities complete; B3 component registry node complete; backend deps locked with uv; B4 React SSG build pipeline complete; B8 API endpoints complete; O1 React SSG template complete; F1 asset upload UI complete; F2 data tab scene classification complete; chat attachments 10MB)
 
@@ -368,7 +370,7 @@ F4 (Build Status UI ✅)
 | M4 | B7, F3 | Aesthetic Scoring + Display |
 | M5 | B8, F1, F2, F4 | API Endpoints + Frontend UI |
 
-### Parallel Development Guide (v07)
+### Historical Parallel Development Notes (v07)
 
 You can run **4 Claude Code instances in parallel**:
 
@@ -383,7 +385,7 @@ You can run **4 Claude Code instances in parallel**:
 
 ---
 
-## Version 0.6: Skills 编排 + Orchestrator 路由 + 多模型路由 + 数据传递 + 风格参考 + 移动端约束
+## Archived Version 0.6 Roadmap: Skills 编排 + Orchestrator 路由 + 多模型路由 + 数据传递 + 风格参考 + 移动端约束
 
 **Last Updated**: 2026-02-05 (B7 Aesthetic Scoring planned; O1 complete)
 
@@ -470,7 +472,7 @@ O1 (Data Store Scripts ✅)
 | M4 | F1, F3, B5, O1 | Data Protocol & Data Tab |
 | M5 | B6, B7 | Multi-model Routing + Aesthetic Scoring |
 
-### Parallel Development Guide (v06)
+### Historical Parallel Development Notes (v06)
 
 You can run **3 Claude Code instances in parallel**:
 
@@ -484,7 +486,7 @@ You can run **3 Claude Code instances in parallel**:
 
 ---
 
-## Version 0.5: (Placeholder)
+## Archived Version 0.5 Roadmap: (Placeholder)
 
 | Version | Spec | Status | Key Features |
 |---------|------|--------|--------------|
@@ -492,7 +494,7 @@ You can run **3 Claude Code instances in parallel**:
 
 ---
 
-## Version 0.4: Multi-Page Generation + Product Doc + Workbench (Complete ✅)
+## Archived Version 0.4 Roadmap: Multi-Page Generation + Product Doc + Workbench (Complete ✅)
 
 ### Database Phases (v04)
 
@@ -531,7 +533,7 @@ You can run **3 Claude Code instances in parallel**:
 
 ---
 
-## Version 0.3: Agent LLM Calling + Tools System (Complete ✅)
+## Archived Version 0.3 Roadmap: Agent LLM Calling + Tools System (Complete ✅)
 
 ### Backend Phases (v03)
 
@@ -558,7 +560,7 @@ You can run **3 Claude Code instances in parallel**:
 
 ---
 
-## Version 0.2: Web Frontend + Planner (Complete ✅)
+## Archived Version 0.2 Roadmap: Web Frontend + Planner (Complete ✅)
 
 ### Database Phases (v02)
 
@@ -589,7 +591,7 @@ You can run **3 Claude Code instances in parallel**:
 
 ---
 
-## Version 0.1: CLI + Backend Core (Complete ✅)
+## Archived Version 0.1 Roadmap: CLI + Backend Core (Complete ✅)
 
 ### Database Phases (v01)
 

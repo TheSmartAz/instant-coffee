@@ -1,10 +1,12 @@
 # App Data Layer 设计
 
+> Current status note (2026-05-13): this document describes the App Data/Data Tab design direction. Current backend data routes live in `packages/backend/app/api/data.py`; current web Data tab behavior is covered in `docs/e2e-test-plan.md` and `docs/frontend_design/project_page.md`.
+
 ## 背景
 
-用户通过 Chat 创建 app 时，Generation Agent 会根据场景自动定义数据模型（如电商 app 的 Order/MenuItem/Customer）。用户在 Preview 中交互时，操作会写入对应的数据表。Data Tab 提供表格视图和看板视图来展示这些数据。
+用户通过 Chat 创建 app 时，当前 engine/generation path 可以根据场景定义数据模型（如电商 app 的 Order/MenuItem/Customer）。用户在 Preview 中交互时，操作可以写入对应的数据表或先通过 preview bridge 回传。Data Tab 提供表格视图和看板视图来展示这些数据。
 
-## 现状
+## 当前状态
 
 ### 已有
 
@@ -13,13 +15,14 @@
 - `services/skills/contracts/*.json` — 按产品类型的 state contract
 - `utils/product_doc.py` — 生成 `data-store.js` / `data-client.js`
 - 前端 `usePreviewBridge` + `DataTab` — 通过 postMessage 读取 iframe 数据
+- `services/app_data_store.py` — PostgreSQL-backed per-session schema/table store
+- `api/data.py` — app data list/query/insert/delete/stats API under `/api/sessions/{session_id}/data/...`
 
-### 缺失
+### 当前限制
 
-- 服务端数据持久化（目前全部在 browser localStorage）
-- 动态建表（data_model 定义了 Entity/Field 但未物化）
-- CRUD API
-- data_model 与 state_contract 未关联
+- App data store only enables when `DATABASE_URL` is PostgreSQL and `asyncpg` is installed; with the default SQLite URL, data routes that require the store return unavailable/empty responses.
+- Dynamic table creation exists in `AppDataStore.create_tables()`, but end-to-end generation integration should be verified before treating every generated Product Doc data model as automatically materialized.
+- Preview bridge/local runtime data can still be used for immediate UI feedback; server-backed tables are the persistence path when PostgreSQL is available.
 
 ---
 
@@ -81,7 +84,7 @@ TYPE_MAP = {
 
 ---
 
-## 后端新增
+## 当前后端实现
 
 ### 1. `app/services/app_data_store.py` — 核心服务
 
@@ -116,29 +119,29 @@ class AppDataStore:
 ### 2. `app/api/data.py` — CRUD API
 
 ```
-GET    /sessions/{id}/data/tables           列出所有表 + 列定义
-GET    /sessions/{id}/data/{table}          查询表记录（分页）
-POST   /sessions/{id}/data/{table}          写入记录
-DELETE /sessions/{id}/data/{table}/{row_id} 删除记录
-GET    /sessions/{id}/data/{table}/stats    聚合统计
+GET    /api/sessions/{id}/data/tables           列出所有表 + 列定义
+GET    /api/sessions/{id}/data/{table}          查询表记录（分页）
+POST   /api/sessions/{id}/data/{table}          写入记录
+DELETE /api/sessions/{id}/data/{table}/{row_id} 删除记录
+GET    /api/sessions/{id}/data/{table}/stats    聚合统计
 ```
 
 ### 3. 集成点
 
 ```
-Generation 流程:
-  GenerationAgent 生成 HTML
+Generation / engine 流程:
+  Engine 生成 HTML
     → DataProtocolGenerator 注入 JS
-    → AppDataStore.create_tables() 根据 data_model 建表  ← 新增
+    → AppDataStore.create_tables() 根据 data_model 建表
 
 iframe JS Runtime:
   用户交互 → window.IC.cart.add() 等
-    → 改为调 POST /sessions/{id}/data/{table}  ← 替代 localStorage
+    → 可调 POST /api/sessions/{id}/data/{table} 写入服务端表
     → 同时 postMessage 通知父窗口（保持实时性）
 
 Session 删除:
-  DELETE /sessions/{id}
-    → AppDataStore.drop_schema()  ← 新增清理
+  DELETE /api/sessions/{id}
+    → AppDataStore.drop_schema() 清理 PostgreSQL schema（需确认集成路径）
 ```
 
 ---

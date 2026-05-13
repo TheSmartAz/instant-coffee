@@ -1,3 +1,5 @@
+> Current status note (2026-05-13): this is product/background research for scenario capability design. It is not an API or implementation guide. Current implementation state is summarized in `docs/project-summary.md`.
+
 下面按你提到的 5 个场景做“简单用户旅程地图”，并在每个场景后列出它反向要求的能力。最后再给一份跨场景的能力清单，便于你做重构优先级。
 
 **电商独立站（移动端）**  

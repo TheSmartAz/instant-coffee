@@ -1,5 +1,7 @@
 # Version 0.5 Implementation Summary
 
+> Historical note (2026-05-13): this is a phase completion record. Use it for implementation history, not as an authoritative description of current routes or file layout. Current state lives in `docs/project-summary.md`.
+
 ## Overview
 
 **Version**: v0.5 - Unified Version Management + Responses API + Stability Fixes

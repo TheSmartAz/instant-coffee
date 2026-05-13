@@ -1,5 +1,7 @@
 # DMXAPI Responses 全量切换计划
 
+> Current status note (2026-05-13): this is a historical migration plan. The current repo is DeepSeek-oriented by default through backend/agent config, while some OpenAI-compatible settings remain for provider compatibility. Verify `packages/backend/app/config.py`, `packages/backend/app/llm/model_catalog.py`, and `packages/agent/src/ic/config.py` before using this plan as implementation guidance.
+
 > 目标：全量切换到 DMXAPI 的 `responses.create`（流式 + 非流式），包括 tool calling。
 > 结论：后端统一走 Responses，前端保持 SSE 消费不变。
 

@@ -1,5 +1,7 @@
 # Vibe Coding 移动端产品规划
 
+> Historical note (2026-05-13): this is a 2025 product planning document for the earlier Zaoya direction. It remains useful background, but current implementation details live in `README.md`, `CLAUDE.md`, and `docs/project-summary.md`.
+
 **项目名称**: Zaoya (造鸭)
 **产品定位**: 面向非技术用户的移动端 AI 编程伙伴
 **核心理念**: 像和朋友聊天一样创造软件
