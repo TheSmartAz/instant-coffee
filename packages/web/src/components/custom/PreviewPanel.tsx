@@ -345,7 +345,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
   const showBuildPlaceholder = isBuildPreview && !currentUrl && !isBuildActive
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" data-testid="preview-panel">
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div className="flex items-center gap-4">
           <span className="text-sm font-semibold text-foreground">{previewLabel}</span>
@@ -477,6 +477,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
                   ref={iframeRef}
                   key={`${selectedPageId ?? 'preview'}-${previewMode}-${effectiveAppMode ? 'app' : 'static'}`}
                   title="Preview"
+                  data-testid="preview-iframe"
                   className="h-full w-full border-0"
                   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                   onLoad={sendStateToIframe}

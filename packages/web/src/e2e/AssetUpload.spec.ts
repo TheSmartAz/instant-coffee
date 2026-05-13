@@ -1,96 +1,29 @@
 /// <reference types="node" />
 
 import { test, expect } from 'playwright/test'
-
-type MockOptions = {
-  sessionId: string
-}
-
-const mockSettings = {
-  model: 'gpt-4o-mini',
-  available_models: [{ id: 'gpt-4o-mini', label: 'GPT-4o Mini' }],
-}
-
-const setupApiMocks = async (page: import('playwright/test').Page, options: MockOptions) => {
-  const { sessionId } = options
-  const now = new Date().toISOString()
-
-  await page.route('**/api/settings', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(mockSettings),
-    })
-  )
-
-  await page.route(`**/api/sessions/${sessionId}`, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        id: sessionId,
-        title: 'Test Session',
-        created_at: now,
-        updated_at: now,
-        current_version: 0,
-      }),
-    })
-  )
-
-  await page.route(`**/api/sessions/${sessionId}/messages`, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ messages: [] }),
-    })
-  )
-
-  await page.route(`**/api/sessions/${sessionId}/versions**`, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ versions: [], current_version: 0 }),
-    })
-  )
-
-  await page.route(`**/api/sessions/${sessionId}/pages`, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ pages: [], total: 0 }),
-    })
-  )
-
-  await page.route(`**/api/sessions/${sessionId}/product-doc`, (route) =>
-    route.fulfill({
-      status: 404,
-      contentType: 'application/json',
-      body: JSON.stringify({ detail: 'Not found' }),
-    })
-  )
-}
+import { setupProjectPageMocks } from './helpers/projectMocks'
 
 test.describe('Asset Upload E2E', () => {
-  const sessionId = 'test-session'
+  const sessionId = 'asset-upload-session'
 
   test.beforeEach(async ({ page }) => {
-    await setupApiMocks(page, { sessionId })
+    await setupProjectPageMocks(page, { sessionId })
   })
 
-  test('1. Asset type selector renders all options', async ({ page }) => {
+  test('renders the asset type selector options', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
     await page.waitForSelector('[data-testid="chat-input"]')
 
-    await page.click('[data-testid="asset-upload-button"]')
-    await expect(page.locator('[data-testid="asset-type-dialog"]')).toBeVisible()
+    await page.getByTestId('asset-upload-button').click()
 
-    await expect(page.locator('[data-testid="asset-type-option-logo"]')).toBeVisible()
-    await expect(page.locator('[data-testid="asset-type-option-style_ref"]')).toBeVisible()
-    await expect(page.locator('[data-testid="asset-type-option-background"]')).toBeVisible()
-    await expect(page.locator('[data-testid="asset-type-option-product_image"]')).toBeVisible()
+    await expect(page.getByTestId('asset-type-dialog')).toBeVisible()
+    await expect(page.getByTestId('asset-type-option-logo')).toBeVisible()
+    await expect(page.getByTestId('asset-type-option-style_ref')).toBeVisible()
+    await expect(page.getByTestId('asset-type-option-background')).toBeVisible()
+    await expect(page.getByTestId('asset-type-option-product_image')).toBeVisible()
   })
 
-  test('2. Upload flow renders asset thumbnail', async ({ page }) => {
+  test('uploads an asset and renders it in the chat log', async ({ page }) => {
     const tinyPng = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+4Z6cAAAAASUVORK5CYII=',
       'base64'
@@ -111,7 +44,7 @@ test.describe('Asset Upload E2E', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           id: 'asset:logo_abc123',
-          url: 'http://127.0.0.1:5173/assets/mock.png',
+          url: '/assets/mock.png',
           type: 'image/png',
           width: 120,
           height: 60,
@@ -122,19 +55,19 @@ test.describe('Asset Upload E2E', () => {
     await page.goto(`/project/${sessionId}`)
     await page.waitForSelector('[data-testid="chat-input"]')
 
-    await page.click('[data-testid="asset-upload-button"]')
-    await page.click('[data-testid="asset-type-option-logo"]')
+    await page.getByTestId('asset-upload-button').click()
+    await page.getByTestId('asset-type-option-logo').click()
 
-    const fileInput = page.locator('[data-testid="asset-file-input"]')
-    await fileInput.setInputFiles({
+    await page.getByTestId('asset-file-input').setInputFiles({
       name: 'logo.png',
       mimeType: 'image/png',
       buffer: Buffer.from('fake-image'),
     })
 
-    await expect(page.locator('[data-testid="asset-upload-progress"]')).toBeVisible()
+    await expect(page.getByTestId('asset-upload-progress')).toBeVisible()
     await expect(
       page.locator('[data-testid="asset-thumbnail"][data-asset-id="asset:logo_abc123"]')
     ).toBeVisible()
+    await expect(page.getByText('Uploaded Logo')).toBeVisible()
   })
 })

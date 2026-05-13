@@ -10,7 +10,9 @@ import { FileChangeCard } from './FileChangeCard'
 import { PlanChecklist } from './PlanChecklist'
 import { AgentStatusPanel } from './AgentStatusPanel'
 import { ChatImageGrid } from './ChatImageGrid'
+import { AssetThumbnail } from './AssetThumbnail'
 import type {
+  ChatAsset,
   ChatAction,
   ChatStep,
   InterviewActionPayload,
@@ -37,6 +39,7 @@ export interface ChatMessageProps {
   fileChanges?: FileChange[]
   plan?: PlanStep[]
   subAgents?: SubAgentInfo[]
+  assets?: ChatAsset[]
   images?: MessageImage[]
   planTasks?: PlanTaskSnapshot[]
   segments?: MessageSegment[]
@@ -312,6 +315,7 @@ export const ChatMessage = memo(function ChatMessage({
   fileChanges,
   plan,
   subAgents,
+  assets,
   images,
   planTasks,
   segments,
@@ -334,6 +338,17 @@ export const ChatMessage = memo(function ChatMessage({
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-primary-foreground">
+          {assets && assets.length > 0 ? (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {assets.map((asset) => (
+                <AssetThumbnail
+                  key={asset.id}
+                  asset={asset}
+                  className="h-20 w-20 border-primary-foreground/30"
+                />
+              ))}
+            </div>
+          ) : null}
           {images && images.length > 0 ? (
             <div className="mb-2">
               <ChatImageGrid images={images} />

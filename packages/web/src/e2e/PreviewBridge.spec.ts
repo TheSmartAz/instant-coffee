@@ -1,119 +1,118 @@
-/**
- * E2E tests for Preview Message Bridge (v06-F3)
- *
- * Acceptance Criteria:
- * 1. Hook returns current state, events, and records
- * 2. Hook returns connection status and last update timestamp
- * 3. Messages filtered by type guard and ignored when malformed
- * 4. Listener cleanup on unmount and iframe disconnect
- */
-import { test, expect } from 'playwright/test';
+import { test, expect } from 'playwright/test'
+import { setupProjectPageMocks, type MockTable } from './helpers/projectMocks'
+
+const sessionId = 'preview-bridge-session'
+
+const tables: MockTable[] = [
+  {
+    name: 'orders',
+    columns: [
+      { name: 'id', data_type: 'integer' },
+      { name: 'status', data_type: 'text' },
+    ],
+  },
+]
+
+const records = [
+  { id: 1, status: 'ready' },
+  { id: 2, status: 'queued' },
+]
 
 test.describe('Preview Message Bridge E2E', () => {
-  test('1. Hook returns current state, events, and records', async ({ page }) => {
-    await page.goto('/project/test-session');
+  test.beforeEach(async ({ page }) => {
+    await setupProjectPageMocks(page, {
+      sessionId,
+      title: 'Preview Bridge Test Session',
+      pages: [
+        {
+          id: 'page-home',
+          title: 'Home',
+          slug: 'index',
+        },
+      ],
+      previewHtmlByPageId: {
+        'page-home':
+          '<!doctype html><html><body><main><button id="refresh">Refresh data</button></main></body></html>',
+      },
+      tables,
+      recordsByTable: {
+        orders: records,
+      },
+      statsByTable: {
+        orders: {
+          table: 'orders',
+          count: records.length,
+          numeric: {},
+          boolean: {},
+        },
+      },
+    })
+  })
 
-    // Wait for preview to load
-    await page.waitForSelector('[data-testid="preview-iframe"]');
+  test('renders preview panel and iframe before switching to data', async ({ page }) => {
+    await page.goto(`/project/${sessionId}`)
 
-    // Check if data tab shows initial state
-    await page.click('[data-testid="data-tab-button"]');
-    await expect(page.locator('[data-testid="data-state-section"]')).toBeVisible();
-    await expect(page.locator('[data-testid="data-events-section"]')).toBeVisible();
-    await expect(page.locator('[data-testid="data-records-section"]')).toBeVisible();
-  });
+    await expect(page.getByTestId('preview-panel')).toBeVisible()
+    await expect(page.getByTestId('preview-iframe')).toBeVisible()
 
-  test('2. Hook returns connection status and last update timestamp', async ({ page }) => {
-    await page.goto('/project/test-session');
-    await page.waitForSelector('[data-testid="preview-iframe"]');
+    await page.getByTestId('workbench-tab-data').click()
+    await expect(page.getByTestId('data-tab')).toBeVisible()
+    await expect(page.getByTestId('data-view-table')).toBeVisible()
+    await expect(page.getByTestId('data-grid-row')).toHaveCount(2)
+  })
 
-    // Connection status should be visible
-    await page.click('[data-testid="data-tab-button"]');
-    await expect(page.locator('[data-testid="connection-status"]')).toBeVisible();
-  });
+  test('ignores unrelated preview messages without breaking the data tab', async ({ page }) => {
+    await page.goto(`/project/${sessionId}`)
+    await expect(page.getByTestId('preview-iframe')).toBeVisible()
 
-  test('3. Messages filtered by type guard', async ({ page }) => {
-    await page.goto('/project/test-session');
-    await page.waitForSelector('[data-testid="preview-iframe"]');
-
-    // Send malformed message (should be ignored)
     await page.evaluate(() => {
-      const iframe = document.querySelector('[data-testid="preview-iframe"]') as HTMLIFrameElement;
-      if (iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: 'unknown-type' }, '*');
-      }
-    });
+      window.postMessage({ type: 'unknown-preview-message' }, '*')
+      window.postMessage('not-json', '*')
+    })
 
-    // Should not crash or show error
-    await expect(page.locator('[data-testid="data-tab"]')).toBeVisible();
-  });
+    await page.getByTestId('workbench-tab-data').click()
+    await expect(page.getByTestId('data-tab')).toBeVisible()
+    await expect(page.getByTestId('data-grid-row')).toHaveCount(2)
+    await expect(page.getByTestId('data-tab')).toContainText('ready')
+  })
 
-  test('4. State updates trigger UI refresh', async ({ page }) => {
-    await page.goto('/project/test-session');
-    await page.waitForSelector('[data-testid="preview-iframe"]');
+  test('refreshes data when the preview bridge emits a data_changed message', async ({ page }) => {
+    let ordersRequestCount = 0
 
-    // Simulate state update from iframe
+    await page.route(`**/api/sessions/${sessionId}/data/orders?**`, (route) => {
+      ordersRequestCount += 1
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          records,
+          total: records.length,
+          limit: 25,
+          offset: 0,
+        }),
+      })
+    })
+
+    await page.goto(`/project/${sessionId}`)
+    await page.getByTestId('workbench-tab-data').click()
+    await expect(page.getByTestId('data-grid-row')).toHaveCount(2)
+
+    const beforeMessage = ordersRequestCount
     await page.evaluate(() => {
-      window.postMessage({
-        type: 'instant-coffee:update',
-        data: {
-          state: { cart: { items: [{ id: 1, name: 'Test Product' }] } },
-          events: [{ type: 'add_to_cart', timestamp: new Date().toISOString() }],
-          records: []
-        }
-      }, '*');
-    });
+      window.postMessage({ type: 'data_changed' }, '*')
+    })
 
-    // Check if data is reflected in UI
-    await page.click('[data-testid="data-tab-button"]');
-    await expect(page.locator('[data-testid="data-state-section"]')).toContainText('Test Product');
-  });
+    await expect.poll(() => ordersRequestCount).toBeGreaterThan(beforeMessage)
+  })
 
-  test('5. Debounced updates for non-submit events', async ({ page }) => {
-    await page.goto('/project/test-session');
-    await page.waitForSelector('[data-testid="preview-iframe"]');
+  test('can open dashboard view after preview iframe initialization', async ({ page }) => {
+    await page.goto(`/project/${sessionId}`)
+    await expect(page.getByTestId('preview-iframe')).toBeVisible()
 
-    // Simulate multiple rapid updates
-    await page.evaluate(() => {
-      for (let i = 0; i < 5; i++) {
-        window.postMessage({
-          type: 'instant-coffee:update',
-          data: {
-            state: { count: i },
-            events: [],
-            records: []
-          }
-        }, '*');
-      }
-    });
+    await page.getByTestId('workbench-tab-data').click()
+    await page.getByTestId('data-view-dashboard').click()
 
-    // Should not overwhelm the UI
-    await page.click('[data-testid="data-tab-button"]');
-    await expect(page.locator('[data-testid="data-state-section"]')).toBeVisible();
-  });
-
-  test('6. Immediate updates for submit events', async ({ page }) => {
-    await page.goto('/project/test-session');
-    await page.waitForSelector('[data-testid="preview-iframe"]');
-
-    // Simulate submit event
-    await page.evaluate(() => {
-      window.postMessage({
-        type: 'instant-coffee:update',
-        data: {
-          state: {},
-          events: [],
-          records: [{
-            type: 'order_submitted',
-            created_at: new Date().toISOString(),
-            payload: { order_id: 'ORD-123' }
-          }]
-        }
-      }, '*');
-    });
-
-    // Should immediately show in records
-    await page.click('[data-testid="data-tab-button"]');
-    await expect(page.locator('[data-testid="record-item"]')).toContainText('order_submitted');
-  });
-});
+    await expect(page.getByTestId('data-view-dashboard')).toHaveAttribute('class', /bg-primary/)
+    await expect(page.getByTestId('data-dashboard-table-summary')).toBeVisible()
+  })
+})

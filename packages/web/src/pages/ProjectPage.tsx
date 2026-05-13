@@ -402,6 +402,11 @@ export function ProjectPage() {
     void handleBuildFromDoc()
   }, [handleBuildFromDoc])
 
+  const handleOpenBuildPreview = React.useCallback(() => {
+    setWorkbenchTab('preview')
+    setPreviewMode('build')
+  }, [])
+
   const handleBuildCancel = React.useCallback(async () => {
     if (!sessionId) return
     await runAction(
@@ -506,12 +511,16 @@ export function ProjectPage() {
             </div>
             <ChatPanel
               messages={messages}
+              sessionId={sessionId}
+              threadId={activeThreadId ?? undefined}
               onSendMessage={chat.sendMessage}
               onAssetUpload={chat.uploadAsset}
               onInterviewAction={chat.handleInterviewAction}
               onTabChange={setWorkbenchTab}
+              onOpenBuildPreview={handleOpenBuildPreview}
               isLoading={isLoading || chat.isStreaming}
               errorMessage={chat.error}
+              runStatus={chat.runStatus}
               className="flex-1 min-h-0"
               pages={pages}
               tokenUsage={costData}

@@ -23,6 +23,77 @@ const formatTimestamp = (timestamp?: string) => {
   return format(date, 'HH:mm:ss')
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value))
+
+const getNestedPayload = (event: ExecutionEvent): Record<string, unknown> => {
+  const payload = (event as { payload?: unknown }).payload
+  return isRecord(payload) ? payload : {}
+}
+
+const getEventField = (event: ExecutionEvent, key: string): unknown => {
+  const eventRecord = event as unknown as Record<string, unknown>
+  if (eventRecord[key] !== undefined) return eventRecord[key]
+  return getNestedPayload(event)[key]
+}
+
+const getStringField = (event: ExecutionEvent, key: string): string | undefined => {
+  const value = getEventField(event, key)
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+const getNumberField = (event: ExecutionEvent, key: string): number | undefined => {
+  const value = getEventField(event, key)
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  return undefined
+}
+
+const truncateText = (value: string, max = 96) =>
+  value.length <= max ? value : `${value.slice(0, max)}...`
+
+const PHASE_LABELS: Record<string, string> = {
+  plan: 'Plan',
+  implement: 'Implement',
+  build: 'Build',
+  review: 'Review',
+  fix: 'Fix',
+  done: 'Done',
+}
+
+const formatPhase = (phase?: string) => {
+  if (!phase) return undefined
+  return PHASE_LABELS[phase] ?? phase.replace(/_/g, ' ')
+}
+
+const withPhase = (event: ExecutionEvent, title: string, omitPhase?: string) => {
+  const phase = getStringField(event, 'phase')
+  if (!phase || phase === omitPhase) return title
+  return `${title}: ${formatPhase(phase)}`
+}
+
+const formatReviewSummary = (summary: unknown): string | undefined => {
+  if (typeof summary === 'string' && summary.trim()) return summary
+  if (!isRecord(summary)) return undefined
+
+  const parts: string[] = []
+  const errorCount = summary.error_count
+  const warningCount = summary.warning_count
+  const buildStatus = summary.build_status
+  const generatedPages = summary.generated_pages
+
+  if (typeof errorCount === 'number') parts.push(`${errorCount} errors`)
+  if (typeof warningCount === 'number') parts.push(`${warningCount} warnings`)
+  if (typeof buildStatus === 'string' && buildStatus) parts.push(`build ${buildStatus}`)
+  if (Array.isArray(generatedPages)) parts.push(`${generatedPages.length} pages`)
+
+  if (parts.length) return parts.join(', ')
+  return JSON.stringify(summary)
+}
+
 const getEventTitle = (event: ExecutionEvent): string => {
   switch (event.type) {
     case 'plan_created':
@@ -102,30 +173,52 @@ const getEventTitle = (event: ExecutionEvent): string => {
       return 'Snapshot created'
     case 'history_created':
       return 'History created'
+    case 'build_start':
+      return 'Build started'
+    case 'build_progress': {
+      const message = getStringField(event, 'message') ?? getStringField(event, 'step')
+      return message ? `Build: ${truncateText(message)}` : 'Build progress'
+    }
+    case 'build_complete': {
+      const pages = getEventField(event, 'pages')
+      return Array.isArray(pages) ? `Build complete (${pages.length} pages)` : 'Build complete'
+    }
+    case 'build_failed': {
+      const error = getStringField(event, 'error')
+      return error ? `Build failed: ${truncateText(error)}` : 'Build failed'
+    }
     case 'run_created':
-      return 'Run created'
+      return withPhase(event, 'Run created')
     case 'run_started':
-      return 'Run started'
+      return withPhase(event, 'Run started')
     case 'run_waiting_input':
-      return 'Run waiting input'
+      return withPhase(event, 'Run waiting input')
     case 'run_resumed':
-      return 'Run resumed'
+      return withPhase(event, 'Run resumed')
     case 'run_completed':
-      return 'Run completed'
+      return withPhase(event, 'Run completed')
     case 'run_failed':
-      return event.error ?? 'Run failed'
+      return getStringField(event, 'error') ?? withPhase(event, 'Run failed')
     case 'run_cancelled':
-      return 'Run cancelled'
+      return withPhase(event, 'Run cancelled')
     case 'verify_start':
-      return 'Verify started'
-    case 'verify_pass':
-      return 'Verify passed'
-    case 'verify_fail':
-      return 'Verify failed'
+      return withPhase(event, 'Review started', 'review')
+    case 'verify_pass': {
+      const summary = formatReviewSummary(getEventField(event, 'summary'))
+      return summary
+        ? `${withPhase(event, 'Review passed', 'review')} (${summary})`
+        : withPhase(event, 'Review passed', 'review')
+    }
+    case 'verify_fail': {
+      const summary = formatReviewSummary(getEventField(event, 'summary'))
+      return summary
+        ? `${withPhase(event, 'Review failed', 'review')} (${summary})`
+        : withPhase(event, 'Review failed', 'review')
+    }
     case 'tool_policy_blocked':
-      return event.message ?? 'Tool policy blocked'
+      return getStringField(event, 'message') ?? 'Tool policy blocked'
     case 'tool_policy_warn':
-      return event.message ?? 'Tool policy warning'
+      return getStringField(event, 'message') ?? 'Tool policy warning'
     default:
       return event.type
   }
@@ -140,6 +233,11 @@ const getEventStatus = (event: ExecutionEvent): EventStatus => {
     case 'tool_call':
     case 'task_retrying':
     case 'token_usage':
+    case 'build_start':
+    case 'build_progress':
+    case 'run_started':
+    case 'run_resumed':
+    case 'verify_start':
       return 'in_progress'
     case 'agent_end':
       return event.status === 'success' ? 'done' : 'failed'
@@ -169,11 +267,8 @@ const getEventStatus = (event: ExecutionEvent): EventStatus => {
     case 'interview_question':
     case 'interview_answer':
     case 'run_created':
-    case 'run_started':
-    case 'run_waiting_input':
-    case 'run_resumed':
     case 'run_completed':
-    case 'verify_start':
+    case 'build_complete':
     case 'verify_pass':
     case 'tool_policy_warn':
       return 'done'
@@ -183,10 +278,12 @@ const getEventStatus = (event: ExecutionEvent): EventStatus => {
     case 'product_doc_outdated':
     case 'run_failed':
     case 'run_cancelled':
+    case 'build_failed':
     case 'verify_fail':
     case 'tool_policy_blocked':
       return 'failed'
     case 'task_blocked':
+    case 'run_waiting_input':
       return 'pending'
     default:
       return 'pending'
@@ -215,10 +312,69 @@ const getBadge = (event: ExecutionEvent): string | undefined => {
   if (event.type === 'version_created') return 'Version'
   if (event.type === 'snapshot_created') return 'Snapshot'
   if (event.type === 'history_created') return 'History'
+  if (event.type.startsWith('build_')) return 'Build'
   if (event.type.startsWith('run_')) return 'Run'
-  if (event.type.startsWith('verify_')) return 'Verify'
+  if (event.type.startsWith('verify_')) return 'Review'
   if (event.type.startsWith('tool_policy_')) return 'Policy'
   return undefined
+}
+
+const formatDetailValue = (key: string, value: unknown): string | undefined => {
+  if (value === undefined || value === null) return undefined
+  if (key === 'percent') {
+    const percent = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(percent) ? `${percent}%` : undefined
+  }
+  if (typeof value === 'string') return value.trim() ? truncateText(value, 240) : undefined
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    const preview = value
+      .slice(0, 4)
+      .map((item) => (typeof item === 'string' ? item : JSON.stringify(item)))
+      .join(', ')
+    const suffix = value.length > 4 ? ` +${value.length - 4} more` : ''
+    return preview ? `${preview}${suffix}` : `${value.length} items`
+  }
+  if (isRecord(value)) {
+    return formatReviewSummary(value) ?? JSON.stringify(value)
+  }
+  return undefined
+}
+
+const buildWorkflowDetails = (event: ExecutionEvent): React.ReactNode | undefined => {
+  const rows = [
+    ['Phase', 'phase'],
+    ['Status', 'status'],
+    ['Step', 'step'],
+    ['Message', 'message'],
+    ['Error', 'error'],
+    ['Tool', 'tool_name'],
+    ['Reason', 'reason'],
+    ['Progress', 'percent'],
+    ['Pages', 'pages'],
+    ['Dist path', 'dist_path'],
+    ['Summary', 'summary'],
+  ]
+    .map(([label, key]) => {
+      const value = formatDetailValue(key, getEventField(event, key))
+      return value ? { label, value } : null
+    })
+    .filter((row): row is { label: string; value: string } => Boolean(row))
+
+  if (rows.length === 0) return undefined
+
+  return (
+    <div className="rounded-md bg-muted/50 p-2">
+      <dl className="grid gap-1 text-xs sm:grid-cols-[90px_1fr]">
+        {rows.map((row) => (
+          <React.Fragment key={row.label}>
+            <dt className="font-medium text-muted-foreground">{row.label}</dt>
+            <dd className="min-w-0 break-words text-foreground/85">{row.value}</dd>
+          </React.Fragment>
+        ))}
+      </dl>
+    </div>
+  )
 }
 
 const buildDetails = (event: ExecutionEvent): React.ReactNode | undefined => {
@@ -228,6 +384,14 @@ const buildDetails = (event: ExecutionEvent): React.ReactNode | undefined => {
   }
   if (event.type === 'tool_result') {
     return <ToolResultEventDisplay event={event as ToolResultEvent} />
+  }
+  if (
+    event.type.startsWith('build_') ||
+    event.type.startsWith('run_') ||
+    event.type.startsWith('verify_') ||
+    event.type.startsWith('tool_policy_')
+  ) {
+    return buildWorkflowDetails(event)
   }
 
   // Other events use the generic JSON display
@@ -245,10 +409,7 @@ const buildDetails = (event: ExecutionEvent): React.ReactNode | undefined => {
     event.type === 'product_doc_updated' ||
     event.type === 'page_created' ||
     event.type === 'interview_question' ||
-    event.type === 'interview_answer' ||
-    event.type.startsWith('run_') ||
-    event.type.startsWith('verify_') ||
-    event.type.startsWith('tool_policy_')
+    event.type === 'interview_answer'
 
   if (!hasDetails) return undefined
 
@@ -269,8 +430,10 @@ export const EventItem = React.memo(function EventItem({ event }: EventItemProps
     event.type === 'task_progress'
       ? event.progress
       : event.type === 'agent_progress'
-        ? event.progress
-        : undefined
+        ? getNumberField(event, 'progress')
+        : event.type === 'build_progress'
+          ? getNumberField(event, 'percent')
+          : undefined
 
   // Tool events have custom display - render them directly without CollapsibleEvent wrapper
   if (event.type === 'tool_call' || event.type === 'tool_result') {

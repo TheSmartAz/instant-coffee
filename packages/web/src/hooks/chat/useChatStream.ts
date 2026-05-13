@@ -4,7 +4,7 @@ import { createStreamDataHandler } from '@/hooks/chat/useStreamHandler'
 import { createStreamConnection, type SendMessageOptions } from '@/hooks/chat/useStreamConnection'
 import { clearPendingMessage } from '@/lib/pendingMessageStorage'
 import { extractProductDocUpdateFields, PRODUCT_DOC_ACTIONS, type InterviewPayloadLike } from '@/hooks/useChatUtils'
-import type { ChatAction, ChatRequestPayload, ChatResponse, ChatStep, Message, MessageSegment } from '@/types'
+import type { ChatAction, ChatRequestPayload, ChatResponse, ChatRunStatus, ChatStep, Message } from '@/types'
 
 type ConnectionState = 'idle' | 'connecting' | 'open' | 'error' | 'closed'
 
@@ -31,6 +31,7 @@ interface UseChatStreamOptions {
   onPreview?: (payload: { html?: string; previewUrl?: string | null }) => void
   onTabChange?: (tab: 'preview' | 'code' | 'product-doc' | 'data') => void
   onPageSelect?: (slug: string) => void
+  onRunStatusChange?: (status: ChatRunStatus | null) => void
   maybeNotifySessionCreated: (value: unknown) => void
   applyInterviewQuestions: (payload: InterviewPayloadLike) => boolean
   interviewModeRef: React.MutableRefObject<boolean>
@@ -56,6 +57,7 @@ export function useChatStream({
   onPreview,
   onTabChange,
   onPageSelect,
+  onRunStatusChange,
   maybeNotifySessionCreated,
   applyInterviewQuestions,
   interviewModeRef,
@@ -424,6 +426,7 @@ export function useChatStream({
       updateMessageById,
       dispatchProductDocEvent,
       handleActionTabSwitch,
+      onRunStatusChange,
       onPreview,
     })
   }, [
@@ -440,6 +443,7 @@ export function useChatStream({
     updateMessageById,
     dispatchProductDocEvent,
     handleActionTabSwitch,
+    onRunStatusChange,
     onPreview,
   ])
 

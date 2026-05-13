@@ -55,6 +55,22 @@ const PHASE_EVENT_TYPES: Set<string> = new Set([
   'page_created',
   'page_version_created',
   'page_preview_ready',
+  'build_start',
+  'build_progress',
+  'build_complete',
+  'build_failed',
+  'run_created',
+  'run_started',
+  'run_waiting_input',
+  'run_resumed',
+  'run_completed',
+  'run_failed',
+  'run_cancelled',
+  'verify_start',
+  'verify_pass',
+  'verify_fail',
+  'tool_policy_blocked',
+  'tool_policy_warn',
   'version_created',
   'snapshot_created',
   'history_created',
@@ -62,7 +78,7 @@ const PHASE_EVENT_TYPES: Set<string> = new Set([
 
 /**
  * Filter events based on display mode
- * - Phase mode: Show only agent_start, agent_end, task events, plan events, token_usage, done
+ * - Phase mode: Show milestone events: agents, tasks, plans, build, run, review, policy, token usage, done
  * - Streaming mode: Show all events including progress and tool calls
  */
 function filterEventsByMode(

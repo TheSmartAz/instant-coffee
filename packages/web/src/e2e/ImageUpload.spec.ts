@@ -1,202 +1,249 @@
 /// <reference types="node" />
 
 /**
- * E2E tests for Image Upload & @Page Support (v06-F2, v06-F4)
+ * E2E tests for image attachments and @page mentions.
  *
- * Acceptance Criteria:
- * 1. Image button opens file picker
- * 2. Drag-and-drop works on textarea
- * 3. Images display as thumbnails
- * 4. Remove button on each image thumbnail
- * 5. Max 3 images enforced
- * 6. Only images accepted; non-image rejected with message
- * 7. Files > 10MB rejected with message
- * 8. Dropdown appears after @ with filtering
- * 9. Keyboard navigation and click-to-select work
- * 10. @Page inserted at cursor position
+ * Images are attached from textarea paste/drop. There is no dedicated image
+ * upload button for chat attachments.
  */
-import { test, expect } from 'playwright/test';
+import { test, expect, type Page } from 'playwright/test'
+import { setupProjectPageMocks, type MockPageRecord } from './helpers/projectMocks'
 
-test.describe('Image Upload E2E', () => {
+const sessionId = 'image-upload-session'
+const tinyPngBase64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+4Z6cAAAAASUVORK5CYII='
+
+const mockPages: MockPageRecord[] = [
+  { id: 'page-home', title: 'Home Page', slug: 'home' },
+  { id: 'page-about', title: 'About Us', slug: 'about' },
+  { id: 'page-pricing', title: 'Pricing', slug: 'pricing' },
+]
+
+type BrowserFile = {
+  name: string
+  mimeType: string
+  base64?: string
+  size?: number
+}
+
+async function createFileTransfer(page: Page, files: BrowserFile[]) {
+  return page.evaluateHandle((items) => {
+    const transfer = new DataTransfer()
+
+    for (const item of items) {
+      let content: BlobPart
+      if (item.base64) {
+        const binary = atob(item.base64)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i)
+        }
+        content = bytes
+      } else {
+        content = new Uint8Array(item.size ?? 1)
+      }
+
+      transfer.items.add(new File([content], item.name, { type: item.mimeType }))
+    }
+
+    return transfer
+  }, files)
+}
+
+async function dropFiles(page: Page, files: BrowserFile[]) {
+  const dataTransfer = await createFileTransfer(page, files)
+  await page.getByTestId('chat-textarea').dispatchEvent('drop', { dataTransfer })
+  await dataTransfer.dispose()
+}
+
+async function pasteFiles(page: Page, files: BrowserFile[]) {
+  await page.getByTestId('chat-textarea').evaluate((textarea, items) => {
+    const transfer = new DataTransfer()
+
+    for (const item of items) {
+      let content: BlobPart
+      if (item.base64) {
+        const binary = atob(item.base64)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i)
+        }
+        content = bytes
+      } else {
+        content = new Uint8Array(item.size ?? 1)
+      }
+
+      transfer.items.add(new File([content], item.name, { type: item.mimeType }))
+    }
+
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+    })
+    Object.defineProperty(event, 'clipboardData', { value: transfer })
+    textarea.dispatchEvent(event)
+  }, files)
+}
+
+async function openProject(page: Page) {
+  await setupProjectPageMocks(page, {
+    sessionId,
+    pages: mockPages,
+  })
+  await page.goto(`/project/${sessionId}`)
+  await page.waitForSelector('[data-testid="chat-input"]')
+}
+
+const imageFile = (name: string): BrowserFile => ({
+  name,
+  mimeType: 'image/png',
+  base64: tinyPngBase64,
+})
+
+test.describe('Image attachments', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/project/test-session');
-    await page.waitForSelector('[data-testid="chat-input"]');
-  });
+    await openProject(page)
+  })
 
-  test('1. Image button opens file picker', async ({ page }) => {
-    // Setup file chooser interceptor
-    const fileChooserPromise = page.waitForEvent('filechooser');
+  test('drop displays an image thumbnail', async ({ page }) => {
+    await dropFiles(page, [imageFile('dropped.png')])
 
-    await page.click('[data-testid="image-upload-button"]');
+    await expect(page.getByTestId('image-thumbnail')).toHaveCount(1)
+    await expect(page.getByRole('img', { name: 'dropped.png' })).toBeVisible()
+  })
 
-    const fileChooser = await fileChooserPromise;
-    expect(fileChooser).toBeTruthy();
-  });
+  test('paste displays an image thumbnail', async ({ page }) => {
+    await pasteFiles(page, [imageFile('pasted.png')])
 
-  test('2. Drag-and-drop works on textarea', async ({ page }) => {
-    // Create DataTransfer for drag and drop
-    const dataTransfer = await page.evaluateHandle((fileData) => {
-      const dt = new DataTransfer();
-      const file = new File([fileData.content], 'test.png', { type: 'image/png' });
-      dt.items.add(file);
-      return dt;
-    }, { content: 'fake-image-content' });
+    await expect(page.getByTestId('image-thumbnail')).toHaveCount(1)
+    await expect(page.getByRole('img', { name: 'pasted.png' })).toBeVisible()
+  })
 
-    // Dispatch drop event
-    await page.locator('[data-testid="chat-textarea"]').dispatchEvent('drop', dataTransfer);
+  test('removes a thumbnail', async ({ page }) => {
+    await dropFiles(page, [imageFile('remove-me.png')])
+    await expect(page.getByTestId('image-thumbnail')).toHaveCount(1)
 
-    // Should show thumbnail
-    await expect(page.locator('[data-testid="image-thumbnail"]')).toBeVisible();
-  });
+    await page.getByTestId('remove-image-button').click()
 
-  test('3. Images display as thumbnails', async ({ page }) => {
-    // Upload image via button
-    const fileInput = page.locator('input[type="file"]');
-    await fileInput.setInputFiles({
-      name: 'test.png',
-      mimeType: 'image/png',
-      buffer: Buffer.from('fake-image')
-    });
+    await expect(page.getByTestId('image-thumbnail')).toHaveCount(0)
+  })
 
-    await expect(page.locator('[data-testid="image-thumbnail"]')).toBeVisible();
-  });
+  test('enforces the three image limit', async ({ page }) => {
+    await dropFiles(page, [
+      imageFile('one.png'),
+      imageFile('two.png'),
+      imageFile('three.png'),
+      imageFile('four.png'),
+    ])
 
-  test('4. Remove button on each image thumbnail', async ({ page }) => {
-    const fileInput = page.locator('input[type="file"]');
-    await fileInput.setInputFiles({
-      name: 'test.png',
-      mimeType: 'image/png',
-      buffer: Buffer.from('fake-image')
-    });
+    await expect(page.getByTestId('image-thumbnail')).toHaveCount(3)
+    await expect(page.getByText('Image limit reached', { exact: true })).toBeVisible()
+    await expect(
+      page.getByText('Only 3 more images allowed.', { exact: true })
+    ).toBeVisible()
 
-    await expect(page.locator('[data-testid="remove-image-button"]')).toBeVisible();
+    await dropFiles(page, [imageFile('extra.png')])
+    await expect(page.getByTestId('image-thumbnail')).toHaveCount(3)
+    await expect(
+      page.getByText('You can upload up to 3 images.', { exact: true })
+    ).toBeVisible()
+  })
 
-    // Click remove
-    await page.click('[data-testid="remove-image-button"]');
+  test('rejects non-image files with a toast', async ({ page }) => {
+    await dropFiles(page, [
+      { name: 'brief.pdf', mimeType: 'application/pdf', size: 128 },
+    ])
 
-    // Thumbnail should disappear
-    await expect(page.locator('[data-testid="image-thumbnail"]')).not.toBeVisible();
-  });
+    await expect(page.getByTestId('image-thumbnail')).toHaveCount(0)
+    await expect(page.getByText('Invalid file type', { exact: true })).toBeVisible()
+    await expect(
+      page.getByText('brief.pdf is not an image.', { exact: true })
+    ).toBeVisible()
+  })
 
-  test('5. Max 3 images enforced', async ({ page }) => {
-    const fileInput = page.locator('input[type="file"]');
+  test('rejects files over 10MB with a toast', async ({ page }) => {
+    await dropFiles(page, [
+      {
+        name: 'large.png',
+        mimeType: 'image/png',
+        size: 11 * 1024 * 1024,
+      },
+    ])
 
-    // Try to upload 4 files
-    await fileInput.setInputFiles([
-      { name: '1.png', mimeType: 'image/png', buffer: Buffer.from('1') },
-      { name: '2.png', mimeType: 'image/png', buffer: Buffer.from('2') },
-      { name: '3.png', mimeType: 'image/png', buffer: Buffer.from('3') },
-      { name: '4.png', mimeType: 'image/png', buffer: Buffer.from('4') },
-    ]);
+    await expect(page.getByTestId('image-thumbnail')).toHaveCount(0)
+    await expect(page.getByText('File too large', { exact: true })).toBeVisible()
+    await expect(
+      page.getByText('large.png exceeds 10MB.', { exact: true })
+    ).toBeVisible()
+  })
+})
 
-    // Should show error message
-    await expect(page.locator('[data-testid="image-error-message"]')).toBeVisible();
-    await expect(page.locator('[data-testid="image-error-message"]')).toContainText('3');
-  });
-
-  test('6. Only images accepted; non-image rejected', async ({ page }) => {
-    const fileInput = page.locator('input[type="file"]');
-
-    // Try to upload a non-image file
-    await fileInput.setInputFiles({
-      name: 'test.pdf',
-      mimeType: 'application/pdf',
-      buffer: Buffer.from('fake-pdf')
-    });
-
-    // Should show error
-    await expect(page.locator('[data-testid="image-error-message"]')).toBeVisible();
-    await expect(page.locator('[data-testid="image-error-message"]')).toContainText('image');
-  });
-
-  test('7. Files > 10MB rejected', async ({ page }) => {
-    const largeBuffer = Buffer.alloc(11 * 1024 * 1024); // 11MB
-    const fileInput = page.locator('input[type="file"]');
-
-    await fileInput.setInputFiles({
-      name: 'large.png',
-      mimeType: 'image/png',
-      buffer: largeBuffer
-    });
-
-    await expect(page.locator('[data-testid="image-error-message"]')).toBeVisible();
-    await expect(page.locator('[data-testid="image-error-message"]')).toContainText('10MB');
-  });
-});
-
-test.describe('@Page Mention E2E', () => {
+test.describe('@page mentions', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/project/test-existing-session');
-    await page.waitForSelector('[data-testid="chat-input"]');
-  });
+    await openProject(page)
+  })
 
-  test('8. Dropdown appears after @ with filtering', async ({ page }) => {
-    const textarea = page.locator('[data-testid="chat-textarea"]');
+  test('opens after @ and filters pages', async ({ page }) => {
+    const textarea = page.getByTestId('chat-textarea')
 
-    // Type @
-    await textarea.fill('@');
+    await textarea.fill('@')
 
-    // Dropdown should appear
-    await expect(page.locator('[data-testid="page-mention-popover"]')).toBeVisible();
+    await expect(page.getByTestId('page-mention-popover')).toBeVisible()
+    await expect(page.getByTestId('page-mention-item')).toHaveCount(3)
 
-    // Type filter
-    await textarea.fill('@ho');
+    await textarea.fill('@ho')
 
-    // Should show filtered results
-    await expect(page.locator('[data-testid="page-mention-item"]').filter({ hasText: /home/i })).toBeVisible();
-  });
+    await expect(page.getByTestId('page-mention-item')).toHaveCount(1)
+    await expect(page.getByTestId('page-mention-item')).toContainText('@home')
+  })
 
-  test('9. Keyboard navigation and click-to-select work', async ({ page }) => {
-    const textarea = page.locator('[data-testid="chat-textarea"]');
+  test('supports keyboard navigation and selection', async ({ page }) => {
+    const textarea = page.getByTestId('chat-textarea')
 
-    await textarea.fill('@');
-    await expect(page.locator('[data-testid="page-mention-popover"]')).toBeVisible();
+    await textarea.fill('@')
+    await expect(page.getByTestId('page-mention-popover')).toBeVisible()
 
-    // Arrow down should highlight next item
-    await page.keyboard.press('ArrowDown');
-    await expect(page.locator('[data-testid="page-mention-item"].highlighted')).toBeVisible();
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByTestId('page-mention-item').nth(1)).toHaveAttribute(
+      'data-active',
+      'true'
+    )
 
-    // Enter should select
-    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter')
 
-    // @Page should be inserted
-    const value = await textarea.inputValue();
-    expect(value).toContain('@');
-  });
+    await expect(textarea).toHaveValue('@about ')
+    await expect(page.getByTestId('page-mention-popover')).not.toBeVisible()
+  })
 
-  test('10. @Page inserted at cursor position', async ({ page }) => {
-    const textarea = page.locator('[data-testid="chat-textarea"]');
+  test('inserts clicked page mention at the cursor', async ({ page }) => {
+    const textarea = page.getByTestId('chat-textarea')
 
-    // Type some text, move cursor, then type @
-    await textarea.fill('Update ');
-    await textarea.press('End');
-    await page.keyboard.type('@');
+    await textarea.fill('Update ')
+    await textarea.press('End')
+    await page.keyboard.type('@')
+    await page.getByTestId('page-mention-item').filter({ hasText: '@home' }).click()
 
-    // Select a page
-    await page.click('[data-testid="page-mention-item"]:first-child');
+    await expect(textarea).toHaveValue('Update @home ')
+  })
 
-    // @Page should be at cursor position
-    const value = await textarea.inputValue();
-    expect(value).toBe('Update @Home');
-  });
+  test('closes the popover with Escape', async ({ page }) => {
+    const textarea = page.getByTestId('chat-textarea')
 
-  test('Empty state when no pages match', async ({ page }) => {
-    const textarea = page.locator('[data-testid="chat-textarea"]');
+    await textarea.fill('@')
+    await expect(page.getByTestId('page-mention-popover')).toBeVisible()
 
-    await textarea.fill('@nonexistent');
+    await textarea.dispatchEvent('keydown', { key: 'Escape' })
 
-    await expect(page.locator('[data-testid="page-mention-empty"]')).toBeVisible();
-    await expect(page.locator('[data-testid="page-mention-empty"]')).toContainText('No matching pages');
-  });
+    await expect(page.getByTestId('page-mention-popover')).not.toBeVisible()
+    await expect(textarea).toHaveValue('@')
+  })
 
-  test('Escape closes popover without selection', async ({ page }) => {
-    const textarea = page.locator('[data-testid="chat-textarea"]');
+  test('shows an empty state when no pages match', async ({ page }) => {
+    await page.getByTestId('chat-textarea').fill('@nonexistent')
 
-    await textarea.fill('@');
-    await expect(page.locator('[data-testid="page-mention-popover"]')).toBeVisible();
-
-    await page.keyboard.press('Escape');
-
-    await expect(page.locator('[data-testid="page-mention-popover"]')).not.toBeVisible();
-  });
-});
+    await expect(page.getByTestId('page-mention-empty')).toBeVisible()
+    await expect(page.getByTestId('page-mention-empty')).toContainText(
+      'No matching pages'
+    )
+  })
+})

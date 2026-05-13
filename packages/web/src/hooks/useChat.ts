@@ -7,7 +7,7 @@ import type { SendMessageOptions } from '@/hooks/chat/useStreamConnection'
 import { clearInterviewBatch } from '@/lib/interviewStorage'
 import { savePendingMessage, toStoredMessage } from '@/lib/pendingMessageStorage'
 import { createId, buildInterviewPayload } from '@/hooks/useChatUtils'
-import type { InterviewActionPayload, Message, MessageImage } from '@/types'
+import type { ChatRunStatus, InterviewActionPayload, Message, MessageImage } from '@/types'
 
 export interface UseChatOptions {
   sessionId?: string
@@ -37,6 +37,7 @@ export function useChat({
   const { runAction } = useAsyncAction()
   const [localMessages, setLocalMessages] = React.useState<Message[]>(initialMessages)
   const [error, setError] = React.useState<string | null>(null)
+  const [runStatus, setRunStatus] = React.useState<ChatRunStatus | null>(null)
   const eventSourceRef = React.useRef<EventSource | null>(null)
   const fetchAbortRef = React.useRef<AbortController | null>(null)
   const streamMessageIdRef = React.useRef<string | null>(null)
@@ -86,6 +87,7 @@ export function useChat({
 
   React.useEffect(() => {
     sessionIdRef.current = sessionId
+    setRunStatus(null)
     if (sessionId) {
       createdSessionIdRef.current = null
     }
@@ -93,6 +95,7 @@ export function useChat({
 
   React.useEffect(() => {
     threadIdRef.current = threadId
+    setRunStatus(null)
   }, [threadId])
 
   const maybeNotifySessionCreated = React.useCallback(
@@ -151,6 +154,7 @@ export function useChat({
     onPreview,
     onTabChange,
     onPageSelect,
+    onRunStatusChange: setRunStatus,
     maybeNotifySessionCreated,
     applyInterviewQuestions,
     interviewModeRef,
@@ -186,6 +190,7 @@ export function useChat({
     async (content: string, options?: SendMessageOptions) => {
       if (!content.trim()) return
       setError(null)
+      setRunStatus(null)
 
       const trimmed = content.trim()
       const resumePayload = resumePendingRef.current
@@ -253,6 +258,7 @@ export function useChat({
     async (payload: InterviewActionPayload) => {
       if (!sessionId) return
       setError(null)
+      setRunStatus(null)
 
       const status =
         payload.action === 'generate'
@@ -300,7 +306,7 @@ export function useChat({
       }
 
       await enqueueConversation(userMessage, assistantMessage, rawContent, {
-        triggerInterview: true,
+        triggerInterview: payload.action === 'submit',
       })
     },
     [
@@ -314,11 +320,17 @@ export function useChat({
     ]
   )
 
+  const clearThreadWithStatus = React.useCallback(async () => {
+    setRunStatus(null)
+    await clearThread()
+  }, [clearThread])
+
   return {
     messages,
     isStreaming,
     connectionState,
     error,
+    runStatus,
     assets,
     addAsset,
     removeAsset,
@@ -327,6 +339,6 @@ export function useChat({
     sendMessage,
     handleInterviewAction,
     stopStream,
-    clearThread,
+    clearThread: clearThreadWithStatus,
   }
 }

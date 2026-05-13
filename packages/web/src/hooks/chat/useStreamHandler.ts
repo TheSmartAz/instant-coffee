@@ -1,5 +1,7 @@
 import type {
   ChatAction,
+  ChatRunStatus,
+  ChatRunStatusStage,
   ChatStep,
   Message,
   SubAgentInfo,
@@ -39,7 +41,149 @@ export interface StreamHandlerDeps {
     section_content?: string
   }) => void
   handleActionTabSwitch: (action: ChatAction, slug?: string) => void
+  onRunStatusChange?: (status: ChatRunStatus | null) => void
   onPreview?: (payload: { html?: string; previewUrl?: string | null }) => void
+}
+
+const RUN_STATUS_EVENT_PREFIXES = ['run_', 'build_', 'verify_', 'tool_policy_']
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value))
+
+const getNestedPayload = (event: Record<string, unknown>) => {
+  const payload = event.payload
+  return isRecord(payload) ? payload : {}
+}
+
+const getEventValue = (event: Record<string, unknown>, key: string) => {
+  if (event[key] !== undefined) return event[key]
+  return getNestedPayload(event)[key]
+}
+
+const getStringValue = (event: Record<string, unknown>, key: string) => {
+  const value = getEventValue(event, key)
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+const getNumberValue = (event: Record<string, unknown>, key: string) => {
+  const value = getEventValue(event, key)
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  return undefined
+}
+
+const getSummaryValue = (event: Record<string, unknown>) => {
+  const value = getEventValue(event, 'summary')
+  if (isRecord(value)) return value
+
+  const eventType = typeof event.type === 'string' ? event.type : ''
+  const payload = getNestedPayload(event)
+  if (!eventType.startsWith('build_')) return undefined
+
+  const summary: Record<string, unknown> = {}
+  const status = getStringValue(event, 'status')
+  if (status) {
+    summary.build_status = status
+  } else if (eventType === 'build_complete') {
+    summary.build_status = 'success'
+  } else if (eventType === 'build_failed') {
+    summary.build_status = 'failed'
+  }
+
+  const pages = payload.pages
+  if (Array.isArray(pages)) {
+    summary.generated_pages = pages
+  }
+  if (typeof payload.dist_path === 'string' && payload.dist_path) {
+    summary.dist_path = payload.dist_path
+  }
+  return Object.keys(summary).length ? summary : undefined
+}
+
+const getStatusStage = (eventType: string): ChatRunStatusStage | undefined => {
+  if (eventType.startsWith('build_')) return 'build'
+  if (eventType.startsWith('verify_')) return 'review'
+  if (eventType.startsWith('tool_policy_')) return 'policy'
+  if (eventType.startsWith('run_')) return 'run'
+  return undefined
+}
+
+const inferStatus = (eventType: string) => {
+  if (
+    eventType.endsWith('_failed') ||
+    eventType.endsWith('_fail') ||
+    eventType.endsWith('_blocked') ||
+    eventType.endsWith('_cancelled')
+  ) {
+    return 'failed'
+  }
+  if (
+    eventType.endsWith('_complete') ||
+    eventType.endsWith('_completed') ||
+    eventType.endsWith('_pass')
+  ) {
+    return 'completed'
+  }
+  if (eventType.endsWith('_waiting_input')) return 'waiting_input'
+  if (eventType.endsWith('_warn')) return 'warning'
+  return 'running'
+}
+
+const inferPhase = (eventType: string): string | undefined => {
+  if (eventType.startsWith('build_')) return 'build'
+  if (eventType.startsWith('verify_')) return 'review'
+  return undefined
+}
+
+const stringifySummary = (summary?: Record<string, unknown>) => {
+  if (!summary) return undefined
+  const parts: string[] = []
+  const errorCount = summary.error_count
+  const warningCount = summary.warning_count
+  const buildStatus = summary.build_status
+  const generatedPages = summary.generated_pages
+  const distPath = summary.dist_path
+
+  if (typeof errorCount === 'number') parts.push(`${errorCount} errors`)
+  if (typeof warningCount === 'number') parts.push(`${warningCount} warnings`)
+  if (typeof buildStatus === 'string' && buildStatus) parts.push(`build ${buildStatus}`)
+  if (Array.isArray(generatedPages)) parts.push(`${generatedPages.length} pages`)
+  if (typeof distPath === 'string' && distPath) parts.push('dist ready')
+  return parts.length ? parts.join(', ') : undefined
+}
+
+const toRunStatus = (event: Record<string, unknown>): ChatRunStatus | null => {
+  const eventType = typeof event.type === 'string' ? event.type : ''
+  if (!RUN_STATUS_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))) {
+    return null
+  }
+  const stage = getStatusStage(eventType)
+  if (!stage) return null
+
+  const summary = getSummaryValue(event)
+  const message =
+    getStringValue(event, 'message') ??
+    getStringValue(event, 'step') ??
+    getStringValue(event, 'waiting_reason') ??
+    getStringValue(event, 'reason') ??
+    getStringValue(event, 'error') ??
+    stringifySummary(summary)
+
+  return {
+    eventType,
+    stage,
+    runId: getStringValue(event, 'run_id'),
+    phase: getStringValue(event, 'phase') ?? inferPhase(eventType),
+    status: getStringValue(event, 'status') ?? inferStatus(eventType),
+    message,
+    error: getStringValue(event, 'error'),
+    percent: getNumberValue(event, 'percent'),
+    summary,
+    updatedAt: getStringValue(event, 'timestamp'),
+  }
 }
 
 /**
@@ -110,6 +254,10 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
     }
     if (isEventPayload(payload)) {
       deps.receivedEventRef.current = true
+      const runStatus = toRunStatus(payload as unknown as Record<string, unknown>)
+      if (runStatus) {
+        deps.onRunStatusChange?.(runStatus)
+      }
       if (payload.type === 'interview_question') {
         deps.applyInterviewQuestions(payload as InterviewPayloadLike)
         return
@@ -180,7 +328,7 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
           const progressEvent = toolEvent as ToolProgressEvent
           const step: ChatStep = {
             id: createId(),
-            label: buildToolLabel(toolEvent as ToolCallEvent),
+            label: progressEvent.tool_name,
             status: 'in_progress',
             kind: 'tool',
             toolName: progressEvent.tool_name,
@@ -226,12 +374,26 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
         const messageId = deps.streamMessageIdRef.current
         if (messageId && Array.isArray(payload.steps)) {
           // Normalize steps: LLM may use "title"/"description" instead of "step"
-          const normalized = (payload.steps as Array<Record<string, unknown>>).map(
-            (s, i) => ({
-              step: (s.step || s.title || s.description || s.name || s.text || `Step ${i + 1}`) as string,
-              status: (s.status ?? 'pending') as string,
-            })
-          )
+          const normalized = (payload.steps as unknown[]).map((step, i) => {
+            const record =
+              step && typeof step === 'object'
+                ? (step as Record<string, unknown>)
+                : {}
+            const status = record.status === 'in_progress' || record.status === 'completed'
+              ? record.status
+              : 'pending'
+            return {
+              step: String(
+                record.step ??
+                  record.title ??
+                  record.description ??
+                  record.name ??
+                  record.text ??
+                  `Step ${i + 1}`,
+              ),
+              status,
+            }
+          })
           deps.updateMessageById(messageId, (message) => ({
             ...message,
             plan: normalized as Message['plan'],
@@ -241,10 +403,11 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
       // Handle plan_created events — attach tasks to current message
       if (payload.type === 'plan_created') {
         const messageId = deps.streamMessageIdRef.current
-        if (messageId && payload.plan?.tasks) {
+        const tasks = payload.plan?.tasks
+        if (messageId && Array.isArray(tasks)) {
           deps.updateMessageById(messageId, (message) => ({
             ...message,
-            planTasks: payload.plan.tasks as Message['planTasks'],
+            planTasks: tasks,
           }))
         }
       }

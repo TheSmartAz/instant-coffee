@@ -180,7 +180,6 @@ export function ChatInput({
   const {
     mentionOpen,
     mentionQuery,
-    mentionType,
     mentionIndex,
     mentionRange,
     mentionPosition,
@@ -268,7 +267,7 @@ export function ChatInput({
     const trimmed = message.trim()
     const targetPages = parsePageMentions(trimmed, pages)
     // Extract @file: mentions from the message
-    const fileMentions = Array.from(trimmed.matchAll(/@file:([A-Za-z0-9_./\-]+)/g))
+    const fileMentions = Array.from(trimmed.matchAll(/@file:([A-Za-z0-9_./-]+)/g))
       .map((m) => m[1])
       .filter(Boolean)
     onSend(trimmed, {

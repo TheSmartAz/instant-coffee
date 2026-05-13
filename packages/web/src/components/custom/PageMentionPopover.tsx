@@ -40,6 +40,7 @@ export const PageMentionPopover = React.forwardRef<HTMLDivElement, PageMentionPo
       style={{ left: position.x, top: position.y }}
       role="listbox"
       aria-label="Page suggestions"
+      data-testid="page-mention-popover"
     >
       {arrowLeft !== null ? (
         <div
@@ -51,7 +52,12 @@ export const PageMentionPopover = React.forwardRef<HTMLDivElement, PageMentionPo
         />
       ) : null}
       {filteredPages.length === 0 ? (
-        <div className="px-3 py-2 text-xs text-muted-foreground">No matching pages</div>
+        <div
+          className="px-3 py-2 text-xs text-muted-foreground"
+          data-testid="page-mention-empty"
+        >
+          No matching pages
+        </div>
       ) : (
         <ul className="max-h-56 overflow-y-auto py-1 text-sm">
           {filteredPages.map((page, index) => {
@@ -60,12 +66,16 @@ export const PageMentionPopover = React.forwardRef<HTMLDivElement, PageMentionPo
               <li key={page.id} role="option" aria-selected={isActive}>
                 <button
                   type="button"
+                  data-testid="page-mention-item"
+                  data-active={isActive ? 'true' : undefined}
                   onClick={() => onSelect(page)}
                   onMouseEnter={() => onHoverIndex?.(index)}
                   onMouseDown={(event) => event.preventDefault()}
                   className={cn(
                     'flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition-colors duration-150',
-                    isActive ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60'
+                    isActive
+                      ? 'highlighted bg-muted text-foreground'
+                      : 'text-muted-foreground hover:bg-muted/60'
                   )}
                 >
                   <div className="min-w-0">

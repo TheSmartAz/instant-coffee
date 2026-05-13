@@ -9,16 +9,14 @@ interface VirtualListOptions {
 }
 
 export function useVirtualList({
+  count,
   estimateSize,
   overscan = 4,
   minItems = 40,
   scrollElement,
-}: VirtualListOptions & { count: number }) {
+}: VirtualListOptions) {
   const [scrollTop, setScrollTop] = React.useState(0)
   const [viewportHeight, setViewportHeight] = React.useState(0)
-  // Track actual item heights using Map by item ID (message.id)
-  const itemHeightsRef = React.useRef<Map<string, number>>(new Map())
-  const [version, setVersion] = React.useState(0) // Increment to force re-render
 
   React.useLayoutEffect(() => {
     if (!scrollElement) return
@@ -44,16 +42,26 @@ export function useVirtualList({
     }
   }, [scrollElement])
 
-  // Force re-render when heights change
-  const markHeightsChanged = React.useCallback(() => {
-    setVersion((v) => v + 1)
-  }, [])
+  const shouldVirtualize = count > minItems && viewportHeight > 0
+  const start = shouldVirtualize
+    ? Math.max(0, Math.floor(scrollTop / estimateSize) - overscan)
+    : 0
+  const end = shouldVirtualize
+    ? Math.min(count, Math.ceil((scrollTop + viewportHeight) / estimateSize) + overscan)
+    : count
+  const totalHeight = count * estimateSize
+  const paddingTop = start * estimateSize
+  const paddingBottom = Math.max(0, totalHeight - end * estimateSize)
 
   return {
+    start,
+    end,
+    paddingTop,
+    paddingBottom,
+    totalHeight,
     scrollTop,
     viewportHeight,
-    itemHeightsRef,
-    markHeightsChanged,
+    shouldVirtualize,
   }
 }
 
@@ -67,8 +75,9 @@ export function useChatVirtualList(
 ) {
   const [scrollTop, setScrollTop] = React.useState(0)
   const [viewportHeight, setViewportHeight] = React.useState(0)
-  const itemHeightsRef = React.useRef<Map<string, number>>(new Map())
-  const [totalVersion, setTotalVersion] = React.useState(0)
+  const [itemHeights, setItemHeights] = React.useState<Map<string, number>>(
+    () => new Map()
+  )
 
   React.useLayoutEffect(() => {
     if (!scrollElement) return
@@ -98,10 +107,10 @@ export function useChatVirtualList(
   const totalHeight = React.useMemo(() => {
     let height = 0
     for (let i = 0; i < count; i++) {
-      height += itemHeightsRef.current.get(String(i)) ?? estimateSize
+      height += itemHeights.get(String(i)) ?? estimateSize
     }
     return height
-  }, [count, estimateSize, totalVersion])
+  }, [count, estimateSize, itemHeights])
 
   const shouldVirtualize = count > minItems && viewportHeight > 0
 
@@ -125,14 +134,16 @@ export function useChatVirtualList(
     scrollTop,
     viewportHeight,
     shouldVirtualize,
-    itemHeightsRef,
-    updateItemHeight: (index: number, height: number) => {
+    updateItemHeight: React.useCallback((index: number, height: number) => {
+      if (height <= 0) return
       const key = String(index)
-      const current = itemHeightsRef.current.get(key)
-      if (height > 0 && current !== height) {
-        itemHeightsRef.current.set(key, height)
-        setTotalVersion((v) => v + 1)
-      }
-    },
+      setItemHeights((prev) => {
+        const current = prev.get(key)
+        if (current === height) return prev
+        const next = new Map(prev)
+        next.set(key, height)
+        return next
+      })
+    }, []),
   }
 }

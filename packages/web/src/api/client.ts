@@ -121,10 +121,27 @@ export const api = {
       }),
   },
   tasks: {
-    retry: (id: string) =>
-      request<{ success: boolean }>(`/api/task/${id}/retry`, { method: 'POST' }),
-    skip: (id: string) =>
-      request<{ success: boolean }>(`/api/task/${id}/skip`, { method: 'POST' }),
+    retry: (id: string, reason?: string) =>
+      request<{
+        success: boolean
+        task_id: string
+        status: 'retrying'
+        attempt: number
+        scheduled: boolean
+      }>(`/api/task/${encodeURIComponent(id)}/retry`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }),
+    skip: (id: string, reason?: string) =>
+      request<{
+        success: boolean
+        task_id: string
+        status: 'skipped'
+        changed?: boolean
+      }>(`/api/task/${encodeURIComponent(id)}/skip`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }),
   },
   productDocs: productDocsApi,
   productDocHistory: productDocHistoryApi,
@@ -224,6 +241,24 @@ export const api = {
       const suffix = cleaned ? `/${encodeURI(cleaned)}` : ''
       return buildUrl(`/preview/${sessionId}${suffix}`)
     },
+  },
+  runs: {
+    list: (sessionId: string, options?: { limit?: number }) =>
+      request<import('../types').SessionRunListResponse>(
+        `/api/runs${buildQuery({
+          session_id: sessionId,
+          limit: options?.limit,
+        })}`
+      ),
+    get: (runId: string) =>
+      request<import('../types').SessionRunDetail>(
+        `/api/runs/${encodeURIComponent(runId)}`
+      ),
+    cancel: (runId: string) =>
+      request<import('../types').SessionRunDetail>(
+        `/api/runs/${encodeURIComponent(runId)}/cancel`,
+        { method: 'POST' }
+      ),
   },
   events: {
     getSessionEvents: (sessionId: string, sinceSeq?: number, limit?: number) =>

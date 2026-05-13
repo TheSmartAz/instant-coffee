@@ -5,13 +5,48 @@ import {
   normalizeInterviewQuestions,
 } from '@/lib/interviewUtils'
 import { buildAgentLabel, buildToolLabel } from '@/lib/stepLabels'
-import type { SessionEvent, ToolCallEvent, ToolResultEvent } from '@/types/events'
+import type {
+  FileChange,
+  PlanStep,
+  PlanTaskSnapshot,
+  SessionEvent,
+  TaskStatus,
+  ToolCallEvent,
+  ToolResultEvent,
+} from '@/types/events'
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object')
 
 const getString = (value: unknown) =>
   typeof value === 'string' ? value : undefined
+
+const normalizePlanStepStatus = (value: unknown): PlanStep['status'] => {
+  if (value === 'in_progress' || value === 'completed') return value
+  return 'pending'
+}
+
+const normalizeTaskStatus = (value: unknown): TaskStatus => {
+  if (
+    value === 'pending' ||
+    value === 'in_progress' ||
+    value === 'done' ||
+    value === 'failed' ||
+    value === 'aborted' ||
+    value === 'timeout' ||
+    value === 'blocked' ||
+    value === 'skipped' ||
+    value === 'retrying'
+  ) {
+    return value
+  }
+  return 'pending'
+}
+
+const normalizeFileAction = (value: unknown): FileChange['action'] => {
+  if (value === 'created' || value === 'deleted') return value
+  return 'modified'
+}
 
 const mapInterviewActionToStatus = (
   action?: string,
@@ -241,9 +276,9 @@ const WIDGET_EVENT_TYPES = new Set([
 ])
 
 interface WidgetData {
-  plan?: Array<{ step: string; status: string }>
-  planTasks?: Array<{ id: string; title: string; status: string; description?: string }>
-  fileChanges?: Array<{ path: string; action: string; language?: string }>
+  plan?: PlanStep[]
+  planTasks?: PlanTaskSnapshot[]
+  fileChanges?: FileChange[]
   subAgents?: Array<{ id: string; task: string; status: 'running' | 'completed' | 'failed'; summary?: string }>
   action?: string
   productDocUpdated?: boolean
@@ -269,7 +304,7 @@ export const buildWidgetDataFromEvents = (events: SessionEvent[]): WidgetData =>
         if (steps.length > 0) {
           data.plan = (steps as Array<Record<string, unknown>>).map((s, i) => ({
             step: String(s.step || s.title || s.description || s.name || s.text || `Step ${i + 1}`),
-            status: String(s.status ?? 'pending'),
+            status: normalizePlanStepStatus(s.status),
           }))
         }
         break
@@ -281,8 +316,13 @@ export const buildWidgetDataFromEvents = (events: SessionEvent[]): WidgetData =>
           data.planTasks = (tasks as Array<Record<string, unknown>>).map((t) => ({
             id: String(t.id ?? ''),
             title: String(t.title ?? t.name ?? ''),
-            status: String(t.status ?? 'pending'),
+            status: normalizeTaskStatus(t.status),
             description: getString(t.description),
+            depends_on: Array.isArray(t.depends_on)
+              ? t.depends_on.map(String)
+              : [],
+            can_parallel: t.can_parallel === true,
+            agent_type: getString(t.agent_type),
           }))
         }
         break
@@ -292,7 +332,8 @@ export const buildWidgetDataFromEvents = (events: SessionEvent[]): WidgetData =>
         if (files.length > 0) {
           data.fileChanges = (files as Array<Record<string, unknown>>).map((f) => ({
             path: String(f.path ?? ''),
-            action: String(f.action ?? 'modified'),
+            action: normalizeFileAction(f.action),
+            summary: getString(f.summary),
             language: getString(f.language),
           }))
         }
@@ -321,6 +362,7 @@ export const buildWidgetDataFromEvents = (events: SessionEvent[]): WidgetData =>
         const agentId = String(payload.agent_id ?? '')
         if (agentId) {
           for (const [, agents] of agentMap) {
+            if (!agents) continue
             for (const agent of agents) {
               if (agent.id === agentId) {
                 agent.status = payload.status === 'success' ? 'completed' : 'failed'
@@ -352,6 +394,7 @@ export const buildWidgetDataFromEvents = (events: SessionEvent[]): WidgetData =>
   // Flatten agent map
   const allAgents: NonNullable<WidgetData['subAgents']> = []
   for (const [, agents] of agentMap) {
+    if (!agents) continue
     allAgents.push(...agents)
   }
   if (allAgents.length > 0) {

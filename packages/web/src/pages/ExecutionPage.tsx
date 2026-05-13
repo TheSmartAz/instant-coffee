@@ -39,13 +39,21 @@ export function ExecutionPage() {
     async (taskId: string, action: TaskAction) => {
       try {
         if (action === 'retry') {
-          await api.tasks.retry(taskId)
-          updateTaskStatus(taskId, 'retrying')
-          toast({ title: 'Retry requested', description: `Task ${taskId} queued.` })
+          const result = await api.tasks.retry(taskId, 'user requested retry')
+          updateTaskStatus(taskId, 'retrying', {
+            retry_count: result.attempt,
+            progress: 0,
+          })
+          toast({
+            title: 'Retry recorded',
+            description: result.scheduled
+              ? `Task ${taskId} was queued.`
+              : `Task ${taskId} was marked for retry.`,
+          })
         } else if (action === 'skip') {
-          await api.tasks.skip(taskId)
+          await api.tasks.skip(taskId, 'user skipped task')
           updateTaskStatus(taskId, 'skipped', { progress: 100 })
-          toast({ title: 'Task skipped', description: `Task ${taskId} skipped.` })
+          toast({ title: 'Task skipped', description: `Task ${taskId} was skipped.` })
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Action failed'

@@ -28,7 +28,7 @@ const findMentionAtCursor = (value: string, cursor: number): {
   // Check for @file: prefix
   if (fragment.startsWith('file:')) {
     const fileQuery = fragment.slice(5) // after "file:"
-    if (!/^[A-Za-z0-9_./\-]*$/.test(fileQuery)) return null
+    if (!/^[A-Za-z0-9_./-]*$/.test(fileQuery)) return null
     return { start: atIndex, end: cursor, query: fileQuery, mentionType: 'file' }
   }
 

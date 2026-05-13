@@ -205,6 +205,11 @@ export interface WorkflowEvent extends BaseEvent {
   | 'build_failed'
   | 'interrupt'
   payload?: ProgressPayload | ErrorPayload | Record<string, unknown>
+  phase?: string
+  status?: string
+  message?: string
+  error?: string
+  summary?: Record<string, unknown>
 }
 
 export interface RunLifecycleEvent extends BaseEvent {
@@ -217,16 +222,24 @@ export interface RunLifecycleEvent extends BaseEvent {
     | 'run_failed'
     | 'run_cancelled'
   run_id: string
+  phase?: string
   status?: string
   message?: string
   error?: string
+  summary?: Record<string, unknown>
+  payload?: Record<string, unknown>
 }
 
 export interface VerifyEvent extends BaseEvent {
   type: 'verify_start' | 'verify_pass' | 'verify_fail'
   run_id: string
+  phase?: string
+  status?: string
   stage?: string
   message?: string
+  error?: string
+  summary?: Record<string, unknown>
+  payload?: Record<string, unknown>
 }
 
 export interface ToolPolicyEvent extends BaseEvent {
@@ -235,6 +248,7 @@ export interface ToolPolicyEvent extends BaseEvent {
   tool_name?: string
   reason?: string
   message?: string
+  payload?: Record<string, unknown>
 }
 
 export interface AgentStartEvent extends BaseEvent {
@@ -250,6 +264,7 @@ export interface AgentProgressEvent extends BaseEvent {
   task_id?: string
   agent_id: string
   message: string
+  progress?: number
 }
 
 export interface AgentEndEvent extends BaseEvent {
@@ -561,6 +576,7 @@ export interface FileChange {
   path: string
   action: 'created' | 'modified' | 'deleted'
   summary?: string
+  language?: string
 }
 
 export interface FilesChangedEvent extends BaseEvent {
@@ -583,6 +599,7 @@ export interface AgentSpawnedEvent extends BaseEvent {
   type: 'agent_spawned'
   agent_id: string
   task_description: string
+  task?: string
 }
 
 export interface BgTaskStartedEvent extends BaseEvent {
@@ -693,8 +710,12 @@ export function isTaskEvent(
 
 export function isToolEvent(
   event: ExecutionEvent
-): event is ToolCallEvent | ToolResultEvent {
-  return event.type.startsWith('tool_')
+): event is ToolCallEvent | ToolResultEvent | ToolProgressEvent {
+  return (
+    event.type === 'tool_call' ||
+    event.type === 'tool_result' ||
+    event.type === 'tool_progress'
+  )
 }
 
 export function isPlanEvent(

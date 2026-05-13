@@ -19,6 +19,67 @@ export interface ChatStep {
   progressPercent?: number
 }
 
+export type ChatRunStatusStage = 'run' | 'build' | 'review' | 'policy'
+
+export interface ChatRunStatus {
+  eventType: string
+  stage: ChatRunStatusStage
+  runId?: string
+  phase?: string
+  status?: string
+  message?: string
+  error?: string
+  percent?: number
+  summary?: Record<string, unknown>
+  updatedAt?: string
+}
+
+export type RunStatusValue =
+  | 'queued'
+  | 'running'
+  | 'waiting_input'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface RunReviewIssue {
+  code?: string
+  severity?: 'error' | 'warning' | string
+  message?: string
+  subject?: string | null
+  details?: Record<string, unknown>
+}
+
+export interface SessionRunDetail {
+  run_id: string
+  session_id: string
+  status: RunStatusValue
+  created_at?: string | null
+  updated_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  latest_error?: Record<string, unknown> | null
+  metrics?: Record<string, unknown> | null
+  checkpoint_thread?: string | null
+  checkpoint_ns?: string | null
+  waiting_reason?: string | null
+  current_phase?: string | null
+  phase_status?: string | null
+  phase_metadata?: Record<string, unknown>
+  phase_history?: Array<Record<string, unknown>>
+  artifacts?: Record<string, unknown>
+  fix_attempts?: number
+  last_review?: Record<string, unknown> | null
+  review_summary?: Record<string, unknown> | null
+  review_issues?: RunReviewIssue[]
+  heartbeat_at?: string | null
+}
+
+export interface SessionRunListResponse {
+  runs: SessionRunDetail[]
+  total: number
+}
+
 export type MessageSegment =
   | { type: 'text'; content: string }
   | { type: 'tool_group'; steps: ChatStep[] }
