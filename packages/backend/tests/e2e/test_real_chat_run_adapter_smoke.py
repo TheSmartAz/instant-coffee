@@ -1,6 +1,7 @@
 import os
-import signal
-from contextlib import contextmanager
+import multiprocessing
+import queue
+import traceback
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,49 +22,25 @@ def _smoke_timeout_seconds() -> float:
     return max(value, 1.0)
 
 
-@contextmanager
-def _deadline(seconds: float):
-    if not hasattr(signal, "SIGALRM"):
-        yield
-        return
-
-    def _raise_timeout(_signum, _frame):
-        raise TimeoutError(f"Real chat adapter smoke exceeded {seconds:g}s")
-
-    previous_handler = signal.getsignal(signal.SIGALRM)
-    previous_timer = signal.setitimer(signal.ITIMER_REAL, seconds)
-    signal.signal(signal.SIGALRM, _raise_timeout)
+def _run_real_smoke_child(
+    db_path: str,
+    output_dir: str,
+    timeout_seconds: float,
+    result_queue,
+) -> None:
     try:
-        yield
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
-        if previous_timer[0] > 0:
-            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
+        os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
+        os.environ["OUTPUT_DIR"] = output_dir
+        os.environ["CHAT_USE_RUN_ADAPTER"] = "true"
+        os.environ["RUN_API_ENABLED"] = "true"
+        refresh_settings()
+        reset_database()
+        init_db()
 
+        from app.main import create_app
 
-@pytest.mark.skipif(
-    os.getenv("RUN_REAL_CHAT_ADAPTER_SMOKE") != "true",
-    reason="Set RUN_REAL_CHAT_ADAPTER_SMOKE=true to run the real provider smoke test.",
-)
-def test_real_chat_run_adapter_smoke(tmp_path, monkeypatch) -> None:
-    if not (os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEFAULT_KEY")):
-        pytest.skip("DEEPSEEK_API_KEY or DEFAULT_KEY is required for real provider smoke.")
-
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'real-chat-adapter-smoke.db'}")
-    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "output"))
-    monkeypatch.setenv("CHAT_USE_RUN_ADAPTER", "true")
-    monkeypatch.setenv("RUN_API_ENABLED", "true")
-    refresh_settings()
-    reset_database()
-    init_db()
-
-    from app.main import create_app
-
-    app = create_app()
-    timeout_seconds = _smoke_timeout_seconds()
-    with TestClient(app) as client:
-        with _deadline(timeout_seconds):
+        app = create_app()
+        with TestClient(app) as client:
             response = client.post(
                 "/api/chat",
                 json={
@@ -77,15 +54,68 @@ def test_real_chat_run_adapter_smoke(tmp_path, monkeypatch) -> None:
                 timeout=timeout_seconds,
             )
 
-    assert response.status_code == 200, response.text
-    body = response.json()
+        with get_db() as session:
+            runs = session.query(SessionRun).all()
+            run_payloads = [
+                {
+                    "status": run.status,
+                    "metrics": run.metrics,
+                }
+                for run in runs
+            ]
+
+        result_queue.put(
+            {
+                "ok": True,
+                "status_code": response.status_code,
+                "text": response.text,
+                "body": response.json() if response.headers.get("content-type", "").startswith("application/json") else {},
+                "runs": run_payloads,
+            }
+        )
+    except BaseException:
+        result_queue.put({"ok": False, "traceback": traceback.format_exc()})
+
+
+@pytest.mark.skipif(
+    os.getenv("RUN_REAL_CHAT_ADAPTER_SMOKE") != "true",
+    reason="Set RUN_REAL_CHAT_ADAPTER_SMOKE=true to run the real provider smoke test.",
+)
+def test_real_chat_run_adapter_smoke(tmp_path) -> None:
+    if not (os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEFAULT_KEY")):
+        pytest.skip("DEEPSEEK_API_KEY or DEFAULT_KEY is required for real provider smoke.")
+
+    timeout_seconds = _smoke_timeout_seconds()
+    db_path = str(tmp_path / "real-chat-adapter-smoke.db")
+    output_dir = str(tmp_path / "output")
+    ctx = multiprocessing.get_context("spawn")
+    result_queue = ctx.Queue()
+    process = ctx.Process(
+        target=_run_real_smoke_child,
+        args=(db_path, output_dir, timeout_seconds, result_queue),
+    )
+    process.start()
+    process.join(timeout_seconds + 5)
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+        if process.is_alive():
+            process.kill()
+            process.join(5)
+        pytest.fail(f"Real chat adapter smoke exceeded {timeout_seconds:g}s and was terminated")
+
+    try:
+        result = result_queue.get(timeout=1)
+    except queue.Empty:
+        pytest.fail(f"Real chat adapter smoke exited without a result, exitcode={process.exitcode}")
+
+    assert result["ok"] is True, result.get("traceback")
+    assert result["status_code"] == 200, result["text"]
+    body = result["body"]
     assert body["session_id"]
     assert body.get("message")
-
-    with get_db() as session:
-        runs = session.query(SessionRun).all()
-        assert len(runs) == 1
-        run = runs[0]
-        assert run.status in {"completed", "waiting_input", "failed"}
-        assert isinstance(run.metrics, dict)
-        assert "coordinator" in run.metrics
+    assert len(result["runs"]) == 1
+    run = result["runs"][0]
+    assert run["status"] in {"completed", "waiting_input", "failed"}
+    assert isinstance(run["metrics"], dict)
+    assert "coordinator" in run["metrics"]

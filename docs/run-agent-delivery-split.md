@@ -142,8 +142,9 @@ Opt-in real provider smoke:
 
 ```bash
 cd packages/backend
-RUN_REAL_CHAT_ADAPTER_SMOKE=true CHAT_USE_RUN_ADAPTER=true REAL_CHAT_ADAPTER_SMOKE_TIMEOUT=180 PYTHONPATH=.:../agent/src python3.11 -m pytest tests/e2e/test_real_chat_run_adapter_smoke.py -q
+RUN_REAL_CHAT_ADAPTER_SMOKE=true CHAT_USE_RUN_ADAPTER=true REAL_CHAT_ADAPTER_SMOKE_TIMEOUT=180 PYTHONPATH=.:../agent/src:../agent/.venv/lib/python3.11/site-packages python3.11 -m pytest tests/e2e/test_real_chat_run_adapter_smoke.py -q
 ```
 
 If this test times out, treat it as a real-provider integration blocker: inspect provider credentials,
 base URL/model routing, and coordinator phase persistence before accepting the run-agent lane.
+It runs the real provider call in a child process so the parent pytest process can terminate a stuck integration attempt.
