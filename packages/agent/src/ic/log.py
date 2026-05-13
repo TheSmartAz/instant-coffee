@@ -120,17 +120,21 @@ def log_tool_execution(
     elapsed_s: float,
     output_len: int,
     is_error: bool = False,
+    error_kind: str | None = None,
 ):
     """Log a tool execution result."""
     logger = logging.getLogger("ic.tool")
+    data: dict[str, Any] = {
+        "tool": tool_name,
+        "elapsed_s": round(elapsed_s, 3),
+        "output_len": output_len,
+        "is_error": is_error,
+    }
+    if error_kind:
+        data["error_kind"] = error_kind
     logger.info(
         "tool_exec",
-        extra={"data": {
-            "tool": tool_name,
-            "elapsed_s": round(elapsed_s, 3),
-            "output_len": output_len,
-            "is_error": is_error,
-        }},
+        extra={"data": data},
     )
 
 

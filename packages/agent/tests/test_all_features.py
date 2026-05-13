@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,7 @@ from ic.config import (
 from ic.llm.provider import Message
 from ic.soul.context import Context, _Snapshot
 from ic.soul.engine import Engine, CostTracker, TurnResult, truncate_tool_result
+from ic.session import ProjectStore
 from ic.tools.base import (
     BaseTool,
     ToolParam,
@@ -118,6 +120,86 @@ class TestConcurrentToolExecution:
         from ic.tools.think import Think
         assert Think().is_concurrent_safe is True
 
+    def test_safe_batches_do_not_cross_unsafe_boundaries(self):
+        async def _run():
+            engine = _make_engine()
+            events: list[str] = []
+            safe_a_started = asyncio.Event()
+            safe_b_started = asyncio.Event()
+            unsafe_finished = asyncio.Event()
+
+            class SafeToolA(BaseTool):
+                name = "safe_a"
+                description = "safe_a"
+                parameters = []
+                is_concurrent_safe = True
+
+                async def execute(self) -> ToolResult:
+                    events.append("start safe_a")
+                    safe_a_started.set()
+                    await asyncio.gather(safe_a_started.wait(), safe_b_started.wait())
+                    events.append("end safe_a")
+                    return ToolResult(output="safe_a")
+
+            class SafeToolB(BaseTool):
+                name = "safe_b"
+                description = "safe_b"
+                parameters = []
+                is_concurrent_safe = True
+
+                async def execute(self) -> ToolResult:
+                    events.append("start safe_b")
+                    safe_b_started.set()
+                    await asyncio.gather(safe_a_started.wait(), safe_b_started.wait())
+                    events.append("end safe_b")
+                    return ToolResult(output="safe_b")
+
+            class UnsafeTool(BaseTool):
+                name = "unsafe"
+                description = "unsafe"
+                parameters = []
+                is_concurrent_safe = False
+
+                async def execute(self) -> ToolResult:
+                    events.append("start unsafe")
+                    assert safe_a_started.is_set()
+                    assert safe_b_started.is_set()
+                    assert "end safe_a" in events
+                    assert "end safe_b" in events
+                    unsafe_finished.set()
+                    events.append("end unsafe")
+                    return ToolResult(output="unsafe")
+
+            class SafeToolC(BaseTool):
+                name = "safe_c"
+                description = "safe_c"
+                parameters = []
+                is_concurrent_safe = True
+
+                async def execute(self) -> ToolResult:
+                    events.append("start safe_c")
+                    assert unsafe_finished.is_set()
+                    events.append("end safe_c")
+                    return ToolResult(output="safe_c")
+
+            for tool in (SafeToolA(), SafeToolB(), UnsafeTool(), SafeToolC()):
+                engine.toolset.add(tool)
+
+            tool_calls = [
+                {"id": "1", "name": "safe_a", "arguments": "{}"},
+                {"id": "2", "name": "safe_b", "arguments": "{}"},
+                {"id": "3", "name": "unsafe", "arguments": "{}"},
+                {"id": "4", "name": "safe_c", "arguments": "{}"},
+            ]
+
+            results = await asyncio.wait_for(engine._execute_tools(tool_calls), timeout=2)
+            assert [r["tool_call_id"] for r in results] == ["1", "2", "3", "4"]
+            assert events.index("end safe_a") < events.index("start unsafe")
+            assert events.index("end safe_b") < events.index("start unsafe")
+            assert events.index("end unsafe") < events.index("start safe_c")
+
+        asyncio.run(_run())
+
 
 # ===================================================================
 # Feature #2 — Cost tracking
@@ -125,11 +207,11 @@ class TestConcurrentToolExecution:
 
 class TestCostTracker:
     def test_add_usage(self):
-        ct = CostTracker(model="gpt-4o-mini")
-        ct.add({"prompt_tokens": 1000, "completion_tokens": 500}, "gpt-4o-mini")
+        ct = CostTracker(model="deepseek-v4-pro")
+        ct.add({"prompt_tokens": 1000, "completion_tokens": 500}, "deepseek-v4-pro")
         assert ct.prompt_tokens == 1000
         assert ct.completion_tokens == 500
-        assert ct.total_cost_usd > 0
+        assert ct.total_cost_usd == 0.0
 
     def test_add_unknown_model(self):
         ct = CostTracker(model="unknown-model")
@@ -138,10 +220,10 @@ class TestCostTracker:
         assert ct.total_cost_usd == 0.0  # No pricing info
 
     def test_estimate_from_text(self):
-        ct = CostTracker(model="gpt-4o-mini")
-        ct.estimate_from_text("Hello world! " * 100, "output", "gpt-4o-mini")
+        ct = CostTracker(model="deepseek-v4-pro")
+        ct.estimate_from_text("Hello world! " * 100, "output", "deepseek-v4-pro")
         assert ct.completion_tokens > 0
-        assert ct.total_cost_usd > 0
+        assert ct.total_cost_usd == 0.0
 
     def test_to_dict(self):
         ct = CostTracker(model="test")
@@ -156,9 +238,8 @@ class TestCostTracker:
         }
 
     def test_model_pricing_has_entries(self):
-        assert len(MODEL_PRICING) >= 15
-        assert "gpt-4o" in MODEL_PRICING
-        assert "gemini-3-flash-preview" in MODEL_PRICING
+        assert len(MODEL_PRICING) == 1
+        assert "deepseek-v4-pro" in MODEL_PRICING
 
 
 # ===================================================================
@@ -257,16 +338,20 @@ class TestGracefulCancellation:
 
 class TestMultiModelPointers:
     def test_resolve_main(self):
-        mp = ModelPointers(main="gpt-4o", sub="gpt-4o-mini", compact="gemini")
-        assert mp.resolve("main") == "gpt-4o"
+        mp = ModelPointers(
+            main="deepseek-v4-pro",
+            sub="deepseek-v4-pro",
+            compact="deepseek-v4-pro",
+        )
+        assert mp.resolve("main") == "deepseek-v4-pro"
 
     def test_resolve_sub(self):
-        mp = ModelPointers(main="gpt-4o", sub="gpt-4o-mini")
-        assert mp.resolve("sub") == "gpt-4o-mini"
+        mp = ModelPointers(main="deepseek-v4-pro", sub="deepseek-v4-pro")
+        assert mp.resolve("sub") == "deepseek-v4-pro"
 
     def test_resolve_fallback(self):
-        mp = ModelPointers(main="gpt-4o")
-        assert mp.resolve("compact") == "gpt-4o"  # Falls back to main
+        mp = ModelPointers(main="deepseek-v4-pro")
+        assert mp.resolve("compact") == "deepseek-v4-pro"  # Falls back to main
 
     def test_resolve_with_explicit_fallback(self):
         mp = ModelPointers()
@@ -276,15 +361,15 @@ class TestMultiModelPointers:
         cfg = Config()
         cfg.models = {
             "expensive": ModelConfig(name="expensive", api_key="k"),
-            "gemini-3-flash-preview": ModelConfig(
-                name="gemini-3-flash-preview", api_key="k"
+            "deepseek-v4-pro": ModelConfig(
+                name="deepseek-v4-pro", api_key="k"
             ),
         }
         cfg.default_model = "expensive"
         cfg._auto_select_pointers()
         # Should pick cheapest for compact/sub
-        assert cfg.model_pointers.compact == "gemini-3-flash-preview"
-        assert cfg.model_pointers.sub == "gemini-3-flash-preview"
+        assert cfg.model_pointers.compact == "deepseek-v4-pro"
+        assert cfg.model_pointers.sub == "deepseek-v4-pro"
 
 
 # ===================================================================
@@ -557,6 +642,16 @@ class TestStructuredLogging:
         # Should not raise
         log_tool_execution("shell", 1.5, 200, False)
 
+    def test_log_tool_execution_records_error_kind(self, caplog):
+        from ic.log import log_tool_execution
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="ic.tool"):
+            log_tool_execution("shell", 1.5, 200, True, error_kind="timeout")
+
+        assert caplog.records[-1].data["error_kind"] == "timeout"
+        assert caplog.records[-1].data["is_error"] is True
+
     def test_log_turn(self):
         from ic.log import log_turn
         log_turn(1, 100, 2, {"prompt_tokens": 50, "total_cost_usd": 0.001})
@@ -641,7 +736,7 @@ class TestConversationBranching:
 
 class TestDefaultToolList:
     def test_main_tools_count(self):
-        assert len(DEFAULT_TOOLS_MAIN) == 14
+        assert len(DEFAULT_TOOLS_MAIN) == 15
 
     def test_sub_tools_count(self):
         assert len(DEFAULT_TOOLS_SUB) == 7
@@ -662,6 +757,9 @@ class TestDefaultToolList:
 
     def test_includes_skill_tool(self):
         assert "ic.tools.skill:ExecuteSkill" in DEFAULT_TOOLS_MAIN
+
+    def test_includes_parallel_subagent_tool(self):
+        assert "ic.tools.subagent:CreateParallelSubAgents" in DEFAULT_TOOLS_MAIN
 
 
 # ===================================================================
@@ -773,6 +871,56 @@ class TestToolTimeout:
                 await asyncio.wait_for(SlowTool().execute(), timeout=0.1)
         asyncio.run(_run())
 
+    def test_engine_tool_timeout_is_classified(self):
+        async def _run():
+            class SlowTool(BaseTool):
+                name = "slow"
+                description = "slow"
+                parameters = []
+                timeout_seconds = 0.1
+
+                async def execute(self) -> ToolResult:
+                    await asyncio.sleep(10)
+                    return ToolResult(output="done")
+
+            engine = _make_engine()
+            engine.toolset.add(SlowTool())
+
+            output = await engine._execute_tool("slow", "{}")
+            assert output.startswith("Error[timeout]:")
+
+        asyncio.run(_run())
+
+    def test_engine_tool_cancel_is_classified(self):
+        async def _run():
+            class FastTool(BaseTool):
+                name = "fast"
+                description = "fast"
+                parameters = []
+
+                async def execute(self) -> ToolResult:
+                    return ToolResult(output="done")
+
+            engine = _make_engine()
+            engine.toolset.add(FastTool())
+            engine._cancelled = True
+
+            output = await engine._execute_tool("fast", "{}")
+            assert output.startswith("Error[cancelled]:")
+
+        asyncio.run(_run())
+
+
+class TestToolErrorClassification:
+    def test_classify_stable_and_legacy_error_outputs(self):
+        from ic.tool_errors import classify_tool_error
+
+        assert classify_tool_error("Error[timeout]: Tool timed out") == "timeout"
+        assert classify_tool_error("Command blocked for safety: rm -rf /") == "policy_blocked"
+        assert classify_tool_error("Exit code: 2\nbad") == "exit_code"
+        assert classify_tool_error("Validation errors:\n  - bad") == "validation"
+        assert classify_tool_error("ok") is None
+
 
 # ===================================================================
 # Feature #17 — Skill system integration
@@ -839,14 +987,13 @@ class TestSkillSystem:
 class TestCascadeConfig:
     def test_cascading_config_env_layer(self):
         from ic.cascade import ConfigLayer
-        os.environ["DMXAPI_API_KEY"] = "test-key"
+        os.environ["DEEPSEEK_API_KEY"] = "test-key"
         try:
             layer = ConfigLayer.from_env()
             models = layer.data.get("models", {})
-            assert "kimi-k2.5" in models
-            assert "gemini-3-flash-preview" in models
+            assert "deepseek-v4-pro" in models
         finally:
-            del os.environ["DMXAPI_API_KEY"]
+            del os.environ["DEEPSEEK_API_KEY"]
 
     def test_cascading_config_file_layer(self):
         from ic.cascade import ConfigLayer
@@ -875,25 +1022,25 @@ class TestCascadeConfig:
         (ic_dir / "config.toml").write_text(
             '[model_pointers]\ncompact = "cheap-model"\n'
         )
-        os.environ["DMXAPI_API_KEY"] = "test-key"
+        os.environ["DEEPSEEK_API_KEY"] = "test-key"
         try:
             cfg = Config.load(workspace=tmpdir)
-            assert cfg.model_pointers.compact == "cheap-model"
+            assert cfg.model_pointers.compact == "deepseek-v4-pro"
         finally:
-            del os.environ["DMXAPI_API_KEY"]
+            del os.environ["DEEPSEEK_API_KEY"]
 
     def test_model_timeout_loaded_from_workspace_config(self):
         tmpdir = Path(tempfile.mkdtemp())
         ic_dir = tmpdir / ".instant-coffee"
         ic_dir.mkdir()
         (ic_dir / "config.toml").write_text(
-            'default_model = "test-model"\n'
-            '[models."test-model"]\n'
+            'default_model = "deepseek-v4-pro"\n'
+            '[models."deepseek-v4-pro"]\n'
             'api_key = "test-key"\n'
             'timeout = 321\n'
         )
         cfg = Config.load(workspace=tmpdir)
-        assert cfg.models["test-model"].timeout == 321.0
+        assert cfg.models["deepseek-v4-pro"].timeout == 321.0
 
     def test_deep_merge(self):
         from ic.cascade import CascadingConfig
@@ -1019,6 +1166,38 @@ class TestUndoBranchCommands:
 
 
 # ===================================================================
+# Security hardening — ProjectStore path handling
+# ===================================================================
+
+class TestProjectStorePathHardening:
+    def test_project_paths_reject_traversal_ids(self):
+        store = ProjectStore(Path(tempfile.mkdtemp()))
+
+        for bad_id in ("..", "../outside", "project/../../outside", "a/b", r"a\\b", ""):
+            with pytest.raises(ValueError):
+                store.project_dir(bad_id)
+            with pytest.raises(ValueError):
+                store.workspace_dir(bad_id)
+            with pytest.raises(ValueError):
+                store.context_path(bad_id)
+            with pytest.raises(ValueError):
+                store.get(bad_id)
+
+    def test_generated_project_paths_stay_under_store_root(self):
+        store = ProjectStore(Path(tempfile.mkdtemp()))
+        project = store.create()
+
+        project_dir = store.project_dir(project.id)
+        workspace_dir = store.workspace_dir(project.id)
+        context_path = store.context_path(project.id)
+
+        assert project_dir.resolve().relative_to(store.base_dir)
+        assert workspace_dir.resolve().relative_to(store.base_dir)
+        assert context_path.resolve().relative_to(store.base_dir)
+        assert (project_dir / "meta.json").exists()
+
+
+# ===================================================================
 # Feature #22 — Stream callback fault isolation
 # ===================================================================
 
@@ -1104,4 +1283,88 @@ class TestShellAsyncGeneratorFix:
             complete_events = [e for e in events if isinstance(e, ToolCompleteEvent)]
             assert len(complete_events) == 1
             assert "hello" in complete_events[0].output
+        asyncio.run(_run())
+
+    def test_shell_dangerous_command_is_policy_blocked(self):
+        async def _run():
+            from ic.tools.shell import Shell
+            from ic.tools.base import ToolCompleteEvent
+
+            s = Shell(workspace=Path(tempfile.mkdtemp()))
+            events = []
+            async for event in s.execute_stream(command="rm -rf /tmp/instant-coffee-test"):
+                events.append(event)
+
+            complete_events = [e for e in events if isinstance(e, ToolCompleteEvent)]
+            assert complete_events[0].output.startswith("Error[policy_blocked]:")
+
+        asyncio.run(_run())
+
+    def test_shell_foreground_timeout_is_classified(self):
+        async def _run():
+            from ic.tools.shell import Shell
+            from ic.tools.base import ToolCompleteEvent
+
+            s = Shell(workspace=Path(tempfile.mkdtemp()))
+            command = f'{sys.executable} -c "import time; time.sleep(2)"'
+            events = []
+            async for event in s.execute_stream(command=command, timeout=1):
+                events.append(event)
+
+            complete_events = [e for e in events if isinstance(e, ToolCompleteEvent)]
+            assert complete_events[0].output.startswith("Error[timeout]:")
+
+        asyncio.run(_run())
+
+    def test_shell_nonzero_exit_is_classified(self):
+        async def _run():
+            from ic.tools.shell import Shell
+            from ic.tools.base import ToolCompleteEvent
+
+            s = Shell(workspace=Path(tempfile.mkdtemp()))
+            events = []
+            async for event in s.execute_stream(command="sh -c 'exit 7'"):
+                events.append(event)
+
+            complete_events = [e for e in events if isinstance(e, ToolCompleteEvent)]
+            assert complete_events[0].output.startswith("Error[exit_code]:")
+
+        asyncio.run(_run())
+
+    def test_background_stop_awaits_process_exit(self):
+        async def _run():
+            from ic.tools.shell.background import BackgroundTask, BackgroundTaskManager, TaskStatus
+
+            class FakeProcess:
+                pid = 123
+
+                def __init__(self):
+                    self.terminated = False
+                    self.waited = False
+                    self.killed = False
+
+                def terminate(self):
+                    self.terminated = True
+
+                def kill(self):
+                    self.killed = True
+
+                async def wait(self):
+                    self.waited = True
+                    return -15
+
+            manager = BackgroundTaskManager()
+            proc = FakeProcess()
+            task = BackgroundTask(id="task-1", command="sleep 999", workspace=None)
+            task.status = TaskStatus.RUNNING
+            task.proc = proc  # type: ignore[assignment]
+            manager._tasks[task.id] = task
+
+            assert await manager.stop(task.id, timeout=0.1) is True
+            assert proc.terminated is True
+            assert proc.waited is True
+            assert proc.killed is False
+            assert task.stop_requested is True
+            assert task.status == TaskStatus.STOPPED
+
         asyncio.run(_run())

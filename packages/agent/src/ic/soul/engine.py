@@ -20,6 +20,7 @@ from ic.soul.context_injector import ContextInjector, ContextConfig
 from ic.soul.toolset import Toolset
 from ic.ui.io import UserIO
 from ic.log import LLMCallLogger, log_tool_execution, log_turn
+from ic.tool_errors import classify_tool_error, format_tool_error
 
 
 # Maximum characters for tool results in context (per tool type)
@@ -850,48 +851,48 @@ class Engine:
         """
         results: list[dict] = [None] * len(tool_calls)  # type: ignore[list-item]
 
-        # Classify each tool call
-        safe_indices: list[int] = []
-        for i, tc in enumerate(tool_calls):
-            tool = self.toolset.get(tc["name"])
-            if tool and tool.is_concurrent_safe:
-                safe_indices.append(i)
-
-        # Fire on_tool_call callbacks for all tools
-        for tc in tool_calls:
+        async def _run_one(idx: int) -> tuple[int, str]:
+            tc = tool_calls[idx]
             if self.on_tool_call:
                 await self._call(self.on_tool_call, tc["name"], tc)
+            t0 = __import__("time").monotonic()
+            output = await self._execute_tool(tc["name"], tc["arguments"])
+            error_kind = classify_tool_error(output)
+            log_tool_execution(
+                tc["name"],
+                __import__("time").monotonic() - t0,
+                len(output),
+                error_kind is not None,
+                error_kind=error_kind,
+            )
+            return idx, output
 
-        # Execute concurrent-safe tools in parallel
-        if safe_indices:
-            async def _run_safe(idx: int) -> tuple[int, str]:
-                tc = tool_calls[idx]
-                t0 = __import__("time").monotonic()
-                output = await self._execute_tool(tc["name"], tc["arguments"])
-                log_tool_execution(tc["name"], __import__("time").monotonic() - t0,
-                                   len(output), output.startswith("Error"))
-                return idx, output
+        i = 0
+        while i < len(tool_calls):
+            tc = tool_calls[i]
+            tool = self.toolset.get(tc["name"])
+            if not (tool and tool.is_concurrent_safe):
+                idx, output = await _run_one(i)
+                results[idx] = {"tool_call_id": tc["id"], "output": output}
+                i += 1
+                continue
 
-            safe_results = await asyncio.gather(
-                *[_run_safe(i) for i in safe_indices],
+            batch_start = i
+            while i < len(tool_calls):
+                batch_tool = self.toolset.get(tool_calls[i]["name"])
+                if not (batch_tool and batch_tool.is_concurrent_safe):
+                    break
+                i += 1
+
+            batch_results = await asyncio.gather(
+                *[_run_one(idx) for idx in range(batch_start, i)],
                 return_exceptions=True,
             )
-            for item in safe_results:
+            for item in batch_results:
                 if isinstance(item, Exception):
                     continue
                 idx, output = item
-                tc = tool_calls[idx]
-                results[idx] = {"tool_call_id": tc["id"], "output": output}
-
-        # Execute unsafe tools sequentially
-        for i, tc in enumerate(tool_calls):
-            if i in safe_indices:
-                continue
-            t0 = __import__("time").monotonic()
-            output = await self._execute_tool(tc["name"], tc["arguments"])
-            log_tool_execution(tc["name"], __import__("time").monotonic() - t0,
-                               len(output), output.startswith("Error"))
-            results[i] = {"tool_call_id": tc["id"], "output": output}
+                results[idx] = {"tool_call_id": tool_calls[idx]["id"], "output": output}
 
         # Add all results to context in order and fire callbacks
         for i, tc in enumerate(tool_calls):
@@ -918,7 +919,7 @@ class Engine:
         _t0 = _time.monotonic()
         tool = self.toolset.get(name)
         if not tool:
-            return f"Error: Unknown tool '{name}'"
+            return format_tool_error("unknown_tool", f"Unknown tool '{name}'")
 
         # Cache check for read-only tools
         cache_key = ""
@@ -940,7 +941,7 @@ class Engine:
 
         # Check for cancellation
         if self._cancelled:
-            return f"Error: Tool '{name}' was cancelled"
+            return format_tool_error("cancelled", f"Tool '{name}' was cancelled")
 
         timeout = getattr(tool, "timeout_seconds", 60.0)
 
@@ -951,7 +952,7 @@ class Engine:
             from ic.tools.base import validate_tool_args
             validation_error = validate_tool_args(tool.parameters, args)
             if validation_error:
-                return validation_error
+                return format_tool_error("validation", validation_error)
 
             # Execute — skip timeout wrapper for tools that block indefinitely
             if timeout is None:
@@ -963,13 +964,13 @@ class Engine:
                 )
 
             # Cache result for read-only tools
-            if cache_key and not result.startswith("Error"):
+            if cache_key and classify_tool_error(result) is None:
                 self._tool_cache[cache_key] = result
 
             return result
 
         except asyncio.TimeoutError:
-            return f"Error: Tool '{name}' timed out after {timeout}s"
+            return format_tool_error("timeout", f"Tool '{name}' timed out after {timeout}s")
         except json.JSONDecodeError as e:
             # Attempt JSON repair before giving up
             repaired = self._repair_json(arguments, name)
@@ -978,10 +979,10 @@ class Engine:
                     result = await tool.execute(**repaired)
                     return result.to_content()
                 except Exception as retry_err:
-                    return f"Error executing {name} (after JSON repair): {retry_err}"
-            return f"Error: Invalid JSON arguments: {e}"
+                    return format_tool_error("exception", f"Error executing {name} (after JSON repair): {retry_err}")
+            return format_tool_error("invalid_json", f"Invalid JSON arguments: {e}")
         except Exception as e:
-            return f"Error executing {name}: {e}"
+            return format_tool_error("exception", f"Error executing {name}: {e}")
 
     async def _run_tool_inner(self, tool: Any, name: str, args: dict) -> str:
         """Inner tool execution logic, separated for timeout wrapping.
@@ -998,13 +999,13 @@ class Engine:
                 if hasattr(tool, 'execute_stream'):
                     async for event in tool.execute_stream(**args):
                         if self._cancelled:
-                            return f"Error: Tool '{name}' was cancelled"
+                            return format_tool_error("cancelled", f"Tool '{name}' was cancelled")
 
                         from ic.tools.base import ToolCompleteEvent, ToolErrorEvent
                         if isinstance(event, ToolCompleteEvent):
                             return event.output
                         elif isinstance(event, ToolErrorEvent):
-                            return f"Error: {event.error}"
+                            return format_tool_error("tool_error", event.error)
 
                     return ""
 
@@ -1027,7 +1028,10 @@ class Engine:
                     continue
                 raise
 
-        return f"Error: Tool '{name}' failed after {max_retries + 1} attempts: {last_error}"
+        return format_tool_error(
+            "retry_exhausted",
+            f"Tool '{name}' failed after {max_retries + 1} attempts: {last_error}",
+        )
 
     @staticmethod
     def _repair_json(raw: str, tool_name: str) -> dict[str, Any] | None:

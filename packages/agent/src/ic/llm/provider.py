@@ -13,6 +13,8 @@ from openai import AsyncOpenAI
 
 from ic.config import ModelConfig
 
+DEEPSEEK_MAX_OUTPUT_TOKENS = 393_216
+
 
 @dataclass
 class Message:
@@ -52,12 +54,12 @@ class Message:
 
 
 def _clean_messages_for_api(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Strip Anthropic-specific fields from messages for OpenAI-compatible APIs.
+    """Strip provider-specific fields from messages for OpenAI-compatible APIs.
 
-    - Removes ``cache_control`` from content blocks (Anthropic prompt caching).
+    - Removes ``cache_control`` from content blocks.
     - Unwraps single-element content block arrays back to plain strings.
     - Ensures assistant ``tool_calls[].function.arguments`` is valid JSON text.
-    - Preserves ``reasoning_content`` — required by some proxies (e.g. DMXAPI)
+    - Preserves ``reasoning_content`` — required by some OpenAI-compatible APIs
       when thinking mode is enabled.
     """
     import logging
@@ -92,7 +94,7 @@ def _clean_messages_for_api(messages: list[dict[str, Any]]) -> list[dict[str, An
 
         # Escape Unicode line separators in tool call arguments — U+2028 and
         # U+2029 are valid in JavaScript strings but NOT in JSON.  Some API
-        # proxies (e.g. DMXAPI) perform strict JSON validation and reject
+        # OpenAI-compatible APIs can perform strict JSON validation and reject
         # requests containing these characters with "invalid function arguments
         # json string".
         if m.get("tool_calls"):
@@ -164,14 +166,16 @@ class LLMProvider:
         """
         raw_msgs = [m.to_dict() for m in messages]
         # Strip non-standard fields that OpenAI-compatible proxies don't understand.
-        # cache_control (Anthropic-specific) and reasoning_content (thinking models)
-        # can cause DMXAPI and similar proxies to return empty responses.
+        # cache_control and reasoning_content (thinking models)
+        # can cause some OpenAI-compatible APIs to return empty responses.
         cleaned = _clean_messages_for_api(raw_msgs)
 
         params: dict[str, Any] = {
             "model": self.config.model,
             "messages": cleaned,
-            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+            "max_tokens": self._resolve_max_tokens(
+                kwargs.get("max_tokens", self.config.max_tokens)
+            ),
             "temperature": kwargs.get("temperature", self.config.temperature),
             "stream": stream,
         }
@@ -218,6 +222,21 @@ class LLMProvider:
                 retry_params["temperature"] = 1
                 return await self._client.chat.completions.create(**retry_params)
             raise
+
+    def _resolve_max_tokens(self, requested: Any) -> int:
+        try:
+            value = int(requested)
+        except (TypeError, ValueError):
+            value = self.config.max_tokens
+
+        if self._is_deepseek():
+            return max(1, min(value, DEEPSEEK_MAX_OUTPUT_TOKENS))
+        return max(1, value)
+
+    def _is_deepseek(self) -> bool:
+        model = (self.config.model or "").lower()
+        base_url = (self.config.base_url or "").lower()
+        return model.startswith("deepseek-") or "api.deepseek.com" in base_url
 
     @staticmethod
     def _should_retry_with_temperature_one(error: Exception, params: dict[str, Any]) -> bool:

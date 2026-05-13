@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -373,14 +375,14 @@ class App:
 
     def _add_model_interactive(self):
         try:
-            model = input("  Model ID (e.g. gpt-4o, deepseek-chat): ").strip()
+            model = input("  Model ID [deepseek-v4-pro]: ").strip() or "deepseek-v4-pro"
             if not model:
                 return
             api_key = input("  API Key: ").strip()
             if not api_key:
                 self.console.print_error("API key is required.")
                 return
-            base_url = input("  Base URL (Enter for OpenAI default): ").strip()
+            base_url = input("  Base URL [https://api.deepseek.com]: ").strip() or "https://api.deepseek.com"
             timeout_input = input("  Timeout seconds [120]: ").strip()
             timeout = self.config._parse_positive_float(timeout_input, 120.0)
             name = input(f"  Short name [{model}]: ").strip() or model
@@ -402,7 +404,8 @@ class App:
             if not doc_path.exists():
                 doc = ProductDoc.create_empty(self.project.title)
                 doc.save(doc_path)
-            os.system(f'{editor} "{doc_path}"')
+            editor_args = shlex.split(editor) or ["vim"]
+            subprocess.run([*editor_args, str(doc_path)], check=False)
         elif sub == "path":
             self.console.print_info(str(doc_path))
         else:

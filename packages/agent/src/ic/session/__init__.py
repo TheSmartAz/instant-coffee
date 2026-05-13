@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -37,8 +38,26 @@ class ProjectStore:
     """
 
     def __init__(self, base_dir: Path):
-        self.base_dir = base_dir / "projects"
+        self.base_dir = (base_dir / "projects").resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    _PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+    def _validate_project_id(self, project_id: str) -> str:
+        if not isinstance(project_id, str) or not self._PROJECT_ID_RE.fullmatch(project_id):
+            raise ValueError(f"Invalid project id: {project_id!r}")
+        if project_id in {".", ".."} or "/" in project_id or "\\" in project_id:
+            raise ValueError(f"Invalid project id: {project_id!r}")
+        return project_id
+
+    def _project_path(self, project_id: str) -> Path:
+        project_id = self._validate_project_id(project_id)
+        project_path = (self.base_dir / project_id).resolve()
+        try:
+            project_path.relative_to(self.base_dir)
+        except ValueError as exc:
+            raise ValueError(f"Invalid project path: {project_id!r}") from exc
+        return project_path
 
     def create(self, title: str = "") -> Project:
         now = datetime.now().isoformat()
@@ -68,24 +87,24 @@ class ProjectStore:
         return projects
 
     def get(self, project_id: str) -> Project | None:
-        meta_path = self.base_dir / project_id / "meta.json"
+        meta_path = self._project_path(project_id) / "meta.json"
         if not meta_path.exists():
             return None
         return Project(**json.loads(meta_path.read_text()))
 
     def project_dir(self, project_id: str) -> Path:
-        return self.base_dir / project_id
+        return self._project_path(project_id)
 
     def workspace_dir(self, project_id: str) -> Path:
-        return self.base_dir / project_id / "workspace"
+        return self._project_path(project_id) / "workspace"
 
     def context_path(self, project_id: str) -> Path:
-        return self.base_dir / project_id / "context.jsonl"
+        return self._project_path(project_id) / "context.jsonl"
 
     def update_timestamp(self, project: Project):
         project.updated_at = datetime.now().isoformat()
         self._save_meta(project)
 
     def _save_meta(self, project: Project):
-        meta_path = self.base_dir / project.id / "meta.json"
+        meta_path = self._project_path(project.id) / "meta.json"
         meta_path.write_text(json.dumps(project.to_dict(), ensure_ascii=False, indent=2))

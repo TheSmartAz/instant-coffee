@@ -23,33 +23,17 @@ except ImportError:
     import tomli as tomllib
 
 
-# Known models available through DMXAPI proxy (same key, same base_url)
-DMXAPI_MODELS = [
-    ("MiniMax-M2.5", 204800),
-    ("glm-5", 202752),
-    ("kimi-k2.5", 256000),
-    ("DeepSeek-V3.2", 128000),
-    ("gpt-5-mini", 128000),
-    ("qwen3-max-2026-01-23", 131072),
-    ("gemini-3-flash-preview", 128000),
-    ("grok-code-fast-1", 128000),
-]
-
-DMXAPI_BASE_URL = "https://www.dmxapi.cn/v1"
+# Project-supported DeepSeek model.
+DEEPSEEK_MODEL = "deepseek-v4-pro"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MAX_TOKENS = 1_000_000
 
 
 # Per-model token pricing (USD per 1M tokens): (input, output)
-# Source: provider pricing pages as of 2025-06
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    # DMXAPI / Chinese models
-    "MiniMax-M2.5":                 (1.00, 4.00),
-    "kimi-k2.5":                    (2.00, 8.00),
-    "DeepSeek-V3.2":                (0.27, 1.10),
-    "gpt-5-mini":                   (1.50, 6.00),
-    "glm-5":                      (1.00, 4.00),
-    "qwen3-max-2026-01-23":         (1.60, 6.40),
-    "gemini-3-flash-preview":       (0.15, 0.60),
-    "grok-code-fast-1":             (2.00, 10.00),
+    # Pricing is not configured for this project model; keep a catalog entry so
+    # model pointer selection remains deterministic.
+    DEEPSEEK_MODEL: (0.0, 0.0),
 }
 
 
@@ -61,7 +45,7 @@ class ModelConfig:
     model: str = ""          # actual model ID sent to API; defaults to name
     api_key: str = ""
     base_url: str | None = None
-    max_tokens: int = 32768
+    max_tokens: int = DEEPSEEK_MAX_TOKENS
     temperature: float = 0.0
     timeout: float = 120.0   # timeout in seconds for API requests
 
@@ -170,20 +154,24 @@ class Config:
 
     def _apply_cascade(self, cascade: Any):
         """Apply merged CascadingConfig data to this Config."""
-        merged_models = cascade.get("models", {})
+        merged_models = {
+            name: data
+            for name, data in (cascade.get("models", {}) or {}).items()
+            if name == DEEPSEEK_MODEL
+        }
         for name, m in merged_models.items():
             self.models[name] = ModelConfig(
                 name=name,
                 model=m.get("model", ""),
                 api_key=m.get("api_key", ""),
                 base_url=m.get("base_url"),
-                max_tokens=m.get("max_tokens", 32768),
+                max_tokens=m.get("max_tokens", DEEPSEEK_MAX_TOKENS),
                 temperature=m.get("temperature", 0.0),
                 timeout=self._parse_positive_float(m.get("timeout"), 120.0),
             )
 
         self.default_model = cascade.get("default_model", "")
-        if not self.default_model and self.models:
+        if self.default_model not in self.models and self.models:
             self.default_model = next(iter(self.models))
 
         # Load model pointers
@@ -258,12 +246,14 @@ class Config:
         self.default_model = data.get("default_model", "")
 
         for name, m in data.get("models", {}).items():
+            if name != DEEPSEEK_MODEL:
+                continue
             self.models[name] = ModelConfig(
                 name=name,
                 model=m.get("model", ""),
                 api_key=m.get("api_key", ""),
                 base_url=m.get("base_url"),
-                max_tokens=m.get("max_tokens", 4096),
+                max_tokens=m.get("max_tokens", DEEPSEEK_MAX_TOKENS),
                 temperature=m.get("temperature", 0.0),
                 timeout=self._parse_positive_float(m.get("timeout"), 120.0),
             )
@@ -290,50 +280,16 @@ class Config:
         """Auto-detect models from env vars. Model-centric: each model is its own entry."""
         model_timeout = self._env_model_timeout()
 
-        # DMXAPI key → register all known DMXAPI models
-        dmx_key = (
-            os.environ.get("DMXAPI_API_KEY")
-            or os.environ.get("DMX_API_KEY")
-            or os.environ.get("DEFAULT_KEY")
-        )
-        if dmx_key:
-            base = os.environ.get("DEFAULT_BASE_URL", DMXAPI_BASE_URL)
-            for model_id, max_tok in DMXAPI_MODELS:
-                self.models[model_id] = ModelConfig(
-                    name=model_id,
-                    api_key=dmx_key,
-                    base_url=base,
-                    max_tokens=max_tok,
-                    timeout=model_timeout,
-                )
-
-        # OpenAI key → register common OpenAI models
-        if oai_key := os.environ.get("OPENAI_API_KEY"):
-            for mid in ["gpt-4o", "gpt-4o-mini", "o3-mini"]:
-                if mid not in self.models:
-                    self.models[mid] = ModelConfig(
-                        name=mid, api_key=oai_key, timeout=model_timeout
-                    )
-
-        # Anthropic key
-        if ant_key := os.environ.get("ANTHROPIC_API_KEY"):
-            for mid in ["claude-sonnet-4-20250514", "claude-haiku-4-20250514"]:
-                if mid not in self.models:
-                    self.models[mid] = ModelConfig(
-                        name=mid, api_key=ant_key,
-                        base_url="https://api.anthropic.com/v1/",
-                        timeout=model_timeout,
-                    )
-
-        # DeepSeek key
-        if ds_key := os.environ.get("DEEPSEEK_API_KEY"):
-            for mid in ["deepseek-chat", "deepseek-reasoner"]:
-                if mid not in self.models:
-                    self.models[mid] = ModelConfig(
-                        name=mid, api_key=ds_key,
-                        base_url="https://api.deepseek.com/v1",
-                        timeout=model_timeout,
-                    )
+        # DeepSeek is the only project-supported API provider.
+        ds_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DEFAULT_KEY")
+        if ds_key:
+            self.models[DEEPSEEK_MODEL] = ModelConfig(
+                name=DEEPSEEK_MODEL,
+                api_key=ds_key,
+                base_url=os.environ.get("DEFAULT_BASE_URL", DEEPSEEK_BASE_URL),
+                max_tokens=DEEPSEEK_MAX_TOKENS,
+                timeout=model_timeout,
+            )
 
         # Pick default
         if self.models and not self.default_model:
@@ -353,6 +309,11 @@ class Config:
         """Auto-select cheap models for sub/compact if not explicitly set."""
         if not self.models:
             return
+
+        for role in ("main", "sub", "compact"):
+            value = getattr(self.model_pointers, role)
+            if value and value not in self.models:
+                setattr(self.model_pointers, role, "")
 
         # main always defaults to default_model
         if not self.model_pointers.main:
@@ -472,16 +433,16 @@ def run_setup(config: Config) -> bool:
     print("  No models configured. Let's add one.")
     print()
 
-    model = input("  Model ID (e.g. gpt-4o, deepseek-chat, kimi-k2.5): ").strip()
+    model = input(f"  Model ID [{DEEPSEEK_MODEL}]: ").strip()
     if not model:
-        model = "gpt-4o"
+        model = DEEPSEEK_MODEL
 
     api_key = input("  API Key: ").strip()
     if not api_key:
         print("  API key is required.")
         return False
 
-    base_url = input("  Base URL (Enter for OpenAI default): ").strip()
+    base_url = input(f"  Base URL [{DEEPSEEK_BASE_URL}]: ").strip() or DEEPSEEK_BASE_URL
     timeout_input = input("  Timeout seconds [120]: ").strip()
     timeout = Config._parse_positive_float(timeout_input, 120.0)
 

@@ -15,6 +15,7 @@ from ic.tools.base import (
     ToolProgressEvent,
 )
 from ic.tools.shell.background import get_task_manager, BackgroundTaskManager
+from ic.tool_errors import format_tool_error
 
 
 # Dangerous command patterns that should be blocked or require confirmation
@@ -135,15 +136,21 @@ class Shell(BaseTool):
                     allowed = await allowed
                 if not allowed:
                     yield ToolCompleteEvent(
-                        output=f"Command blocked: {reason}. Command: {command}"
+                        output=format_tool_error(
+                            "policy_blocked",
+                            f"Command blocked: {reason}. Command: {command}",
+                        )
                     )
                     return
             else:
                 # No callback configured — block dangerous commands outright
                 yield ToolCompleteEvent(
-                    output=f"Command blocked for safety: {reason}.\n"
-                    f"Command: {command}\n"
-                    f"If this is intentional, run it manually in your terminal."
+                    output=format_tool_error(
+                        "policy_blocked",
+                        f"Command blocked for safety: {reason}.\n"
+                        f"Command: {command}\n"
+                        f"If this is intentional, run it manually in your terminal.",
+                    )
                 )
                 return
 
@@ -175,27 +182,27 @@ class Shell(BaseTool):
 
         elif action == "stop":
             if not task_id:
-                yield ToolCompleteEvent(output="Error: task_id required for stop action")
+                yield ToolCompleteEvent(output=format_tool_error("validation", "task_id required for stop action"))
             else:
-                if self.task_manager.stop(task_id):
+                if await self.task_manager.stop(task_id):
                     yield ToolCompleteEvent(output=f"Task {task_id} stopped.")
                 else:
-                    yield ToolCompleteEvent(output=f"Task {task_id} not found or not running.")
+                    yield ToolCompleteEvent(output=format_tool_error("not_found", f"Task {task_id} not found or not running."))
 
         elif action == "get_output":
             if not task_id:
-                yield ToolCompleteEvent(output="Error: task_id required for get_output action")
+                yield ToolCompleteEvent(output=format_tool_error("validation", "task_id required for get_output action"))
             else:
                 task = self.task_manager.get(task_id)
                 if not task:
-                    yield ToolCompleteEvent(output=f"Task {task_id} not found.")
+                    yield ToolCompleteEvent(output=format_tool_error("not_found", f"Task {task_id} not found."))
                 else:
                     yield ToolCompleteEvent(
                         output=f"Task {task_id} ({task.status.value}):\n{task.get_output_text()}"
                     )
 
         else:
-            yield ToolCompleteEvent(output=f"Unknown task_action: {action}")
+            yield ToolCompleteEvent(output=format_tool_error("validation", f"Unknown task_action: {action}"))
 
     async def _start_background_task(self, command: str):
         """Start a background task."""
@@ -236,7 +243,10 @@ class Shell(BaseTool):
                 proc.kill()
                 await proc.wait()
                 yield ToolCompleteEvent(
-                    output=f"Command timed out after {timeout}s and was killed."
+                    output=format_tool_error(
+                        "timeout",
+                        f"Command timed out after {timeout}s and was killed.",
+                    )
                 )
                 return
 
@@ -251,7 +261,10 @@ class Shell(BaseTool):
             output = "\n".join(output_parts)
 
             if proc.returncode != 0:
-                output = f"Exit code: {proc.returncode}\n{output}"
+                output = format_tool_error(
+                    "exit_code",
+                    f"Exit code: {proc.returncode}\n{output}",
+                )
 
             # Truncate very long output
             if len(output) > 30000:
@@ -261,4 +274,4 @@ class Shell(BaseTool):
             yield ToolCompleteEvent(output=output or "(no output)")
 
         except Exception as e:
-            yield ToolCompleteEvent(output=f"Error: {e}")
+            yield ToolCompleteEvent(output=format_tool_error("exception", str(e)))

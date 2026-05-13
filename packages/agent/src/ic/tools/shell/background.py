@@ -14,6 +14,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+from ic.tool_errors import format_tool_error
+
 
 class TaskStatus(Enum):
     """Status of a background task."""
@@ -38,6 +40,7 @@ class BackgroundTask:
 
     # Async process reference
     proc: asyncio.subprocess.Process | None = None
+    stop_requested: bool = False
 
     def add_output(self, line: str):
         """Add output line to buffer (with truncation)."""
@@ -129,7 +132,7 @@ class BackgroundTaskManager:
             returncode = await task.proc.wait()
             task.exit_code = returncode
 
-            if returncode == 0:
+            if returncode == 0 or task.stop_requested:
                 task.status = TaskStatus.STOPPED
                 if self.on_task_completed:
                     try:
@@ -138,6 +141,7 @@ class BackgroundTaskManager:
                         pass
             else:
                 task.status = TaskStatus.FAILED
+                task.add_output(format_tool_error("exit_code", f"Exit code {returncode}"))
                 if self.on_task_failed:
                     try:
                         self.on_task_failed(task.id, f"Exit code {returncode}: {task.get_output_text()[-500:]}")
@@ -145,7 +149,7 @@ class BackgroundTaskManager:
                         pass
 
         except Exception as e:
-            task.add_output(f"Task error: {e}")
+            task.add_output(format_tool_error("exception", f"Task error: {e}"))
             task.status = TaskStatus.FAILED
             if self.on_task_failed:
                 try:
@@ -155,14 +159,29 @@ class BackgroundTaskManager:
         finally:
             task.proc = None
 
-    def stop(self, task_id: str) -> bool:
+    async def stop(self, task_id: str, timeout: float = 5.0) -> bool:
         """Stop a running task. Returns True if successful."""
         task = self._tasks.get(task_id)
         if not task:
             return False
 
         if task.proc and task.status == TaskStatus.RUNNING:
-            task.proc.terminate()
+            task.stop_requested = True
+            try:
+                task.proc.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(task.proc.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                try:
+                    task.proc.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(task.proc.wait(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    pass
             task.status = TaskStatus.STOPPED
             return True
 

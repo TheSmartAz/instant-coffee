@@ -62,56 +62,17 @@ class ConfigLayer:
             except ValueError:
                 pass
 
-        # DMXAPI key → register all known DMXAPI models
-        dmx_key = (
-            os.getenv("DMXAPI_API_KEY")
-            or os.getenv("DMX_API_KEY")
-            or os.getenv("DEFAULT_KEY")
-        )
-        if dmx_key:
-            base = os.getenv("DEFAULT_BASE_URL", "https://www.dmxapi.cn/v1")
+        # DeepSeek is the only project-supported provider.
+        if api_key := (os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEFAULT_KEY")):
             models = data.setdefault("models", {})
-            for mid in [
-                "kimi-k2.5", "DeepSeek-V3.2", "gpt-5-mini", "glm-5",
-                "qwen3-max-2026-01-23", "MiniMax-M2.1",
-                "hunyuan-2.0-instruct-20251111", "gemini-3-flash-preview",
-                "grok-code-fast-1",
-            ]:
-                model_cfg = {"api_key": dmx_key, "base_url": base}
-                if model_timeout is not None:
-                    model_cfg["timeout"] = model_timeout
-                models[mid] = model_cfg
-
-        # Model configs from env
-        if api_key := os.getenv("ANTHROPIC_API_KEY"):
-            models = data.setdefault("models", {})
-            for mid in ["claude-sonnet-4-20250514", "claude-haiku-4-20250514"]:
-                model_cfg = {
-                    "api_key": api_key,
-                    "base_url": "https://api.anthropic.com/v1/",
-                }
-                if model_timeout is not None:
-                    model_cfg["timeout"] = model_timeout
-                models[mid] = model_cfg
-
-        if api_key := os.getenv("OPENAI_API_KEY"):
-            models = data.setdefault("models", {})
-            for mid in ["gpt-4o", "gpt-4o-mini", "o3-mini"]:
-                model_cfg = {"api_key": api_key}
-                if model_timeout is not None:
-                    model_cfg["timeout"] = model_timeout
-                models[mid] = model_cfg
-
-        if api_key := os.getenv("DEEPSEEK_API_KEY"):
-            models = data.setdefault("models", {})
-            for mid in ["deepseek-chat", "deepseek-reasoner"]:
-                model_cfg = {
-                    "api_key": api_key,
-                    "base_url": "https://api.deepseek.com/v1",
-                }
-                if model_timeout is not None:
-                    model_cfg["timeout"] = model_timeout
-                models[mid] = model_cfg
+            model_cfg = {
+                "api_key": api_key,
+                "base_url": os.getenv("DEFAULT_BASE_URL", "https://api.deepseek.com"),
+                "max_tokens": 1_000_000,
+            }
+            if model_timeout is not None:
+                model_cfg["timeout"] = model_timeout
+            models["deepseek-v4-pro"] = model_cfg
 
         if default_model := (os.getenv("MODEL") or os.getenv("DEFAULT_MODEL")):
             data["default_model"] = default_model

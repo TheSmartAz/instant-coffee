@@ -506,6 +506,8 @@ def _merge_consecutive_user_messages(msgs: list[Message]) -> list[Message]:
             and result[-1].role == "user"
             and isinstance(m.content, str)
             and isinstance(result[-1].content, str)
+            and not m.cache_control
+            and not result[-1].cache_control
         ):
             result[-1] = Message(
                 role="user",
