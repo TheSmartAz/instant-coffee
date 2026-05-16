@@ -21,6 +21,48 @@ _PYTEST_FAILURE_RE = re.compile(r"^(?P<file>[^:\s]+\.py):(?P<line>\d+):")
 _TS_FAILURE_RE = re.compile(r"(?P<file>[^()\s]+\.(?:ts|tsx|js|jsx))\((?P<line>\d+),(?P<column>\d+)\):\s*(?P<message>.+)")
 _ESLINT_FAILURE_RE = re.compile(r"^\s*(?P<line>\d+):(?P<column>\d+)\s+(?P<severity>error|warning)\s+(?P<message>.+)$")
 
+_FIX_HINTS = {
+    "pytest": "Fix the failing Python test or the backend behavior it protects, then rerun backend tests.",
+    "typescript": "Fix the TypeScript type or contract mismatch, then rerun the web build.",
+    "eslint": "Fix the lint rule violation without weakening lint configuration, then rerun web lint.",
+    "playwright": "Fix the browser-visible behavior or selector failure, then rerun the Playwright check.",
+    "build": "Fix the build or bundling failure, then rerun the build command.",
+    "runner": "Fix the verification runner or environment error before retrying verification.",
+    "verification": "Inspect the command summary and fix the failing verification evidence.",
+}
+
+
+def route_failure(*, command: str = "", source: str = "", output: str = "") -> dict[str, str]:
+    source = source.lower().strip()
+    command = command.lower().strip()
+    output_lower = output.lower()
+    if source == "pytest" or "pytest" in command:
+        route = "pytest"
+        kind = "backend_test"
+    elif source == "typescript" or "tsc" in output_lower or "error ts" in output_lower:
+        route = "typescript"
+        kind = "typecheck"
+    elif source == "eslint" or "lint" in command:
+        route = "eslint"
+        kind = "lint"
+    elif "playwright" in command or source == "playwright":
+        route = "playwright"
+        kind = "browser_e2e"
+    elif "build" in command:
+        route = "build"
+        kind = "build"
+    elif source == "runner":
+        route = "runner"
+        kind = "runner"
+    else:
+        route = "verification"
+        kind = "verification"
+    return {
+        "route": route,
+        "kind": kind,
+        "fix_hint": _FIX_HINTS[route],
+    }
+
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -44,17 +86,20 @@ def parse_failures(command: str, output: str) -> list[dict[str, Any]]:
             continue
         pytest_match = _PYTEST_FAILURE_RE.search(stripped)
         if pytest_match:
+            routed = route_failure(command=command, source="pytest", output=stripped)
             failures.append(
                 {
                     "file": pytest_match.group("file"),
                     "line": int(pytest_match.group("line")),
                     "message": stripped,
                     "source": "pytest",
+                    **routed,
                 }
             )
             continue
         ts_match = _TS_FAILURE_RE.search(stripped)
         if ts_match:
+            routed = route_failure(command=command, source="typescript", output=stripped)
             failures.append(
                 {
                     "file": ts_match.group("file"),
@@ -62,11 +107,13 @@ def parse_failures(command: str, output: str) -> list[dict[str, Any]]:
                     "column": int(ts_match.group("column")),
                     "message": ts_match.group("message"),
                     "source": "typescript",
+                    **routed,
                 }
             )
             continue
         eslint_match = _ESLINT_FAILURE_RE.search(line)
         if eslint_match and current_file:
+            routed = route_failure(command=command, source="eslint", output=line)
             failures.append(
                 {
                     "file": current_file,
@@ -75,10 +122,17 @@ def parse_failures(command: str, output: str) -> list[dict[str, Any]]:
                     "severity": eslint_match.group("severity"),
                     "message": eslint_match.group("message").strip(),
                     "source": "eslint",
+                    **routed,
                 }
             )
     if not failures and output and "failed" in output.lower():
-        failures.append({"message": output.splitlines()[-1][:500], "source": "command"})
+        failures.append(
+            {
+                "message": output.splitlines()[-1][:500],
+                "source": "command",
+                **route_failure(command=command, output=output),
+            }
+        )
     return failures[:25]
 
 
@@ -170,7 +224,7 @@ class VerificationRunner:
                 status="failed",
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 output_summary=f"{type(exc).__name__}: {exc}",
-                failures=[{"message": str(exc), "source": "runner"}],
+                failures=[{"message": str(exc), "source": "runner", **route_failure(command=command, source="runner")}],
             )
 
         stdout = stdout_b.decode("utf-8", errors="replace")
@@ -188,4 +242,4 @@ class VerificationRunner:
         )
 
 
-__all__ = ["VerificationRunner", "parse_failures"]
+__all__ = ["VerificationRunner", "parse_failures", "route_failure"]

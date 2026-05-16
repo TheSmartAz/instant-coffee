@@ -16,6 +16,7 @@ from ..engine.orchestrator import EngineOrchestrator
 from ..engine.run_coordinator import RunCoordinator, RunCoordinatorPhases, RunCoordinatorResult
 from ..schemas.orchestrator_response import OrchestratorResponse
 from ..config import get_settings
+from ..db.models import Page
 from ..db.models import Session as SessionModel
 from ..db.utils import get_db
 from ..db.database import get_database
@@ -229,6 +230,26 @@ def _main_run_review_placeholder(session_id: str) -> dict[str, object]:
     }
 
 
+async def _build_session_phase(db: DbSession, session: SessionModel, event_emitter: EventEmitter | None) -> dict[str, object]:
+    if not _session_has_pages(db, session.id):
+        return _main_run_build_placeholder(session.id)
+    build_info = await BuildRunner(
+        db,
+        event_emitter=event_emitter,
+    ).build_session(session.id)
+    return build_info.model_dump(mode="json")
+
+
+async def _review_session_phase(db: DbSession, session: SessionModel) -> dict[str, object]:
+    if not _session_has_pages(db, session.id):
+        return _main_run_review_placeholder(session.id)
+    return ReviewService(db).review_session(session.id)
+
+
+def _session_has_pages(db: DbSession, session_id: str) -> bool:
+    return db.query(Page.id).filter(Page.session_id == session_id).first() is not None
+
+
 async def _run_orchestrator_stream(
     *,
     orchestrator: object,
@@ -308,8 +329,8 @@ async def _run_orchestrator_stream(
     try:
         if run_context is not None and run_context.adapter_active and run_context.run_id:
             phases = RunCoordinatorPhases(
-                build=lambda _context: _main_run_build_placeholder(orchestrator.session.id),
-                review=lambda _context: _main_run_review_placeholder(orchestrator.session.id),
+                build=lambda _context: _build_session_phase(orchestrator.db, orchestrator.session, getattr(orchestrator, "event_emitter", None)),
+                review=lambda _context: _review_session_phase(orchestrator.db, orchestrator.session),
                 fix=_run_fix_phase,
                 implement=lambda _context: _run_implement_phase(),
             )
@@ -1355,10 +1376,10 @@ async def chat(
                 return final
 
             async def _build_phase(_context: dict[str, object]) -> object:
-                return _main_run_build_placeholder(session.id)
+                return await _build_session_phase(db, session, emitter)
 
             async def _review_phase(_context: dict[str, object]) -> object:
-                return _main_run_review_placeholder(session.id)
+                return await _review_session_phase(db, session)
 
             async def _fix_phase(context: dict[str, object]) -> dict[str, object]:
                 nonlocal final, assistant_message

@@ -414,6 +414,9 @@ def test_runs_api_runs_verification_and_persists_result(tmp_path, monkeypatch) -
                                 "line": 42,
                                 "message": "AssertionError",
                                 "source": "pytest",
+                                "route": "pytest",
+                                "kind": "backend_test",
+                                "fix_hint": "Fix the failing Python test or the backend behavior it protects, then rerun backend tests.",
                             }
                         ],
                     }
@@ -450,6 +453,9 @@ def test_runs_api_runs_verification_and_persists_result(tmp_path, monkeypatch) -
     assert response.json()["verification"]["passed"] is False
     assert last_run["commands"][0]["output_summary"] == ""
     assert last_run["commands"][0]["failures"][0]["file"] == "app/api/runs.py"
+    assert last_run["commands"][0]["failures"][0]["route"] == "pytest"
+    assert last_run["commands"][0]["failures"][0]["kind"] == "backend_test"
+    assert "rerun backend tests" in last_run["commands"][0]["failures"][0]["fix_hint"]
     assert "message" not in last_run["commands"][0]["failures"][0]
     audit = response.json()["verification"]["audit_trail"]
     audit_types = [event["type"] for event in audit]
@@ -465,6 +471,7 @@ def test_runs_api_runs_verification_and_persists_result(tmp_path, monkeypatch) -
     ]
     assert actions[-1]["category"] == "shell"
     assert actions[-1]["command"] == "PYTHONPATH=.:../agent/src python -m pytest -q"
+    assert actions[-1]["risk_flags"] == ["failure_route:pytest"]
     assert "AssertionError" not in str(actions)
     assert detail.json()["verification"]["last_run"]["risk_flags"] == ["verification_failed"]
 
@@ -534,6 +541,159 @@ def test_runs_api_runs_visual_verification_when_build_dist_exists(tmp_path, monk
     assert "Visual quality score: 95/100." in payload["verification"]["evidence"]
     assert payload["artifacts"]["visual_verification"]["quality_score"] == 95
     assert payload["verification"]["audit_trail"][-1]["type"] == "visual_verification_completed"
+
+
+def test_runs_api_dogfood_verification_failure_auto_fix_and_gate_acceptance(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    class SequencedVerificationRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run_profile(self, profile):
+            from app.schemas.run import VerificationRunResult
+
+            assert profile["recommended_commands"]
+            self.calls += 1
+            if self.calls == 1:
+                return VerificationRunResult(
+                    status="failed",
+                    passed=False,
+                    risk_flags=["verification_failed"],
+                    commands=[
+                        {
+                            "name": "backend targeted tests",
+                            "command": "PYTHONPATH=.:../agent/src python -m pytest -q",
+                            "scope": "backend",
+                            "status": "failed",
+                            "exit_code": 1,
+                            "duration_ms": 12,
+                            "output_summary": "app/services/review.py:88: AssertionError: leaked raw failure",
+                            "failures": [
+                                {
+                                    "file": "app/services/review.py",
+                                    "line": 88,
+                                    "message": "AssertionError: leaked raw failure",
+                                    "source": "pytest",
+                                }
+                            ],
+                        }
+                    ],
+                )
+            return VerificationRunResult(
+                status="passed",
+                passed=True,
+                risk_flags=[],
+                commands=[
+                    {
+                        "name": "backend targeted tests",
+                        "command": "PYTHONPATH=.:../agent/src python -m pytest -q",
+                        "scope": "backend",
+                        "status": "passed",
+                        "exit_code": 0,
+                        "duration_ms": 9,
+                        "output_summary": "1 passed",
+                        "failures": [],
+                    }
+                ],
+            )
+
+    verification_runner = SequencedVerificationRunner()
+
+    async def fake_execute_verification_fix(*, db, run, prompt):
+        assert "app/services/review.py:88" in prompt
+        assert "leaked raw failure" in prompt
+        return {"message": "fixed leaked raw failure"}
+
+    worktree_snapshots = [
+        set(),
+        {"packages/backend/app/services/review.py"},
+    ]
+
+    monkeypatch.setattr("app.api.runs.VerificationRunner", lambda: verification_runner)
+    monkeypatch.setattr("app.api.runs._execute_verification_fix", fake_execute_verification_fix)
+    monkeypatch.setattr("app.api.runs.capture_worktree_files", lambda: worktree_snapshots.pop(0))
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="dogfood verification fix",
+            metrics={
+                "coordinator": {
+                    "artifacts": {
+                        "build": {"status": "success", "pages": ["index.html"]},
+                        "review": {
+                            "verdict": "pass",
+                            "issues": [],
+                            "summary": {"error_count": 0, "warning_count": 0},
+                        },
+                    }
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        failed = client.post(
+            f"/api/runs/{run_id}/verification",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        fixed = client.post(
+            f"/api/runs/{run_id}/fix-verification",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert failed.status_code == 200
+    failed_verification = failed.json()["verification"]
+    assert failed_verification["status"] == "failed"
+    assert failed_verification["last_run"]["commands"][0]["failures"][0]["file"] == "app/services/review.py"
+    assert failed_verification["last_run"]["commands"][0]["output_summary"] == ""
+    assert "leaked raw failure" not in str(failed_verification["action_audit_trail"])
+
+    assert fixed.status_code == 200
+    verification = fixed.json()["verification"]
+    assert verification["status"] == "passed"
+    assert verification["last_run"]["status"] == "passed"
+    assert verification["fix_attempts"][0]["status"] == "passed"
+    assert verification["fix_attempts"][0]["prompt"] == ""
+    assert verification["fix_attempts"][0]["engine"] is None
+    assert verification["fix_attempts"][0]["change_summary"] == {
+        "status": "captured",
+        "changed_files": ["packages/backend/app/services/review.py"],
+        "file_count": 1,
+        "risk_level": "medium",
+        "risk_flags": ["application_code_changed"],
+        "verification_status": "passed",
+        "captured_at": verification["fix_attempts"][0]["change_summary"]["captured_at"],
+    }
+    assert verification["fix_attempts"][0]["gate"]["status"] == "accepted"
+    assert verification["fix_attempts"][0]["gate"]["decision"] == "auto_accepted"
+    assert verification["fix_attempts"][0]["gate"]["approved"] is True
+    assert [event["type"] for event in verification["audit_trail"]] == [
+        "verification_started",
+        "verification_completed",
+        "verification_fix_started",
+        "verification_fix_completed",
+    ]
+    assert [event["type"] for event in verification["action_audit_trail"]] == [
+        "verification_run_started",
+        "verification_command",
+        "verification_fix_prompt",
+        "verification_fix_started",
+        "verification_command",
+        "verification_fix_change_summary",
+        "verification_fix_gate",
+        "verification_fix_completed",
+    ]
+    assert "leaked raw failure" not in str(verification["action_audit_trail"])
+    assert "fixed leaked raw failure" not in str(verification)
 
 
 def test_runs_api_fix_verification_records_attempt_and_reruns(tmp_path, monkeypatch) -> None:
@@ -645,6 +805,8 @@ def test_runs_api_fix_verification_records_attempt_and_reruns(tmp_path, monkeypa
     ]
     assert verification["fix_attempts"][0]["change_summary"]["risk_level"] == "medium"
     assert verification["fix_attempts"][0]["change_summary"]["verification_status"] == "passed"
+    assert verification["fix_attempts"][0]["gate"]["status"] == "accepted"
+    assert verification["fix_attempts"][0]["gate"]["decision"] == "auto_accepted"
     assert "diff" not in verification["fix_attempts"][0]["change_summary"]
     actions = verification["action_audit_trail"]
     assert [event["type"] for event in actions] == [
@@ -652,12 +814,15 @@ def test_runs_api_fix_verification_records_attempt_and_reruns(tmp_path, monkeypa
         "verification_fix_started",
         "verification_command",
         "verification_fix_change_summary",
+        "verification_fix_gate",
         "verification_fix_completed",
     ]
     assert actions[0]["category"] == "agent_prompt"
     assert actions[0]["summary"] == "Prepared automatic fix prompt with 1 failure item(s)."
-    assert actions[-2]["category"] == "edit"
-    assert actions[-2]["file_count"] == 1
+    assert actions[-3]["category"] == "edit"
+    assert actions[-3]["file_count"] == 1
+    assert actions[-2]["category"] == "gate"
+    assert actions[-2]["status"] == "accepted"
     assert "app/api/runs.py:42" not in str(actions)
     assert "fixed verification failure" not in str(actions)
     assert [event["type"] for event in verification["audit_trail"]] == [
@@ -665,6 +830,195 @@ def test_runs_api_fix_verification_records_attempt_and_reruns(tmp_path, monkeypa
         "verification_fix_completed",
     ]
     assert detail.json()["fix_attempts"] == 1
+
+
+def test_runs_api_fix_verification_blocks_high_risk_gate_and_allows_admin_resolution(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    class FakeVerificationRunner:
+        async def run_profile(self, profile):
+            from app.schemas.run import VerificationRunResult
+
+            return VerificationRunResult(status="passed", passed=True, commands=[])
+
+    async def fake_execute_verification_fix(*, db, run, prompt):
+        return {"message": "fixed sensitive settings"}
+
+    worktree_snapshots = [
+        set(),
+        {"packages/backend/app/api/auth.py"},
+    ]
+    monkeypatch.setattr("app.api.runs.VerificationRunner", lambda: FakeVerificationRunner())
+    monkeypatch.setattr("app.api.runs._execute_verification_fix", fake_execute_verification_fix)
+    monkeypatch.setattr("app.api.runs.capture_worktree_files", lambda: worktree_snapshots.pop(0))
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build",
+            metrics={
+                "coordinator": {
+                    "artifacts": {
+                        "verification_run": {
+                            "status": "failed",
+                            "passed": False,
+                            "commands": [],
+                        },
+                    }
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        fix_response = client.post(
+            f"/api/runs/{run_id}/fix-verification",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        blocked_resolution = client.post(
+            f"/api/runs/{run_id}/fix-verification/1/gate",
+            json={"approved": True},
+        )
+        resolved = client.post(
+            f"/api/runs/{run_id}/fix-verification/1/gate",
+            json={"approved": True},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert fix_response.status_code == 200
+    attempt = fix_response.json()["verification"]["fix_attempts"][0]
+    assert attempt["gate"]["status"] == "blocked"
+    assert attempt["gate"]["decision"] == "requires_review"
+    assert "high_risk_change" in attempt["gate"]["reasons"]
+    assert "sensitive_files_changed" in attempt["gate"]["reasons"]
+    assert attempt["gate"]["reviewer"]["source"] == "deterministic_reviewer"
+    assert attempt["gate"]["reviewer"]["recommendation"] == "review_required"
+    assert "manual review" in attempt["gate"]["reviewer"]["summary"]
+    assert blocked_resolution.status_code == 401
+    assert resolved.status_code == 200
+    resolved_attempt = resolved.json()["verification"]["fix_attempts"][0]
+    assert resolved_attempt["gate"]["status"] == "accepted"
+    assert resolved_attempt["gate"]["decision"] == "manual_approved"
+    assert resolved_attempt["gate"]["approved"] is True
+    assert resolved_attempt["gate"]["approved_at"]
+    assert resolved.json()["verification"]["action_audit_trail"][-1]["type"] == "verification_fix_gate_resolved"
+
+
+def test_runs_api_fix_gate_review_endpoint_refreshes_reviewer_recommendation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build",
+            metrics={
+                "coordinator": {
+                    "artifacts": {
+                        "verification_fix_attempts": [
+                            {
+                                "attempt": 1,
+                                "status": "failed",
+                                "prompt": "secret prompt",
+                                "failures": [],
+                                "verification": {"status": "failed", "passed": False, "commands": []},
+                                "change_summary": {
+                                    "status": "captured",
+                                    "changed_files": ["packages/backend/app/api/runs.py"],
+                                    "file_count": 1,
+                                    "risk_level": "medium",
+                                    "risk_flags": ["verification_not_passing"],
+                                    "verification_status": "failed",
+                                },
+                                "gate": {
+                                    "status": "blocked",
+                                    "decision": "requires_review",
+                                    "reasons": ["verification_not_passing"],
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        blocked = client.post(f"/api/runs/{run_id}/fix-verification/1/gate/review")
+        response = client.post(
+            f"/api/runs/{run_id}/fix-verification/1/gate/review",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert blocked.status_code == 401
+    assert response.status_code == 200
+    gate = response.json()["verification"]["fix_attempts"][0]["gate"]
+    assert gate["reviewer"]["recommendation"] == "reject"
+    assert "verification passes" in gate["reviewer"]["summary"]
+    assert "secret prompt" not in str(gate["reviewer"])
+    assert response.json()["verification"]["action_audit_trail"][-1]["type"] == "verification_fix_gate_reviewed"
+
+
+def test_runs_api_fix_gate_resolution_rejects_already_resolved_gate(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    with get_db() as session:
+        session.add(
+            SessionRun(
+                id=run_id,
+                session_id=session_id,
+                trigger_source="chat",
+                status="completed",
+                input_message="build",
+                metrics={
+                    "coordinator": {
+                        "artifacts": {
+                            "verification_fix_attempts": [
+                                {
+                                    "attempt": 1,
+                                    "status": "passed",
+                                    "prompt": "",
+                                    "failures": [],
+                                    "gate": {
+                                        "status": "accepted",
+                                        "decision": "manual_approved",
+                                        "reasons": ["high_risk_change"],
+                                        "approved": True,
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                },
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run_id}/fix-verification/1/gate",
+            json={"approved": False},
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Verification fix gate is already resolved"
 
 
 def test_runs_api_fix_verification_persists_error_attempt(tmp_path, monkeypatch) -> None:

@@ -37,7 +37,11 @@ def test_build_verification_fix_prompt_includes_failures_and_commands() -> None:
 
     assert failures[0]["command"] == "PYTHONPATH=.:../agent/src python -m pytest -q"
     assert failures[0]["scope"] == "backend"
+    assert failures[0]["route"] == "pytest"
+    assert failures[0]["kind"] == "backend_test"
     assert "run-123" in prompt
+    assert "Failure routing:" in prompt
+    assert "route=pytest kind=backend_test count=1" in prompt
     assert "app/api/runs.py:42" in prompt
     assert "AssertionError" in prompt
     assert "PYTHONPATH=.:../agent/src python -m pytest -q" in prompt

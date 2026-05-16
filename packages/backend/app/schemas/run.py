@@ -110,6 +110,18 @@ class VerificationChangeSummary(BaseModel):
     captured_at: Optional[str] = None
 
 
+class VerificationFixGate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = "pending"
+    decision: str = "pending"
+    reasons: list[str] = Field(default_factory=list)
+    evaluated_at: Optional[str] = None
+    approved: Optional[bool] = None
+    approved_at: Optional[str] = None
+    reviewer: Optional[dict[str, Any]] = None
+
+
 class VerificationFixAttempt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -120,6 +132,7 @@ class VerificationFixAttempt(BaseModel):
     engine: Optional[dict[str, Any]] = None
     verification: Optional[VerificationRunResult] = None
     change_summary: Optional[VerificationChangeSummary] = None
+    gate: Optional[VerificationFixGate] = None
     error: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
@@ -232,9 +245,16 @@ class RunApprovalRequest(BaseModel):
     approved: bool
 
 
+class RunFixGateApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool
+
+
 __all__ = [
     "RunApprovalRequest",
     "RunCreate",
+    "RunFixGateApprovalRequest",
     "RunListResponse",
     "RunPhase",
     "RunResponse",
@@ -245,6 +265,7 @@ __all__ = [
     "RunVerification",
     "RunActionAuditEvent",
     "VerificationFixAttempt",
+    "VerificationFixGate",
     "VerificationChangeSummary",
     "VerificationAuditEvent",
     "VerificationCommandResult",

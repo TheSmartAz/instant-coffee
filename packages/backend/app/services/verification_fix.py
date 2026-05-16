@@ -5,6 +5,7 @@ import inspect
 from typing import Any, Awaitable, Callable
 
 from ..schemas.run import VerificationFixAttempt, VerificationRunResult
+from .verification_runner import route_failure
 
 
 FixExecutor = Callable[[str], Awaitable[dict[str, Any] | None]]
@@ -25,8 +26,20 @@ def collect_verification_failures(result: VerificationRunResult | None) -> list[
             payload.setdefault("command", command.command)
             payload.setdefault("scope", command.scope)
             payload.setdefault("check", command.name)
+            payload.update(
+                {
+                    key: value
+                    for key, value in route_failure(
+                        command=command.command,
+                        source=str(payload.get("source") or ""),
+                        output=str(payload.get("message") or command.output_summary),
+                    ).items()
+                    if key not in payload
+                }
+            )
             failures.append(payload)
         if command.status != "passed" and not command.failures:
+            routed = route_failure(command=command.command, output=command.output_summary)
             failures.append(
                 {
                     "command": command.command,
@@ -34,6 +47,7 @@ def collect_verification_failures(result: VerificationRunResult | None) -> list[
                     "check": command.name,
                     "message": command.output_summary[:1000],
                     "source": "verification",
+                    **routed,
                 }
             )
     return failures[:25]
@@ -47,10 +61,28 @@ def build_verification_fix_prompt(result: VerificationRunResult, *, run_id: str)
         "Do not ask clarification questions. Make the smallest code changes needed and preserve existing behavior.\n\n"
         f"Run ID: {run_id}\n"
         f"Verification status: {result.status}\n\n"
+        "Failure routing:\n"
+        f"{_format_failure_routes(failures)}\n\n"
         "Failures:\n"
         f"{_format_failures(failures)}\n\n"
         "Verification commands that must pass:\n"
         f"{_format_commands(result)}\n"
+    )
+
+
+def _format_failure_routes(failures: list[dict[str, Any]]) -> str:
+    if not failures:
+        return "- route=verification kind=verification count=0 hint=Inspect command output summaries."
+    counts: dict[tuple[str, str, str], int] = {}
+    for failure in failures:
+        route = str(failure.get("route") or "verification")
+        kind = str(failure.get("kind") or "verification")
+        hint = str(failure.get("fix_hint") or "Inspect the command summary and fix the failing verification evidence.")
+        key = (route, kind, hint)
+        counts[key] = counts.get(key, 0) + 1
+    return "\n".join(
+        f"- route={route} kind={kind} count={count} hint={hint}"
+        for (route, kind, hint), count in sorted(counts.items())
     )
 
 
@@ -64,8 +96,9 @@ def _format_failures(failures: list[dict[str, Any]]) -> str:
             location = f"{location}:{failure['line']}" if location else f"line {failure['line']}"
         message = str(failure.get("message") or failure.get("source") or "verification failure").strip()
         command = str(failure.get("command") or "").strip()
+        route = str(failure.get("route") or "verification").strip()
         prefix = f"- {location}: " if location else "- "
-        suffix = f" [{command}]" if command else ""
+        suffix = f" [{route}; {command}]" if command else f" [{route}]"
         lines.append(f"{prefix}{message}{suffix}")
     return "\n".join(lines)
 

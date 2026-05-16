@@ -10,6 +10,7 @@ from typing import AsyncGenerator, Generator, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.orm import Session as DbSession
 
 from ..config import get_settings
@@ -25,6 +26,7 @@ from ..schemas.run import (
     RunApprovalRequest,
     RunCreate,
     RunContextEvidence,
+    RunFixGateApprovalRequest,
     RunListResponse,
     RunResponse,
     RunResumeRequest,
@@ -32,7 +34,9 @@ from ..schemas.run import (
     RunVerification,
     RunActionAuditEvent,
     VerificationAuditEvent,
+    VerificationChangeSummary,
     VerificationCommandResult,
+    VerificationFixGate,
     VerificationFixAttempt,
     VerificationRunResult,
     VerificationCheck,
@@ -113,7 +117,7 @@ def _public_dict(value: dict, allowed_keys: set[str]) -> dict:
 def _redact_failure(failure: dict) -> dict:
     return {
         key: failure[key]
-        for key in ("file", "line", "source", "scope", "check")
+        for key in ("file", "line", "column", "severity", "source", "scope", "check", "route", "kind", "fix_hint")
         if key in failure
     }
 
@@ -152,6 +156,7 @@ def _redact_fix_attempt(attempt: VerificationFixAttempt) -> VerificationFixAttem
         engine=None,
         verification=_redact_verification_run(attempt.verification),
         change_summary=attempt.change_summary,
+        gate=attempt.gate,
         error=attempt.error,
         started_at=attempt.started_at,
         completed_at=attempt.completed_at,
@@ -765,6 +770,13 @@ def _append_action_audit(
 
 
 def _verification_command_action(command: VerificationCommandResult) -> dict:
+    failure_routes = sorted(
+        {
+            str(failure.get("route"))
+            for failure in command.failures
+            if isinstance(failure, dict) and failure.get("route")
+        }
+    )
     return {
         "type": "verification_command",
         "category": "shell",
@@ -774,12 +786,107 @@ def _verification_command_action(command: VerificationCommandResult) -> dict:
         "scope": command.scope,
         "exit_code": command.exit_code,
         "duration_ms": command.duration_ms,
+        "risk_flags": [f"failure_route:{route}" for route in failure_routes],
     }
 
 
 def _append_verification_command_actions(*, artifacts: dict, result: VerificationRunResult) -> None:
     for command in result.commands:
         _append_action_audit(artifacts=artifacts, event=_verification_command_action(command))
+
+
+def _evaluate_fix_gate(
+    *,
+    attempt: VerificationFixAttempt,
+    change_summary: VerificationChangeSummary | None,
+) -> VerificationFixGate:
+    reasons: list[str] = []
+    verification_status = (
+        attempt.verification.status
+        if attempt.verification is not None
+        else change_summary.verification_status
+        if change_summary is not None
+        else attempt.status
+    )
+    if verification_status != "passed" or attempt.status != "passed":
+        reasons.append("verification_not_passing")
+    if change_summary is None:
+        reasons.append("change_summary_missing")
+    else:
+        if change_summary.risk_level == "high":
+            reasons.append("high_risk_change")
+        sensitive_flags = {"sensitive_files_changed", "verification_not_passing"}
+        reasons.extend(flag for flag in change_summary.risk_flags if flag in sensitive_flags)
+    reasons = sorted(set(reasons))
+    blocked = bool(reasons)
+    gate = VerificationFixGate(
+        status="blocked" if blocked else "accepted",
+        decision="requires_review" if blocked else "auto_accepted",
+        reasons=reasons,
+        evaluated_at=_utc_iso(),
+        approved=False if blocked else True,
+    )
+    if blocked:
+        gate.reviewer = _build_fix_gate_review(
+            gate=gate,
+            change_summary=change_summary,
+            verification=attempt.verification,
+        )
+    return gate
+
+
+def _build_fix_gate_review(
+    *,
+    gate: VerificationFixGate,
+    change_summary: VerificationChangeSummary | None,
+    verification: VerificationRunResult | None,
+) -> dict:
+    changed_files = change_summary.changed_files if change_summary is not None else []
+    verification_status = verification.status if verification is not None else None
+    reasons = sorted(set(gate.reasons))
+    recommendation = "reject" if "verification_not_passing" in reasons else "review_required"
+    if "high_risk_change" in reasons or "sensitive_files_changed" in reasons:
+        recommendation = "review_required"
+    checklist = [
+        "Inspect changed files before approval.",
+        "Confirm the verification rerun result is current.",
+    ]
+    if any(reason in reasons for reason in ("high_risk_change", "sensitive_files_changed")):
+        checklist.append("Review sensitive/auth/config changes with extra scrutiny.")
+    if "verification_not_passing" in reasons:
+        checklist.append("Do not approve until verification passes.")
+    return {
+        "source": "deterministic_reviewer",
+        "recommendation": recommendation,
+        "summary": _fix_gate_review_summary(
+            reasons=reasons,
+            changed_files=changed_files,
+            verification_status=verification_status,
+            risk_level=change_summary.risk_level if change_summary is not None else None,
+        ),
+        "reasons": reasons,
+        "checklist": checklist,
+        "changed_files": changed_files[:10],
+        "verification_status": verification_status,
+        "reviewed_at": _utc_iso(),
+    }
+
+
+def _fix_gate_review_summary(
+    *,
+    reasons: list[str],
+    changed_files: list[str],
+    verification_status: str | None,
+    risk_level: str | None,
+) -> str:
+    if "verification_not_passing" in reasons:
+        return "Reviewer recommends rejecting until verification passes."
+    if "high_risk_change" in reasons or "sensitive_files_changed" in reasons:
+        return (
+            f"Reviewer requires manual review for {risk_level or 'unknown'} risk changes "
+            f"across {len(changed_files)} file(s)."
+        )
+    return f"Reviewer requires manual review before accepting {len(changed_files)} changed file(s)."
 
 
 def _mark_stale_running_verification_fixes(artifacts: dict) -> bool:
@@ -1018,6 +1125,7 @@ async def run_verification(
     coordinator["artifacts"] = artifacts
     metrics["coordinator"] = coordinator
     run.metrics = metrics
+    flag_modified(run, "metrics")
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -1087,6 +1195,7 @@ async def run_verification(
     coordinator["artifacts"] = artifacts
     metrics["coordinator"] = coordinator
     run.metrics = metrics
+    flag_modified(run, "metrics")
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -1239,6 +1348,7 @@ async def fix_verification(
         after=worktree_after,
         verification_status=attempt.verification.status if attempt.verification is not None else attempt.status,
     )
+    attempt.gate = _evaluate_fix_gate(attempt=attempt, change_summary=attempt.change_summary)
 
     existing_attempts = list(_coordinator_state(run).get("artifacts", {}).get("verification_fix_attempts") or [])
     _store_verification_fix_attempt(run=run, attempt=attempt, existing_attempts=existing_attempts)
@@ -1264,6 +1374,36 @@ async def fix_verification(
                 "risk_flags": attempt.change_summary.risk_flags,
             },
         )
+    if attempt.gate is not None:
+        _append_action_audit(
+            artifacts=artifacts,
+            event={
+                "type": "verification_fix_gate",
+                "category": "gate",
+                "status": attempt.gate.status,
+                "summary": (
+                    "Automatic verification fix accepted."
+                    if attempt.gate.status == "accepted"
+                    else f"Automatic verification fix blocked: {', '.join(attempt.gate.reasons)}."
+                ),
+                "attempt": attempt.attempt,
+                "risk_level": attempt.change_summary.risk_level if attempt.change_summary is not None else None,
+                "risk_flags": attempt.gate.reasons,
+            },
+        )
+        if attempt.gate.reviewer is not None:
+            _append_action_audit(
+                artifacts=artifacts,
+                event={
+                    "type": "verification_fix_gate_reviewed",
+                    "category": "reviewer",
+                    "status": str(attempt.gate.reviewer.get("recommendation") or "review_required"),
+                    "summary": str(attempt.gate.reviewer.get("summary") or "Fix gate reviewed."),
+                    "attempt": attempt.attempt,
+                    "risk_level": attempt.change_summary.risk_level if attempt.change_summary is not None else None,
+                    "risk_flags": attempt.gate.reasons,
+                },
+            )
     _append_action_audit(
         artifacts=artifacts,
         event={
@@ -1287,6 +1427,131 @@ async def fix_verification(
     coordinator["artifacts"] = artifacts
     metrics["coordinator"] = coordinator
     run.metrics = metrics
+    flag_modified(run, "metrics")
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return _run_to_response(run, db)
+
+
+@router.post("/{run_id}/fix-verification/{attempt_number}/gate", response_model=RunResponse)
+def resolve_fix_gate(
+    run_id: str,
+    attempt_number: int,
+    payload: RunFixGateApprovalRequest,
+    db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
+):
+    _ensure_run_api_enabled()
+    service = RunService(db)
+    try:
+        run = service.get_run(run_id)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
+
+    metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
+    coordinator = dict(metrics.get("coordinator") or {})
+    artifacts = dict(coordinator.get("artifacts") or {})
+    attempts = artifacts.get("verification_fix_attempts")
+    if not isinstance(attempts, list):
+        raise HTTPException(status_code=404, detail="Verification fix attempt not found")
+
+    resolved = False
+    for item in attempts:
+        if not isinstance(item, dict) or int(item.get("attempt") or 0) != attempt_number:
+            continue
+        gate = dict(item.get("gate") or {})
+        if gate.get("decision") in {"manual_approved", "manual_rejected"} or gate.get("status") in {"accepted", "rejected"}:
+            raise HTTPException(status_code=409, detail="Verification fix gate is already resolved")
+        gate["status"] = "accepted" if payload.approved else "rejected"
+        gate["decision"] = "manual_approved" if payload.approved else "manual_rejected"
+        gate["approved"] = payload.approved
+        gate["approved_at"] = _utc_iso()
+        gate.setdefault("reasons", [])
+        gate.setdefault("evaluated_at", gate["approved_at"])
+        item["gate"] = gate
+        resolved = True
+        _append_action_audit(
+            artifacts=artifacts,
+            event={
+                "type": "verification_fix_gate_resolved",
+                "category": "gate",
+                "status": gate["status"],
+                "summary": "Verification fix gate approved." if payload.approved else "Verification fix gate rejected.",
+                "attempt": attempt_number,
+                "risk_flags": gate.get("reasons") or [],
+            },
+        )
+        break
+    if not resolved:
+        raise HTTPException(status_code=404, detail="Verification fix attempt not found")
+
+    artifacts["verification_fix_attempts"] = attempts
+    coordinator["artifacts"] = artifacts
+    metrics["coordinator"] = coordinator
+    run.metrics = metrics
+    flag_modified(run, "metrics")
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return _run_to_response(run, db)
+
+
+@router.post("/{run_id}/fix-verification/{attempt_number}/gate/review", response_model=RunResponse)
+def review_fix_gate(
+    run_id: str,
+    attempt_number: int,
+    db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
+):
+    _ensure_run_api_enabled()
+    service = RunService(db)
+    try:
+        run = service.get_run(run_id)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
+
+    metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
+    coordinator = dict(metrics.get("coordinator") or {})
+    artifacts = dict(coordinator.get("artifacts") or {})
+    attempts = artifacts.get("verification_fix_attempts")
+    if not isinstance(attempts, list):
+        raise HTTPException(status_code=404, detail="Verification fix attempt not found")
+
+    reviewed = False
+    for item in attempts:
+        if not isinstance(item, dict) or int(item.get("attempt") or 0) != attempt_number:
+            continue
+        attempt = VerificationFixAttempt.model_validate(item)
+        gate = attempt.gate or _evaluate_fix_gate(attempt=attempt, change_summary=attempt.change_summary)
+        gate.reviewer = _build_fix_gate_review(
+            gate=gate,
+            change_summary=attempt.change_summary,
+            verification=attempt.verification,
+        )
+        item["gate"] = gate.model_dump(mode="json")
+        reviewed = True
+        _append_action_audit(
+            artifacts=artifacts,
+            event={
+                "type": "verification_fix_gate_reviewed",
+                "category": "reviewer",
+                "status": str(gate.reviewer.get("recommendation") or "review_required"),
+                "summary": str(gate.reviewer.get("summary") or "Fix gate reviewed."),
+                "attempt": attempt_number,
+                "risk_level": attempt.change_summary.risk_level if attempt.change_summary is not None else None,
+                "risk_flags": gate.reasons,
+            },
+        )
+        break
+    if not reviewed:
+        raise HTTPException(status_code=404, detail="Verification fix attempt not found")
+
+    artifacts["verification_fix_attempts"] = attempts
+    coordinator["artifacts"] = artifacts
+    metrics["coordinator"] = coordinator
+    run.metrics = metrics
+    flag_modified(run, "metrics")
     db.add(run)
     db.commit()
     db.refresh(run)
