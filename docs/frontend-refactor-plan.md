@@ -24,17 +24,17 @@
 
 - Phase 1 设计系统基础: 已新增字体、圆角、阴影、动画、z-index 和 success/warning/info/danger 语义色 token，并接入 Tailwind theme。
 - Phase 2 HomePage: 已重做首页信息架构，保留 pinned/search/sort/manage/delete 项目管理能力，并接入 `AppLayout` / `ContentArea`。
-- Phase 3 ProjectPage 布局壳: 已迁移为共享 `AppLayout` / `PageHeader` / `ContentArea`，主工作区接入 `ResizableSplitPane`，并保留 Chat、Preview、Build、Page selection、AppMode、Data tab、VersionPanel、RunInspector 可达路径。
-- Phase 4 Drawer 功能迁移: 已新增 Radix Dialog 驱动的 `Drawer` 基础组件，并接入 `CodeDrawer`、`DocDrawer`、`DataDrawer` header 入口。Version 仍保留原 `VersionPanel`，通过 header 按钮折叠/展开。
+- Phase 3 ProjectPage 布局壳: 已迁移为共享 `AppLayout` / `PageHeader` / `ContentArea`，主工作区接入 `ResizableSplitPane`，并保留 Chat、Preview、Build、Page selection、AppMode、Data tab、Version history、RunInspector 可达路径。
+- Phase 4 Drawer 功能迁移: 已新增 Radix Dialog 驱动的 `Drawer` 基础组件，并接入 `CodeDrawer`、`DocDrawer`、`DataDrawer`、`VersionDrawer` header 入口。`VersionPanel` 行为暂时复用在 drawer 内，避免重写 pin/preview/rollback/diff 边缘交互。
 - Phase 5 布局架构抽象: 已新增 `AppLayout`、`PageHeader`、`ContentArea`，并迁移 HomePage、ProjectPage、SettingsPage、ExecutionPage。
 - Phase 6 视觉统一: 已完成高可见状态组件的语义色 token 收敛，简化 PhoneFrame，并统一多处状态、diff、token、文件树、任务和运行观测颜色。
 - 性能收敛: `ProjectPage` 已对 Workbench、VersionPanel、Code/Doc/Data drawer 做 `React.lazy` 分包，生产 chunk 从约 554 kB 降至约 398 kB，Vite 大 chunk 警告消失。
-- 回归测试: 已新增 `ProjectDrawers.spec.ts` 覆盖 Code / Product Doc / Data drawer header 入口，并保持 Data tab、Preview bridge、RunInspector 关键 e2e 通过。
+- 回归测试: 已新增 `ProjectDrawers.spec.ts` 覆盖 Code / Product Doc / Data / Versions drawer header 入口，并保持 Data tab、Preview bridge、RunInspector 关键 e2e 通过。
 
 ### 剩余事项
 
-- 做一次人工视觉验收，重点检查桌面/移动端 ProjectPage header、split pane 比例、VersionPanel 移动端高度、Drawer 内容滚动和焦点恢复。
-- 评估是否继续把 VersionPanel 完整迁移为 drawer；当前实现保留原 panel，并提供 header 折叠按钮，未做行为 hook 拆分。
+- 做一次人工视觉验收，重点检查桌面/移动端 ProjectPage header、split pane 比例、Version drawer 内容高度、Drawer 内容滚动和焦点恢复。
+- 评估是否继续把 `VersionPanel` 行为拆成独立 hook/service；当前 `VersionDrawer` 复用原面板行为，降低交互回归风险。
 - 评估是否把 RunStatusStrip / RunInspector 从 ChatPanel 常驻区进一步降级到高级运行详情入口；当前保留以避免运行观测能力回退。
 - 可选处理 shadcn `toast.tsx` destructive group 默认红色类；这属于组件库默认样式，不影响当前业务语义色收敛。
 - 后续如继续瘦身，可拆 `client` 公共 chunk 或对 CodePanel/editor 相关依赖做更细粒度懒加载。
@@ -681,7 +681,7 @@ Phase 4 (Drawer 功能迁移)
 ├── 4.5 VersionsDrawer 行为 hook 提取
 ├── 4.6 VersionsDrawer UI 迁移
 └── 4.7 RunStatusStrip / RunInspector 降级到高级运行详情入口
-状态: 部分完成；Code/Doc/Data 已迁移为 Drawer，Version 和 RunInspector 保留原可达路径
+状态: 部分完成；Code/Doc/Data/Version 已迁移为 Drawer，RunInspector 保留原可达路径
 
 Phase 5 (布局架构抽象)
 ├── 5.1 AppLayout / PageHeader / ContentArea 抽象
@@ -727,8 +727,8 @@ Phase 6 (视觉统一)
 - [x] Logo 更新为简约风格
 - [x] ProjectPage 改为两栏布局 (Chat + Preview)
 - [x] PhoneFrame 简化为极简圆角边框
-- [ ] VersionPanel 改为 Drawer 模式
-- [x] Code/Doc/Data 通过 Header 入口以 Drawer 打开
+- [x] VersionPanel 改为 Drawer 模式
+- [x] Code/Doc/Data/Versions 通过 Header 入口以 Drawer 打开
 - [x] DataTab 能力保留，相关 e2e 不回退
 - [x] AppMode/StaticMode runtime 能力保留
 - [ ] RunStatusStrip 和 RunInspector 不再挤占 ChatPanel 常驻空间，仍有可达运行详情入口

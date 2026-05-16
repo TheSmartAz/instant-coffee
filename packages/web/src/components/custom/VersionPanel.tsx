@@ -56,6 +56,7 @@ export interface VersionPanelProps {
   activeTab: VersionTab
   isCollapsed: boolean
   onToggleCollapse: () => void
+  presentation?: 'panel' | 'drawer'
 }
 
 export function VersionPanel({
@@ -66,6 +67,7 @@ export function VersionPanel({
   activeTab,
   isCollapsed,
   onToggleCollapse,
+  presentation = 'panel',
 }: VersionPanelProps) {
   const [actionState, setActionState] = React.useState<VersionTimelineActionState | null>(
     null
@@ -598,17 +600,22 @@ export function VersionPanel({
   return (
     <div
       className={cn(
-        'flex h-full flex-col border-l border-border bg-gradient-to-b from-muted/40 via-background to-background transition-all duration-200 ease-in-out',
-        isCollapsed ? 'w-14' : 'w-80'
+        'flex h-full flex-col bg-gradient-to-b from-muted/40 via-background to-background',
+        presentation === 'panel' &&
+          'border-l border-border transition-all duration-200 ease-in-out',
+        presentation === 'drawer' && 'w-full border-0',
+        presentation === 'panel' && (isCollapsed ? 'w-14' : 'w-80')
       )}
       style={{ flexGrow: 0, flexShrink: 0 }}
     >
-      <VersionPanelHeader
-        isCollapsed={isCollapsed}
-        title={panelConfig.title}
-        icon={panelConfig.icon}
-        onToggleCollapse={onToggleCollapse}
-      />
+      {presentation === 'panel' ? (
+        <VersionPanelHeader
+          isCollapsed={isCollapsed}
+          title={panelConfig.title}
+          icon={panelConfig.icon}
+          onToggleCollapse={onToggleCollapse}
+        />
+      ) : null}
 
       {isCollapsed ? (
         <VersionPanelStats

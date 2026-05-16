@@ -28,9 +28,9 @@ const WorkbenchPanel = React.lazy(() =>
     default: module.WorkbenchPanel,
   }))
 )
-const VersionPanel = React.lazy(() =>
-  import('@/components/custom/VersionPanel').then((module) => ({
-    default: module.VersionPanel,
+const VersionDrawer = React.lazy(() =>
+  import('@/components/custom/VersionDrawer').then((module) => ({
+    default: module.VersionDrawer,
   }))
 )
 const CodeDrawer = React.lazy(() =>
@@ -60,7 +60,7 @@ function PanelFallback({ label }: { label: string }) {
 export function ProjectPage() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [isVersionPanelCollapsed, setIsVersionPanelCollapsed] = React.useState(false)
+  const [isVersionDrawerOpen, setIsVersionDrawerOpen] = React.useState(false)
   const [isRefreshing, setIsRefreshing] = React.useState(false)
   const [isExporting, setIsExporting] = React.useState(false)
   const [isAborting, setIsAborting] = React.useState(false)
@@ -536,9 +536,9 @@ export function ProjectPage() {
             variant="ghost"
             size="icon"
             className="shrink-0"
-            onClick={() => setIsVersionPanelCollapsed((prev) => !prev)}
+            onClick={() => setIsVersionDrawerOpen(true)}
             disabled={!sessionId}
-            aria-label="Toggle versions panel"
+            aria-label="Open versions drawer"
           >
             <History className="h-4 w-4" />
           </Button>
@@ -647,19 +647,6 @@ export function ProjectPage() {
           />
         </main>
 
-        <aside className="min-h-40 shrink-0 border-t border-border lg:h-auto lg:border-l-0 lg:border-t-0 [&>div]:w-full lg:[&>div]:w-80">
-          <React.Suspense fallback={<PanelFallback label="Loading versions..." />}>
-            <VersionPanel
-              sessionId={sessionId}
-              sessionTitle={session?.title ?? null}
-              selectedPageId={selectedPageId}
-              selectedPageTitle={pages.find((p) => p.id === selectedPageId)?.title ?? null}
-              activeTab={workbenchTab}
-              isCollapsed={isVersionPanelCollapsed}
-              onToggleCollapse={() => setIsVersionPanelCollapsed((prev) => !prev)}
-            />
-          </React.Suspense>
-        </aside>
       </ContentArea>
 
       {sessionId ? (
@@ -683,6 +670,15 @@ export function ProjectPage() {
             open={isDataDrawerOpen}
             onOpenChange={setIsDataDrawerOpen}
             sessionId={sessionId}
+          />
+          <VersionDrawer
+            open={isVersionDrawerOpen}
+            onOpenChange={setIsVersionDrawerOpen}
+            sessionId={sessionId}
+            sessionTitle={session?.title ?? null}
+            selectedPageId={selectedPageId}
+            selectedPageTitle={pages.find((p) => p.id === selectedPageId)?.title ?? null}
+            activeTab={workbenchTab}
           />
         </React.Suspense>
       ) : null}

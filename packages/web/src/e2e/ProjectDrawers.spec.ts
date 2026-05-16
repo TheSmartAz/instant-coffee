@@ -68,7 +68,7 @@ test.describe('Project drawers', () => {
     )
   })
 
-  test('opens code, product doc, and data drawers from the project header', async ({ page }) => {
+  test('opens code, product doc, data, and versions drawers from the project header', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
 
     await page.getByRole('button', { name: 'Open code drawer' }).click()
@@ -88,5 +88,12 @@ test.describe('Project drawers', () => {
     await expect(dataDialog).toBeVisible()
     await expect(dataDialog.getByTestId('data-tab')).toBeVisible()
     await expect(dataDialog.getByTestId('data-grid-row')).toHaveCount(2)
+    await page.getByRole('button', { name: 'Close drawer' }).click()
+
+    await page.getByRole('button', { name: 'Open versions drawer' }).click()
+    const versionsDialog = page.getByRole('dialog', { name: 'Versions' })
+    await expect(versionsDialog).toBeVisible()
+    await expect(versionsDialog.getByText('Current page', { exact: true })).toBeVisible()
+    await expect(versionsDialog.getByText('Select a page to view version history')).toBeVisible()
   })
 })
