@@ -1,6 +1,8 @@
 import * as React from 'react'
 import { ChatInput, type ChatInputProps } from './ChatInput'
 import { ChatMessage } from './ChatMessage'
+import { RunInspector } from './RunInspector'
+import { RunStatusStrip } from './RunStatusStrip'
 import { TokenDisplay } from '@/components/TokenDisplay'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -33,12 +35,16 @@ export interface ChatPanelProps {
 
 export function ChatPanel({
   messages,
+  sessionId,
+  threadId,
   onSendMessage,
   onAssetUpload,
   onInterviewAction,
   onTabChange,
+  onOpenBuildPreview,
   isLoading = false,
   errorMessage,
+  runStatus,
   className,
   pages,
   tokenUsage,
@@ -204,6 +210,13 @@ export function ChatPanel({
           <div ref={bottomRef} />
         </div>
       </ScrollArea>
+      <RunStatusStrip status={runStatus} />
+      <RunInspector
+        sessionId={sessionId}
+        threadId={threadId}
+        runStatus={runStatus}
+        onOpenBuildPreview={onOpenBuildPreview}
+      />
       {errorMessage ? (
         <div className="border-t border-border bg-destructive/10 px-4 py-2 text-xs text-destructive">
           {errorMessage}

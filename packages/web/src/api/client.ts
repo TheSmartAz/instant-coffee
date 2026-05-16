@@ -294,6 +294,19 @@ export const api = {
         `/api/runs/${encodeURIComponent(runId)}/fix-verification`,
         { method: 'POST' }
       ),
+    resolveFixGate: (runId: string, attempt: number, approved: boolean) =>
+      request<import('../types').SessionRunDetail>(
+        `/api/runs/${encodeURIComponent(runId)}/fix-verification/${attempt}/gate`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ approved }),
+        }
+      ),
+    reviewFixGate: (runId: string, attempt: number) =>
+      request<import('../types').SessionRunDetail>(
+        `/api/runs/${encodeURIComponent(runId)}/fix-verification/${attempt}/gate/review`,
+        { method: 'POST' }
+      ),
   },
   events: {
     getSessionEvents: (sessionId: string, sinceSeq?: number, limit?: number) =>

@@ -50,6 +50,69 @@ function runDetail(overrides: Partial<SessionRunDetail> = {}): SessionRunDetail 
         message: 'Primary action needs an accessible label.',
       },
     ],
+    verification: {
+      status: 'failed',
+      passed: false,
+      checks: [],
+      evidence: [],
+      summary: {},
+      profile: {
+        recommended_commands: [
+          {
+            name: 'backend targeted tests',
+            command: 'PYTHONPATH=.:../agent/src python -m pytest -q',
+            scope: 'backend',
+          },
+        ],
+        risk_flags: ['verification_failed'],
+        memory_keys: [],
+      },
+      last_run: {
+        status: 'failed',
+        passed: false,
+        commands: [
+          {
+            name: 'backend targeted tests',
+            command: 'PYTHONPATH=.:../agent/src python -m pytest -q',
+            scope: 'backend',
+            status: 'failed',
+            exit_code: 1,
+            duration_ms: 12,
+            output_summary: '',
+            failures: [
+              {
+                file: 'app/services/review.py',
+                line: 88,
+                source: 'pytest',
+                route: 'pytest',
+                kind: 'backend_test',
+                fix_hint: 'Fix the failing Python test or the backend behavior it protects, then rerun backend tests.',
+              },
+              {
+                file: 'app/services/run.py',
+                line: 42,
+                source: 'pytest',
+                route: 'pytest',
+                kind: 'backend_test',
+                fix_hint: 'Fix the failing Python test or the backend behavior it protects, then rerun backend tests.',
+              },
+              {
+                file: 'src/components/custom/RunInspector.tsx',
+                line: 12,
+                source: 'eslint',
+                route: 'eslint',
+                kind: 'frontend_lint',
+                fix_hint: 'Fix the frontend lint violation, then rerun web lint.',
+              },
+            ],
+          },
+        ],
+        risk_flags: ['verification_failed'],
+      },
+      fix_attempts: [],
+      audit_trail: [],
+      action_audit_trail: [],
+    },
     heartbeat_at: now,
     ...overrides,
   }
@@ -125,6 +188,9 @@ async function setupProjectMocks(
     getRun: () => SessionRunDetail
     onCancel?: () => SessionRunDetail
     onResolveApproval?: (approved: boolean) => SessionRunDetail
+    onFixVerification?: () => SessionRunDetail
+    onReviewFixGate?: (attempt: number) => SessionRunDetail
+    onResolveFixGate?: (attempt: number, approved: boolean) => SessionRunDetail
     runEvents?: RunEventResponse[]
     chatEvents?: unknown[]
     build?: unknown
@@ -178,6 +244,9 @@ async function setupProjectMocks(
   await page.route(`**/api/sessions/${sessionId}/snapshots**`, (route) =>
     route.fulfill(json({ snapshots: [] }))
   )
+  await page.route(`**/api/sessions/${sessionId}/files`, (route) =>
+    route.fulfill(json({ tree: [] }))
+  )
   await page.route(`**/api/sessions/${sessionId}/build/status`, (route) =>
     route.fulfill(json(options.build ?? { status: 'idle', pages: [] }))
   )
@@ -200,6 +269,23 @@ async function setupProjectMocks(
   await page.route(`**/api/runs/${runId}/approvals/*`, async (route) => {
     const body = route.request().postDataJSON() as { approved?: boolean }
     const detail = options.onResolveApproval?.(Boolean(body.approved)) ?? options.getRun()
+    return route.fulfill(json(detail))
+  })
+  await page.route(`**/api/runs/${runId}/fix-verification`, (route) => {
+    const detail = options.onFixVerification?.() ?? options.getRun()
+    return route.fulfill(json(detail))
+  })
+  await page.route(`**/api/runs/${runId}/fix-verification/*/gate/review`, (route) => {
+    const match = route.request().url().match(/\/fix-verification\/(\d+)\/gate\/review/)
+    const attempt = match ? Number(match[1]) : 1
+    const detail = options.onReviewFixGate?.(attempt) ?? options.getRun()
+    return route.fulfill(json(detail))
+  })
+  await page.route(`**/api/runs/${runId}/fix-verification/*/gate`, (route) => {
+    const match = route.request().url().match(/\/fix-verification\/(\d+)\/gate/)
+    const attempt = match ? Number(match[1]) : 1
+    const body = route.request().postDataJSON() as { approved?: boolean }
+    const detail = options.onResolveFixGate?.(attempt, Boolean(body.approved)) ?? options.getRun()
     return route.fulfill(json(detail))
   })
   await page.route(`**/api/runs/${runId}`, (route) =>
@@ -461,6 +547,156 @@ test.describe('Run status and inspector', () => {
     await expect(page.getByTestId('run-inspector')).toContainText('missing_button_label')
     await expect(page.getByTestId('run-inspector')).toContainText('Primary action needs an accessible label.')
     await expect(page.getByTestId('run-inspector')).toContainText('Review found blocking issues')
+    await expect(page.getByTestId('verification-failure-routes')).toContainText('pytest · backend test (2)')
+    await expect(page.getByTestId('verification-failure-routes')).toContainText('eslint · frontend lint')
+    await expect(page.getByTestId('run-inspector-verification')).toContainText('rerun backend tests')
+  })
+
+  test('fixes verification and resolves a blocked fix gate from the inspector', async ({ page }) => {
+    let detail = runDetail()
+    let fixRequests = 0
+    let reviewRequests = 0
+    let approvedPayload: boolean | null = null
+
+    await setupProjectMocks(page, {
+      getRun: () => detail,
+      onFixVerification: () => {
+        fixRequests += 1
+        detail = runDetail({
+          status: 'waiting_input',
+          current_phase: 'fix',
+          phase_status: 'waiting_input',
+          waiting_reason: 'Verification fix gate requires admin decision',
+          latest_error: null,
+          fix_attempts: 2,
+          verification: {
+            ...detail.verification!,
+            status: 'failed',
+            fix_attempts: [
+              {
+                attempt: 1,
+                status: 'blocked',
+                prompt: 'Fix verification failures',
+                failures: detail.verification?.last_run?.commands[0].failures ?? [],
+                change_summary: {
+                  status: 'captured',
+                  changed_files: ['packages/backend/app/services/review.py'],
+                  file_count: 1,
+                  risk_level: 'medium',
+                  risk_flags: ['verification_failed'],
+                  verification_status: 'failed',
+                  captured_at: now,
+                },
+                gate: {
+                  status: 'blocked',
+                  decision: 'requires_review',
+                  reasons: ['verification_failed'],
+                  evaluated_at: now,
+                  approved: null,
+                  approved_at: null,
+                  reviewer: null,
+                },
+                error: null,
+                started_at: now,
+                completed_at: now,
+              },
+            ],
+          },
+        })
+        return detail
+      },
+      onReviewFixGate: (attempt) => {
+        reviewRequests += attempt
+        detail = runDetail({
+          ...detail,
+          verification: {
+            ...detail.verification!,
+            fix_attempts: detail.verification!.fix_attempts!.map((item) =>
+              item.attempt === attempt
+                ? {
+                    ...item,
+                    gate: {
+                      ...item.gate!,
+                      reviewer: {
+                        source: 'deterministic',
+                        recommendation: 'accept',
+                        summary: 'The change is limited and ready for admin approval.',
+                        reasons: ['low_blast_radius'],
+                        checklist: ['Reviewed changed files'],
+                        changed_files: ['packages/backend/app/services/review.py'],
+                        verification_status: 'failed',
+                        reviewed_at: now,
+                      },
+                    },
+                  }
+                : item,
+            ),
+          },
+        })
+        return detail
+      },
+      onResolveFixGate: (attempt, approved) => {
+        approvedPayload = approved
+        detail = runDetail({
+          ...detail,
+          status: 'completed',
+          current_phase: 'done',
+          phase_status: 'completed',
+          waiting_reason: null,
+          latest_error: null,
+          verification: {
+            ...detail.verification!,
+            status: 'passed',
+            passed: true,
+            last_run: {
+              ...detail.verification!.last_run!,
+              status: 'passed',
+              passed: true,
+              commands: detail.verification!.last_run!.commands.map((command) => ({
+                ...command,
+                status: 'passed',
+                exit_code: 0,
+                failures: [],
+              })),
+            },
+            fix_attempts: detail.verification!.fix_attempts!.map((item) =>
+              item.attempt === attempt
+                ? {
+                    ...item,
+                    status: 'accepted',
+                    gate: {
+                      ...item.gate!,
+                      status: 'accepted',
+                      decision: approved ? 'accepted' : 'rejected',
+                      approved,
+                      approved_at: now,
+                    },
+                  }
+                : item,
+            ),
+          },
+        })
+        return detail
+      },
+    })
+
+    await page.goto(`/project/${sessionId}`)
+    await page.getByTestId('run-inspector-toggle').click()
+
+    await page.getByTestId('run-inspector-fix-verification').click()
+    await expect.poll(() => fixRequests).toBe(1)
+    await expect(page.getByTestId('run-inspector')).toContainText('Gate · blocked')
+    await expect(page.getByTestId('run-inspector')).toContainText('verification failed')
+
+    await page.getByTestId('run-inspector-review-fix-gate').click()
+    await expect.poll(() => reviewRequests).toBe(1)
+    await expect(page.getByTestId('run-inspector')).toContainText('Reviewer · accept')
+    await expect(page.getByTestId('run-inspector')).toContainText('ready for admin approval')
+
+    await page.getByTestId('run-inspector-approve-fix-gate').click()
+    await expect.poll(() => approvedPayload).toBe(true)
+    await expect(page.getByTestId('run-inspector')).toContainText('Gate · accepted · accepted')
+    await expect(page.getByTestId('run-inspector-verification')).toContainText('passed')
   })
 
   test('renders review running from verify_start', async ({ page }) => {

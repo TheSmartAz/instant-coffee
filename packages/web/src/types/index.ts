@@ -105,6 +105,24 @@ export interface RunVerification {
       verification_status?: string | null
       captured_at?: string | null
     } | null
+    gate?: {
+      status: string
+      decision: string
+      reasons?: string[]
+      evaluated_at?: string | null
+      approved?: boolean | null
+      approved_at?: string | null
+      reviewer?: {
+        source?: string
+        recommendation?: string
+        summary?: string
+        reasons?: string[]
+        checklist?: string[]
+        changed_files?: string[]
+        verification_status?: string | null
+        reviewed_at?: string | null
+      } | null
+    } | null
     error?: string | null
     started_at?: string | null
     completed_at?: string | null

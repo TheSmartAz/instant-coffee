@@ -142,6 +142,37 @@ const numberValue = (value: unknown) => (typeof value === 'number' && Number.isF
 
 const stringValue = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 
+const failureText = (failure: Record<string, unknown>, key: string) => {
+  const value = failure[key]
+  return typeof value === 'string' && value ? value : undefined
+}
+
+const failureLabel = (value?: string) => (value ? value.replace(/_/g, ' ') : undefined)
+
+const verificationFailureGroups = (failures: Array<Record<string, unknown>>) => {
+  const groups = new Map<string, { route?: string; kind?: string; count: number; hint?: string; message?: string }>()
+  for (const failure of failures) {
+    const route = failureText(failure, 'route') ?? failureText(failure, 'source') ?? 'command'
+    const kind = failureText(failure, 'kind')
+    const key = `${route}:${kind ?? ''}`
+    const existing = groups.get(key)
+    if (existing) {
+      existing.count += 1
+      existing.hint ??= failureText(failure, 'fix_hint')
+      existing.message ??= failureText(failure, 'message')
+      continue
+    }
+    groups.set(key, {
+      route,
+      kind,
+      count: 1,
+      hint: failureText(failure, 'fix_hint'),
+      message: failureText(failure, 'message'),
+    })
+  }
+  return Array.from(groups.values())
+}
+
 const MEMORY_LABELS: Record<string, string> = {
   architecture_notes: 'Architecture',
   interface_contracts: 'Contracts',
@@ -347,6 +378,34 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
       setRun(data)
     } catch (err) {
       setError(runActionErrorMessage(err, 'Failed to fix verification'))
+    } finally {
+      setLoading(false)
+    }
+  }, [actionableRunId])
+
+  const handleResolveFixGate = React.useCallback(async (attempt: number, approved: boolean) => {
+    if (!actionableRunId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await api.runs.resolveFixGate(actionableRunId, attempt, approved)
+      setRun(data)
+    } catch (err) {
+      setError(runActionErrorMessage(err, 'Failed to resolve fix gate'))
+    } finally {
+      setLoading(false)
+    }
+  }, [actionableRunId])
+
+  const handleReviewFixGate = React.useCallback(async (attempt: number) => {
+    if (!actionableRunId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await api.runs.reviewFixGate(actionableRunId, attempt)
+      setRun(data)
+    } catch (err) {
+      setError(runActionErrorMessage(err, 'Failed to review fix gate'))
     } finally {
       setLoading(false)
     }
@@ -600,8 +659,24 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
                         </span>
                       </div>
                       {item.failures.length ? (
-                        <div className="mt-1 line-clamp-2 break-words text-muted-foreground">
-                          {String(item.failures[0].message ?? item.output_summary)}
+                        <div className="mt-1 space-y-1">
+                          <div className="flex flex-wrap gap-1" data-testid="verification-failure-routes">
+                            {verificationFailureGroups(item.failures).slice(0, 4).map((group, index) => (
+                              <Badge key={`${group.route ?? 'route'}-${group.kind ?? index}`} variant="outline" className="text-[10px]">
+                                {[failureLabel(group.route), failureLabel(group.kind)].filter(Boolean).join(' · ')}
+                                {group.count > 1 ? ` (${group.count})` : ''}
+                              </Badge>
+                            ))}
+                          </div>
+                          {verificationFailureGroups(item.failures)[0]?.hint ? (
+                            <div className="line-clamp-2 break-words text-muted-foreground">
+                              {verificationFailureGroups(item.failures)[0].hint}
+                            </div>
+                          ) : (
+                            <div className="line-clamp-2 break-words text-muted-foreground">
+                              {verificationFailureGroups(item.failures)[0]?.message ?? String(item.output_summary)}
+                            </div>
+                          )}
                         </div>
                       ) : null}
                     </div>
@@ -634,6 +709,72 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
                                   <span className="truncate">{file}</span>
                                 </Badge>
                               ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {attempt.gate ? (
+                        <div className="mt-1 space-y-1">
+                          <div className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                            <span className="truncate">
+                              Gate · {attempt.gate.status.replace(/_/g, ' ')}
+                              {attempt.gate.decision ? ` · ${attempt.gate.decision.replace(/_/g, ' ')}` : ''}
+                            </span>
+                          </div>
+                          {attempt.gate.reasons?.length ? (
+                            <div className="flex flex-wrap gap-1">
+                              {attempt.gate.reasons.slice(0, 3).map((reason) => (
+                                <Badge key={reason} variant="outline" className="text-[10px]">
+                                  {reason.replace(/_/g, ' ')}
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : null}
+                          {attempt.gate.reviewer ? (
+                            <div className="rounded-sm border border-border/70 px-2 py-1 text-[11px] text-muted-foreground">
+                              <div className="font-medium text-foreground">
+                                Reviewer · {attempt.gate.reviewer.recommendation?.replace(/_/g, ' ') ?? 'review required'}
+                              </div>
+                              {attempt.gate.reviewer.summary ? (
+                                <div className="mt-0.5 line-clamp-2 break-words">{attempt.gate.reviewer.summary}</div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {attempt.gate.status === 'blocked' ? (
+                            <div className="flex gap-1">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[11px]"
+                                onClick={() => void handleReviewFixGate(attempt.attempt)}
+                                disabled={!actionableRunId || loading}
+                                data-testid="run-inspector-review-fix-gate"
+                              >
+                                Review
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[11px]"
+                                onClick={() => void handleResolveFixGate(attempt.attempt, true)}
+                                disabled={!actionableRunId || loading}
+                                data-testid="run-inspector-approve-fix-gate"
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[11px]"
+                                onClick={() => void handleResolveFixGate(attempt.attempt, false)}
+                                disabled={!actionableRunId || loading}
+                                data-testid="run-inspector-reject-fix-gate"
+                              >
+                                Reject
+                              </Button>
                             </div>
                           ) : null}
                         </div>
