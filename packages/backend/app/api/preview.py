@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Generator
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session as DbSession
 
 from ..db.models import Session as SessionModel
@@ -38,6 +38,20 @@ def _safe_resolve(dist_dir: Path, path: str) -> Path:
     return candidate
 
 
+def _spa_fallback(dist_dir: Path) -> Path:
+    return _safe_resolve(dist_dir, "index.html")
+
+
+def _html_with_preview_asset_paths(file_path: Path, session_id: str) -> HTMLResponse:
+    html = file_path.read_text(encoding="utf-8")
+    preview_prefix = f"/preview/{session_id}"
+    html = html.replace('src="/assets/', f'src="{preview_prefix}/assets/')
+    html = html.replace('href="/assets/', f'href="{preview_prefix}/assets/')
+    html = html.replace("src='/assets/", f"src='{preview_prefix}/assets/")
+    html = html.replace("href='/assets/", f"href='{preview_prefix}/assets/")
+    return HTMLResponse(content=html)
+
+
 @router.get("/preview/{session_id}")
 async def preview_index(session_id: str):
     return RedirectResponse(f"/preview/{session_id}/index.html")
@@ -55,11 +69,17 @@ async def serve_preview(
 
     file_path = _safe_resolve(dist_dir, path)
 
-    if file_path.is_dir() or not file_path.exists():
+    if file_path.is_dir():
         file_path = _safe_resolve(file_path, "index.html")
 
     if file_path.exists() and file_path.is_file():
+        if file_path.suffix.lower() == ".html":
+            return _html_with_preview_asset_paths(file_path, session_id)
         return FileResponse(file_path)
+
+    fallback = _spa_fallback(dist_dir)
+    if fallback.exists() and fallback.is_file():
+        return _html_with_preview_asset_paths(fallback, session_id)
 
     raise HTTPException(status_code=404, detail="File not found")
 

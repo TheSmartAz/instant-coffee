@@ -86,3 +86,44 @@ def test_preview_falls_back_to_configured_output_dist(tmp_path, monkeypatch) -> 
 
     assert response.status_code == 200
     assert "configured dist" in response.text
+
+
+def test_preview_rewrites_vite_asset_paths_for_session_preview(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = "vite-assets-session"
+    dist_path = tmp_path / "configured-output" / session_id / "dist"
+    dist_path.mkdir(parents=True)
+    (dist_path / "index.html").write_text(
+        '<html><head><script type="module" src="/assets/app.js"></script>'
+        '<link rel="stylesheet" href="/assets/app.css"></head></html>',
+        encoding="utf-8",
+    )
+
+    with get_db() as session:
+        session.add(SessionModel(id=session_id, title="Vite Assets Session"))
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.get(f"/preview/{session_id}/index.html")
+
+    assert response.status_code == 200
+    assert f'src="/preview/{session_id}/assets/app.js"' in response.text
+    assert f'href="/preview/{session_id}/assets/app.css"' in response.text
+
+
+def test_preview_spa_routes_fall_back_to_index_html(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = "spa-route-session"
+    dist_path = tmp_path / "configured-output" / session_id / "dist"
+    dist_path.mkdir(parents=True)
+    (dist_path / "index.html").write_text("<html>spa app</html>", encoding="utf-8")
+
+    with get_db() as session:
+        session.add(SessionModel(id=session_id, title="SPA Route Session"))
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.get(f"/preview/{session_id}/media/abc123")
+
+    assert response.status_code == 200
+    assert "spa app" in response.text
