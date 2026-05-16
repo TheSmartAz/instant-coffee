@@ -132,7 +132,7 @@ Verification/fix maturity currently includes:
 - mobile visual smoke checks when a build artifact has a `dist_path`;
 - stale automatic-fix recovery and per-run fix locking;
 - structured verification failure routing with safe `route`, `kind`, and `fix_hint` fields for
-  repair prompts, action audit flags, and Run Inspector grouping;
+  repair prompts and action audit flags;
 - redacted public run responses for prompts, engine payloads, command output, metrics, and memory content;
 - automatic-fix change summaries scoped to files changed during the fix attempt;
 - redacted action audit events for verification commands, visual checks, fix prompt preparation, agent execution, edit summaries, and gate decisions;
@@ -192,10 +192,8 @@ Routes:
 
 `ProjectPage` is the main application surface:
 
-- `ChatPanel` for chat, interview, mentions, uploads, run status, and the Run Inspector.
-- The Run Inspector shows phase state, artifacts, verification evidence, grouped failure routes,
-  route-specific fix hints, automatic-fix attempts, deterministic gate review, and admin gate
-  approval/rejection actions.
+- `ChatPanel` for chat, interview, mentions, uploads, and lightweight run status.
+- ProjectPage intentionally does not include the removed Run details drawer or Run Inspector UI.
 - `WorkbenchPanel` with `preview`, `code`, `product-doc`, and `data` tabs.
 - `VersionPanel` for legacy and page version history.
 

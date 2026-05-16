@@ -24,6 +24,7 @@ class Todo(BaseTool):
         ToolParam(
             name="explanation",
             description="Brief explanation of the plan or what changed",
+            required=False,
         ),
         ToolParam(
             name="steps",

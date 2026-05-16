@@ -31,7 +31,7 @@ This package is the Vite + React UI for Instant Coffee. It is no longer the stoc
   - file/page mentions
   - asset uploads
   - `RunStatusStrip`
-  - `RunInspector`
+  - no Run details drawer or Run Inspector; those ProjectPage surfaces were intentionally removed
 - Center: `WorkbenchPanel`
   - `preview`
   - `code`
@@ -86,5 +86,5 @@ Current Playwright specs include:
 - `DataTab.spec.ts`
 - `ImageUpload.spec.ts`
 - `PreviewBridge.spec.ts`
-- `RunStatusInspector.spec.ts`
+- `RunStatus.spec.ts`
 - `v08DataTabOverhaul.spec.ts`

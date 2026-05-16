@@ -980,6 +980,12 @@ def list_runs(
 ):
     _ensure_run_api_enabled()
     service = RunService(db)
+    stale_runs = service.fail_stale_runs(
+        session_id=session_id,
+        stale_after_seconds=get_settings().run_stale_timeout_seconds,
+    )
+    if stale_runs:
+        db.commit()
     runs = service.list_runs(session_id, limit=limit)
     return RunListResponse(
         runs=[_run_to_response(run, db) for run in runs],
@@ -993,6 +999,14 @@ def get_run(run_id: str, db: DbSession = Depends(_get_db_session)):
     service = RunService(db)
     try:
         run = service.get_run(run_id)
+        if run.status in RunService.ACTIVE_STATES:
+            stale_runs = service.fail_stale_runs(
+                session_id=run.session_id,
+                stale_after_seconds=get_settings().run_stale_timeout_seconds,
+            )
+            if stale_runs:
+                db.commit()
+                run = service.get_run(run_id)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
     return _run_to_response(run, db)

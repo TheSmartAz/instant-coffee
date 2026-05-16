@@ -326,8 +326,22 @@ const applyPendingMessage = (
     clearPendingMessage(sessionId, threadId)
     return messages
   }
+  const restoredUser = pending.user ? fromStoredMessage(pending.user) : null
+  const shouldRestoreUser =
+    restoredUser &&
+    restoredUser.role === 'user' &&
+    !messages.some((message) => message.id === restoredUser.id) &&
+    !messages.some(
+      (message) =>
+        message.role === 'user' &&
+        message.content === restoredUser.content &&
+        message.timestamp &&
+        restoredUser.timestamp &&
+        Math.abs(message.timestamp.getTime() - restoredUser.timestamp.getTime()) < 2000
+    )
   return [
     ...messages,
+    ...(shouldRestoreUser ? [restoredUser] : []),
     {
       ...restored,
       isStreaming: restored.isStreaming ?? true,
@@ -637,7 +651,6 @@ export function useSession(sessionId?: string, threadId?: string) {
       }
 
       const {
-        messagesList,
         base: { messages: baseMessages, payloadMap },
       } = buildMessagesFromApi(sid, messagesResponse, tid)
       if (lastMessageUpdateRef.current <= loadStartedAt) {
@@ -655,7 +668,7 @@ export function useSession(sessionId?: string, threadId?: string) {
         : versionsPayload?.versions ?? []
       setVersions(versionList.map((item) => mapVersion(item, currentVersion)))
 
-      if (messagesList.length > 0) {
+      if (baseMessages.length > 0) {
         void (async () => {
           try {
             const eventsResponse = await api.events.getSessionEvents(

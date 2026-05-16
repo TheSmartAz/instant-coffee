@@ -9,6 +9,7 @@ from ..utils.datetime import utcnow
 from ..db.models import Page, PageVersion, VersionSource
 from ..events.emitter import EventEmitter
 from ..events.models import PagePreviewReadyEvent, PageVersionCreatedEvent
+from ..services.thumbnail import ThumbnailService
 from ..utils.html import inline_css, strip_prompt_artifacts
 
 
@@ -92,6 +93,8 @@ class PageVersionService:
 
         page.current_version_id = record.id
         page.updated_at = utcnow()
+        if page.slug == "index":
+            ThumbnailService().invalidate(page.session_id)
         self.db.add(page)
 
         self.apply_retention_policy(page_id)

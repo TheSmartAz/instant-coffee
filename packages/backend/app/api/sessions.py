@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Generator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
 from ..db.models import Message, PageVersion, Session as SessionModel, Thread as ThreadModel, Version
 from ..db.utils import get_db
+from ..config import get_settings
 from ..services.message import MessageService
 from ..services.page import PageService
 from ..services.page_version import PageVersionService
@@ -19,6 +22,7 @@ from ..services.product_doc import ProductDocService
 from ..services.app_data_store import get_app_data_store
 from ..services.session import SessionService
 from ..services.state_store import StateStoreService
+from ..services.thumbnail import ThumbnailService
 from ..services.thread import ThreadService
 from ..services.token_tracker import TokenTrackerService
 from ..schemas.session_metadata import SessionMetadata, SessionMetadataUpdate
@@ -26,7 +30,7 @@ from ..services.version import VersionService
 from ..utils.html import EMPTY_PREVIEW_HTML, inject_hide_scrollbar_style, strip_prompt_artifacts
 from ..utils.style import build_global_style_css
 from .auth import require_admin_token
-from .utils import build_preview_url
+from .utils import build_preview_url, build_thumbnail_url
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -34,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
+    initial_prompt: Optional[str] = None
 
 
 class VersionRollbackRequest(BaseModel):
@@ -80,6 +85,57 @@ def _get_index_preview(session: DbSession, session_id: str) -> tuple[Optional[st
     return html, version.version
 
 
+def _has_home_preview_source(session: DbSession, record: SessionModel) -> bool:
+    page = _get_index_page(session, record.id)
+    if page is not None and page.current_version_id is not None:
+        return True
+    return record.current_version is not None
+
+
+def _fallback_session_title(prompt: str) -> str:
+    normalized = re.sub(r"\s+", " ", prompt).strip()
+    normalized = re.sub(r"<[^>]+>", "", normalized).strip()
+    if not normalized:
+        return "Untitled project"
+    return normalized[:47].rstrip(" ,.;:!?") + ("..." if len(normalized) > 50 else "")
+
+
+async def _generate_session_title(prompt: str) -> str:
+    fallback = _fallback_session_title(prompt)
+    settings = get_settings()
+    api_key = settings.openai_api_key or settings.default_key
+    base_url = settings.default_base_url or settings.openai_base_url
+    if not api_key:
+        return fallback
+
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    try:
+        response = await client.chat.completions.create(
+            model=settings.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Summarize the user's website/app generation request into a concise project title. "
+                        "Return only the title, no quotes, no punctuation at the end. Keep it under 8 words."
+                    ),
+                },
+                {"role": "user", "content": prompt[:4000]},
+            ],
+            temperature=0.2,
+            max_tokens=32,
+            timeout=settings.openai_timeout_seconds,
+        )
+        title = (response.choices[0].message.content or "").strip().strip("\"'“”")
+        title = re.sub(r"\s+", " ", title).strip()
+        if not title:
+            return fallback
+        return title[:80].rstrip(" ,.;:!?")
+    except Exception:
+        logger.exception("Failed to generate session title from initial prompt")
+        return fallback
+
+
 def _get_page_version_by_number(
     session: DbSession, page_id: str, version_number: int
 ) -> Optional[PageVersion]:
@@ -95,6 +151,7 @@ def _session_payload(
     db: DbSession,
     record: SessionModel,
     *,
+    request: Request | None = None,
     message_count: int | None = None,
     version_count: int | None = None,
 ) -> dict:
@@ -112,7 +169,7 @@ def _session_payload(
             .scalar()
             or 0
         )
-    return {
+    payload = {
         "id": record.id,
         "title": record.title,
         "created_at": record.created_at,
@@ -132,10 +189,18 @@ def _session_payload(
         "message_count": message_count,
         "version_count": version_count,
     }
+    if request is not None and (
+        ThumbnailService().has_thumbnail(record.id) or _has_home_preview_source(db, record)
+    ):
+        payload["thumbnail"] = build_thumbnail_url(request, record.id)
+    else:
+        payload["thumbnail"] = None
+    return payload
 
 
 @router.get("")
 def list_sessions(
+    request: Request,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     search: str = Query(None),
@@ -190,6 +255,7 @@ def list_sessions(
             _session_payload(
                 db,
                 record,
+                request=request,
                 message_count=msg_c,
                 version_count=ver_c,
             )
@@ -200,12 +266,17 @@ def list_sessions(
 
 
 @router.post("")
-def create_session(
+async def create_session(
     payload: CreateSessionRequest,
+    response: Response,
     db: DbSession = Depends(_get_db_session),
 ) -> dict:
+    response.headers["Cache-Control"] = "no-store"
     service = SessionService(db)
-    record = service.create_session(title=payload.title)
+    title = payload.title
+    if not title and payload.initial_prompt:
+        title = await _generate_session_title(payload.initial_prompt)
+    record = service.create_session(title=title)
     db.commit()
     db.refresh(record)
     return _session_payload(db, record)
@@ -220,7 +291,7 @@ def get_session(
     record = db.get(SessionModel, session_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    payload = _session_payload(db, record)
+    payload = _session_payload(db, record, request=request)
     preview_html, _page_version = _get_index_preview(db, session_id)
     if preview_html is None:
         version = None
@@ -236,6 +307,43 @@ def get_session(
         payload["preview_html"] = preview_html
     payload["preview_url"] = build_preview_url(request, session_id)
     return payload
+
+
+@router.get("/{session_id}/thumbnail", response_class=FileResponse)
+async def get_thumbnail(
+    session_id: str,
+    db: DbSession = Depends(_get_db_session),
+):
+    record = db.get(SessionModel, session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    service = ThumbnailService()
+    path = service.thumbnail_path(session_id)
+    if not path.exists():
+        preview_html, _page_version = _get_index_preview(db, session_id)
+        if preview_html is None and record.current_version is not None:
+            version = (
+                db.query(Version)
+                .filter(Version.session_id == session_id)
+                .filter(Version.version == record.current_version)
+                .first()
+            )
+            preview_html = strip_prompt_artifacts(version.html) if version is not None else None
+        if not preview_html:
+            raise HTTPException(status_code=404, detail="No preview available")
+        try:
+            path = await service.capture_html(
+                session_id,
+                inject_hide_scrollbar_style(preview_html or ""),
+            )
+        except Exception:
+            logger.exception("Failed to capture thumbnail for session %s", session_id)
+            path = None
+        if path is None:
+            raise HTTPException(status_code=404, detail="No thumbnail available")
+
+    return FileResponse(path, media_type="image/png")
 
 
 @router.get("/{session_id}/fallbacks")

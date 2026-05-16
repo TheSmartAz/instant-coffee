@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from ..utils.datetime import utcnow
 from ..db.models import Session, Version
+from ..services.thumbnail import ThumbnailService
 
 
 class VersionService:
@@ -34,6 +35,7 @@ class VersionService:
         )
         session.current_version = next_version
         session.updated_at = utcnow()
+        ThumbnailService().invalidate(session_id)
         self.db.add(record)
         self.db.add(session)
         self.db.flush()
@@ -65,6 +67,7 @@ class VersionService:
         if target is None:
             return None
         session.current_version = version
+        ThumbnailService().invalidate(session_id)
         self.db.add(session)
         self.db.flush()
         return target

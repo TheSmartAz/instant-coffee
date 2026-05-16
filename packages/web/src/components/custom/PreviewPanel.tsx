@@ -346,9 +346,9 @@ export const PreviewPanel = React.memo(function PreviewPanel({
 
   return (
     <div className="flex h-full flex-col" data-testid="preview-panel">
-      <div className="flex items-center justify-between border-b border-border px-6 py-4">
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-semibold text-foreground">{previewLabel}</span>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-3 py-3 sm:px-6 sm:py-4">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+          <span className="truncate text-sm font-semibold text-foreground">{previewLabel}</span>
           {showBuildStatus ? (
             <span
               className={cn(
@@ -360,7 +360,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
           {onPreviewModeChange ? (
             <div className="inline-flex items-center rounded-full border border-border bg-background p-0.5 text-[11px] font-semibold">
               <button
@@ -401,7 +401,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
               aria-pressed={appMode}
               disabled={isBuildPreview}
               title={isBuildPreview ? 'App mode is available for live preview only' : undefined}
-              className="h-8 w-[96px] rounded-full text-[11px] font-semibold"
+              className="h-8 w-[96px] shrink-0 rounded-full text-[11px] font-semibold"
             >
               {appMode ? 'App Mode' : 'Static Mode'}
             </Button>
@@ -412,6 +412,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
             onClick={handleRefresh}
             aria-label="Refresh preview"
             disabled={isRefreshing || !onRefresh}
+            className="shrink-0"
           >
             {isRefreshing ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -425,6 +426,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
             onClick={onExport}
             aria-label="Export preview"
             disabled={isExporting || !onExport}
+            className="shrink-0"
           >
             {isExporting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -447,7 +449,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
 
           <div
             ref={containerRef}
-            className="flex flex-1 items-center justify-center bg-muted/30 p-6"
+            className="flex flex-1 items-center justify-center bg-muted/30 p-3 sm:p-6"
           >
             <PhoneFrame scale={scale}>
               {isBuildActive ? (

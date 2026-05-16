@@ -1,15 +1,13 @@
 import * as React from 'react'
-import { Eye, Code, FileText, Database } from 'lucide-react'
+import { Eye, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PreviewPanel, type PageInfo } from './PreviewPanel'
-import { CodePanel } from './CodePanel'
 import { ProductDocPanel } from './ProductDocPanel'
-import { DataTab } from './DataTab'
 import type { ProductDoc } from '@/types'
 import type { AestheticScore } from '@/types/aesthetic'
 import type { BuildState } from '@/types/build'
 
-export type WorkbenchTab = 'preview' | 'code' | 'product-doc' | 'data'
+export type WorkbenchTab = 'preview' | 'product-doc'
 
 export interface WorkbenchPanelProps {
   sessionId: string
@@ -57,9 +55,7 @@ interface TabInfo {
 
 const TABS: TabInfo[] = [
   { id: 'preview', label: 'Preview', icon: Eye },
-  { id: 'code', label: 'Code', icon: Code },
   { id: 'product-doc', label: 'Product doc', icon: FileText },
-  { id: 'data', label: 'Data', icon: Database },
 ]
 
 export function WorkbenchPanel({
@@ -105,7 +101,7 @@ export function WorkbenchPanel({
   return (
     <div className="workbench-panel flex h-full flex-col overflow-hidden">
       {/* Tab Bar */}
-      <div className="tab-bar flex h-14 items-center border-b border-border bg-muted/30 px-2">
+      <div className="tab-bar flex min-h-14 items-center overflow-x-auto border-b border-border bg-muted/30 px-2">
         {TABS.map((tab) => {
           const Icon = tab.icon
           const isActive = activeTab === tab.id
@@ -122,7 +118,7 @@ export function WorkbenchPanel({
               type="button"
               data-testid={`workbench-tab-${tab.id}`}
               className={cn(
-                'tab flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors',
+                'tab flex shrink-0 items-center gap-2 px-3 py-3 text-sm font-medium transition-colors sm:px-4',
                 'relative border-b-2 border-transparent',
                 'hover:text-foreground',
                 isActive
@@ -172,16 +168,6 @@ export function WorkbenchPanel({
           />
         </div>
 
-        <div className={cn('h-full', activeTab === 'code' ? 'block' : 'hidden')}>
-          {sessionId ? (
-            <CodePanel sessionId={sessionId} active={activeTab === 'code'} />
-          ) : (
-            <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
-              Please create a project first
-            </div>
-          )}
-        </div>
-
         <div className={cn('h-full', activeTab === 'product-doc' ? 'block' : 'hidden')}>
           {sessionId ? (
             <ProductDocPanel
@@ -196,12 +182,6 @@ export function WorkbenchPanel({
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
               Please create a project first
             </div>
-          )}
-        </div>
-
-        <div className={cn('h-full', activeTab === 'data' ? 'block' : 'hidden')}>
-          {activeTab === 'data' && (
-            <DataTab sessionId={sessionId} key={sessionId || 'data-tab'} />
           )}
         </div>
       </div>

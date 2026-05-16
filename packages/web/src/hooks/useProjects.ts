@@ -11,7 +11,7 @@ type ApiSession = {
   version_count?: number
   versionCount?: number
   message_count?: number
-  thumbnail?: string
+  thumbnail?: string | null
 }
 
 const toDate = (value?: string) => (value ? new Date(value) : new Date())
@@ -25,7 +25,7 @@ type CachedProject = {
   updatedAt: string
   versionCount: number
   messageCount?: number
-  thumbnail?: string
+  thumbnail?: string | null
 }
 
 type ProjectsCache = {
@@ -52,7 +52,7 @@ const loadProjectsCache = (): Project[] => {
       updatedAt: toDate(project.updatedAt),
       versionCount: project.versionCount,
       messageCount: project.messageCount,
-      thumbnail: project.thumbnail,
+      thumbnail: project.thumbnail ?? undefined,
     }))
   } catch {
     return []
@@ -70,7 +70,7 @@ const saveProjectsCache = (projects: Project[]) => {
         updatedAt: project.updatedAt.toISOString(),
         versionCount: project.versionCount,
         messageCount: project.messageCount,
-        thumbnail: project.thumbnail,
+        thumbnail: project.thumbnail ?? undefined,
       })),
     }
     window.localStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify(payload))
@@ -85,7 +85,7 @@ const mapSessionToProject = (session: ApiSession): Project => ({
   updatedAt: toDate(session.updated_at ?? session.updatedAt),
   versionCount: session.version_count ?? session.versionCount ?? 0,
   messageCount: session.message_count,
-  thumbnail: session.thumbnail,
+  thumbnail: session.thumbnail ?? undefined,
 })
 
 export function useProjects() {
@@ -143,11 +143,17 @@ export function useProjects() {
     }
   }, [])
 
-  const createProject = React.useCallback(async (title: string) => {
+  const createProject = React.useCallback(async (
+    title?: string,
+    options?: { initialPrompt?: string }
+  ) => {
     setIsCreating(true)
     setError(null)
     try {
-      const response = await api.sessions.create({ title })
+      const response = await api.sessions.create({
+        title,
+        initial_prompt: options?.initialPrompt,
+      })
       const session = (response as ApiSession | undefined) ?? undefined
       if (session?.id) {
         const project = mapSessionToProject(session)

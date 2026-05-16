@@ -68,16 +68,21 @@ export function useChat({
     (message: Message) => {
       const currentSessionId = sessionIdRef.current
       if (!currentSessionId) return
+      const currentUserMessage = messages
+        .slice()
+        .reverse()
+        .find((item) => item.role === 'user')
       savePendingMessage(
         currentSessionId,
         {
+          user: currentUserMessage ? toStoredMessage(currentUserMessage) : undefined,
           assistant: toStoredMessage(message),
           savedAt: new Date().toISOString(),
         },
         threadIdRef.current ?? undefined
       )
     },
-    []
+    [messages]
   )
 
   React.useEffect(() => {

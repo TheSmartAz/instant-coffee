@@ -15,3 +15,7 @@ asyncpg>=0.29
 beautifulsoup4>=4.12
 pillow>=10.0
 langsmith>=0.1
+aiofiles>=23.2.1
+prompt-toolkit>=3.0.43
+rich>=13.7.0
+tenacity>=8.2.3

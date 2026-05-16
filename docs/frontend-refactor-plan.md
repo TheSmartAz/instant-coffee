@@ -24,18 +24,18 @@
 
 - Phase 1 设计系统基础: 已新增字体、圆角、阴影、动画、z-index 和 success/warning/info/danger 语义色 token，并接入 Tailwind theme。
 - Phase 2 HomePage: 已重做首页信息架构，保留 pinned/search/sort/manage/delete 项目管理能力，并接入 `AppLayout` / `ContentArea`。
-- Phase 3 ProjectPage 布局壳: 已迁移为共享 `AppLayout` / `PageHeader` / `ContentArea`，主工作区接入 `ResizableSplitPane`，并保留 Chat、Preview、Build、Page selection、AppMode、Data tab、Version history、RunInspector 可达路径。
-- Phase 4 Drawer 功能迁移: 已新增 Radix Dialog 驱动的 `Drawer` 基础组件，并接入 `CodeDrawer`、`DocDrawer`、`DataDrawer`、`VersionDrawer`、`RunDetailsDrawer` 入口。`VersionPanel` / `RunInspector` 行为暂时复用在 drawer 内，避免重写 pin/preview/rollback/diff、shell approval、verification fix gate 等边缘交互。
+- Phase 3 ProjectPage 布局壳: 已迁移为共享 `AppLayout` / `PageHeader` / `ContentArea`，主工作区接入 `ResizableSplitPane`，并保留 Chat、Preview、Build、Page selection、AppMode、Data tab、Version history。
+- Phase 4 Drawer 功能迁移: 已新增 Radix Dialog 驱动的 `Drawer` 基础组件，并接入 `CodeDrawer`、`DocDrawer`、`DataDrawer`、`VersionDrawer` 入口。ProjectPage 的 `RunDetailsDrawer` / `RunInspector` 已移除，不应再作为 chat 输入框附近的高级入口恢复。
 - Phase 5 布局架构抽象: 已新增 `AppLayout`、`PageHeader`、`ContentArea`，并迁移 HomePage、ProjectPage、SettingsPage、ExecutionPage。
 - Phase 6 视觉统一: 已完成高可见状态组件的语义色 token 收敛，简化 PhoneFrame，并统一多处状态、diff、token、文件树、任务和运行观测颜色。
 - 性能收敛: `ProjectPage` 已对 Workbench、VersionPanel、Code/Doc/Data drawer 做 `React.lazy` 分包，生产 chunk 从约 554 kB 降至约 398 kB，Vite 大 chunk 警告消失。
-- 回归测试: 已新增 `ProjectDrawers.spec.ts` 覆盖 Code / Product Doc / Data / Versions drawer header 入口，并保持 Data tab、Preview bridge、RunInspector 关键 e2e 通过。
+- 回归测试: 已新增 `ProjectDrawers.spec.ts` 覆盖 Code / Product Doc / Data / Versions drawer header 入口，并保持 Data tab、Preview bridge、轻量 run status e2e 通过。
 
 ### 剩余事项
 
 - 做一次人工视觉验收，重点检查桌面/移动端 ProjectPage header、split pane 比例、Version drawer 内容高度、Drawer 内容滚动和焦点恢复。
 - 评估是否继续把 `VersionPanel` 行为拆成独立 hook/service；当前 `VersionDrawer` 复用原面板行为，降低交互回归风险。
-- 继续观察 `RunDetailsDrawer` 的实际使用体验；当前已移除常驻 `RunInspector`，只保留轻量 `RunStatusStrip` 和历史运行详情入口。
+- `RunDetailsDrawer` / `RunInspector` 已移除；继续只保留轻量 `RunStatusStrip`，不要恢复 Run details 按钮、抽屉或侧边栏。
 - 可选处理 shadcn `toast.tsx` destructive group 默认红色类；这属于组件库默认样式，不影响当前业务语义色收敛。
 - 后续如继续瘦身，可拆 `client` 公共 chunk 或对 CodePanel/editor 相关依赖做更细粒度懒加载。
 
@@ -205,7 +205,7 @@ ProjectPage 当前采用三栏布局（Chat 35% | Workbench | VersionPanel 320px
 |---|---|
 | 信息密度过高 | 三个面板同时展示，视觉拥挤，注意力分散 |
 | Tab 嵌套过深 | Workbench 有 4 个 tab，VersionPanel 内容又随 Workbench tab 变化，认知负担重 |
-| 功能冗余 | RunStatusStrip + RunInspector + TokenDisplay 挤在 ChatPanel 底部，debug 感过重 |
+| 功能冗余 | RunStatusStrip + TokenDisplay 挤在 ChatPanel 底部，debug 感过重；RunInspector 已移除 |
 | PhoneFrame 过重 | 黑色手机外框在 Notion 风格下显得突兀 |
 | VersionPanel 复杂度过高 | 808 行代码，包含 pin/unpin/preview/rollback/diff 等多重 dialog，使用频率低但占据固定空间 |
 | Code/Product Doc/Data tab | 这些内容更适合在需要时展开，而非始终占据 tab 位 |
@@ -226,8 +226,8 @@ ProjectPage 当前采用三栏布局（Chat 35% | Workbench | VersionPanel 320px
 | **Product Doc tab** | Workbench tab | ⚠️ 移至 drawer | 重要但非实时查看，chat 中已有卡片 |
 | **Data tab** | Workbench tab | ⚠️ 移至高级入口 | 现有 e2e 覆盖，不直接删除；移到 More/Advanced Drawer 或隐藏入口 |
 | **VersionPanel** | 右侧固定面板 | ⚠️ 改为 drawer | 版本历史低频操作，不应占固定空间 |
-| **RunStatusStrip** | ChatPanel 底部 | ⚠️ 降级 | 先移入高级运行详情入口或 Execution Flow，确认覆盖后再移除 |
-| **RunInspector** | ChatPanel 底部 | ⚠️ 降级 | 现有 e2e 覆盖，先保留可达入口，不做硬删除 |
+| **RunStatusStrip** | ChatPanel 底部 | ✅ 保留 | 只显示轻量状态，不提供详情入口 |
+| **RunInspector** | ChatPanel 底部 | ✅ 移除 | 不恢复 ProjectPage Run details 抽屉/侧边栏 |
 | **TokenDisplay** | ChatPanel 底部 | ⚠️ 简化 | 保留但极简显示 |
 | **Execution Flow 入口** | Header 图标 | ✅ 保留 | 需要时查看详细执行 |
 | **Build 状态/操作** | PreviewPanel 顶部 | ✅ 保留 | 与预览直接相关 |
@@ -325,8 +325,8 @@ Drawer (从右侧滑出，覆盖预览区域):
 - 移除: 其他装饰性元素
 
 **4. ChatPanel 精简**:
-- 降级: RunStatusStrip（移入高级运行详情或 Execution Flow 入口）
-- 降级: RunInspector（确认 Execution Flow 覆盖全部关键信息前，不直接删除）
+- 保留: RunStatusStrip 轻量状态，不提供详情入口
+- 移除: RunInspector / Run details 按钮、抽屉和侧边栏
 - 简化: TokenDisplay → 仅显示总 token 数，hover 展开详情
 - 保留: 消息列表、虚拟滚动、ChatInput、ThreadSelector、AbortDialog
 - 保留: ChatMessage 中的所有富内容渲染（thinking、tools、interview、file changes 等）
@@ -680,8 +680,8 @@ Phase 4 (Drawer 功能迁移)
 ├── 4.4 DataDrawer (保留 DataTab 能力)
 ├── 4.5 VersionsDrawer 行为 hook 提取
 ├── 4.6 VersionsDrawer UI 迁移
-└── 4.7 RunStatusStrip / RunInspector 降级到高级运行详情入口
-状态: 基本完成；Code/Doc/Data/Version/Run details 已迁移为 Drawer，RunInspector 通过高级运行详情入口保留完整能力
+└── 4.7 RunStatusStrip 保留轻量状态，RunInspector / Run details 入口移除
+状态: 基本完成；Code/Doc/Data/Version 已迁移为 Drawer，Run details 抽屉和 RunInspector 已从 ProjectPage 移除
 
 Phase 5 (布局架构抽象)
 ├── 5.1 AppLayout / PageHeader / ContentArea 抽象
@@ -711,7 +711,7 @@ Phase 6 (视觉统一)
 | VersionPanel 808 行代码迁移 | 先提取行为 hook/service，再迁移 UI，避免一次性重写 |
 | DataTab 已有 e2e 覆盖 | 不直接删除，迁移为 DataDrawer 或 More/Advanced 入口 |
 | AppMode 影响 iframe runtime/state | 不删除 runtime，只把入口降级到 Preview 高级设置 |
-| RunInspector 已有运行观测和 e2e | 已移动到高级运行详情 Drawer；后续只在确认 Execution Flow 覆盖全部能力后再考虑进一步清理 |
+| RunInspector 已有运行观测和 e2e | ProjectPage Run details 抽屉和 RunInspector 已移除；不要在 chat 输入框附近恢复 |
 | PhoneFrame 简化可能丢失用户喜好 | 保留原版 PhoneFrame 代码，可通过配置切换 |
 | 品牌色变更影响范围大 | 先更新 CSS 变量，全局搜索替换硬编码色值 |
 | 可拖拽面板复杂度 | 先实现基础拖拽，后续再增加持久化等高级功能 |
@@ -731,7 +731,7 @@ Phase 6 (视觉统一)
 - [x] Code/Doc/Data/Versions 通过 Header 入口以 Drawer 打开
 - [x] DataTab 能力保留，相关 e2e 不回退
 - [x] AppMode/StaticMode runtime 能力保留
-- [x] RunInspector 不再挤占 ChatPanel 常驻空间，RunStatusStrip 降级为轻量状态入口，仍有可达运行详情入口
+- [x] RunInspector 不再挤占 ChatPanel 常驻空间，RunStatusStrip 只保留轻量状态，Run details 入口已移除
 - [x] Drawer 系统正常工作 (slide-in/out, overlay, ESC 关闭、focus trap、焦点恢复、body scroll lock)
 - [x] CSS 变量和语义色 token 已定义，业务状态色已大范围收敛
 - [x] 品牌色在主要页面一致应用
@@ -756,14 +756,14 @@ ProjectPage / Drawer / 运行观测相关阶段额外运行:
 
 ```bash
 cd packages/web
-npx playwright test PreviewBridge.spec.ts RunStatusInspector.spec.ts DataTab.spec.ts v08DataTabOverhaul.spec.ts
+npx playwright test PreviewBridge.spec.ts RunStatus.spec.ts DataTab.spec.ts v08DataTabOverhaul.spec.ts
 ```
 
 当前新增 Drawer 回归也应纳入 ProjectPage 相关阶段验证:
 
 ```bash
 cd packages/web
-npx playwright test ProjectDrawers.spec.ts PreviewBridge.spec.ts RunStatusInspector.spec.ts DataTab.spec.ts v08DataTabOverhaul.spec.ts
+npx playwright test ProjectDrawers.spec.ts PreviewBridge.spec.ts RunStatus.spec.ts DataTab.spec.ts v08DataTabOverhaul.spec.ts
 ```
 
 手动或 Playwright 断点检查:

@@ -328,7 +328,7 @@ export interface ToolResultEvent extends BaseEvent {
   agent_id: string
   tool_name: string
   success: boolean
-  tool_output?: Record<string, unknown>
+  tool_output?: unknown
   error?: string
 }
 

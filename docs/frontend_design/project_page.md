@@ -2,6 +2,8 @@
 
 Last updated: 2026-05-13
 
+Note: the ProjectPage Run details drawer and `RunInspector` UI were removed after this layout pass. Do not reintroduce a Run details button, drawer, or sidebar above the chat input; keep run visibility lightweight in `RunStatusStrip` or route deeper diagnostics to a dedicated non-chat surface.
+
 ## Source Files
 
 - `packages/web/src/pages/ProjectPage.tsx`
@@ -12,7 +14,6 @@ Last updated: 2026-05-13
 - `packages/web/src/components/custom/PreviewPanel.tsx`
 - `packages/web/src/components/custom/VersionPanel.tsx`
 - `packages/web/src/components/custom/RunStatusStrip.tsx`
-- `packages/web/src/components/custom/RunInspector.tsx`
 - `packages/web/src/hooks/useChat.ts`
 - `packages/web/src/hooks/chat/useChatStream.ts`
 - `packages/web/src/hooks/chat/useStreamHandler.ts`
@@ -27,7 +28,6 @@ ProjectPage
 │   ├── ChatMessage[]
 │   ├── InterviewWidget
 │   ├── RunStatusStrip
-│   ├── RunInspector
 │   └── ChatInput
 ├── WorkbenchPanel
 │   ├── PreviewPanel
@@ -56,7 +56,7 @@ Responsibilities:
 - Render interview questions and answer summaries.
 - Support page/file mentions and uploads.
 - Trigger send/stream behavior through `useChat`.
-- Surface run state through `RunStatusStrip` and `RunInspector`.
+- Surface run state through `RunStatusStrip` only.
 
 Important behavior:
 
@@ -75,16 +75,7 @@ Important behavior:
 - review result
 - policy/verify state where available
 
-`RunInspector` exposes:
-
-- phase history
-- review summary
-- structured review issues
-- heartbeat information
-- cancellation state
-- build/review/policy metadata
-
-SSE events may place fields at the top level or inside `payload`; run UI should handle both shapes.
+SSE events may place fields at the top level or inside `payload`; run UI should handle both shapes without adding a ProjectPage Run details drawer or Run Inspector.
 
 ## Workbench Panel
 
@@ -157,7 +148,7 @@ chat stream SSE
   -> run lifecycle/build/review/verify/tool-policy events
   -> useStreamHandler
   -> ChatRunStatus
-  -> RunStatusStrip + RunInspector
+  -> RunStatusStrip
 ```
 
 ## Current Caveats

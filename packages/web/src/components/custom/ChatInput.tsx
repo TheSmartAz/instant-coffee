@@ -56,6 +56,7 @@ export interface ChatInputProps {
   disabled?: boolean
   placeholder?: string
   pages?: Page[]
+  size?: 'default' | 'hero'
 }
 
 const MAX_ATTACHMENTS = 3
@@ -157,6 +158,7 @@ export function ChatInput({
   disabled = false,
   placeholder = 'Describe what you want to build...',
   pages = [],
+  size = 'default',
 }: ChatInputProps) {
   const [message, setMessage] = React.useState('')
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([])
@@ -618,9 +620,13 @@ export function ChatInput({
     setAttachments((prev) => prev.filter((_, i) => i !== index))
   }
 
+  const isHero = size === 'hero'
+
   return (
     <div
-      className="flex w-full flex-col gap-2 rounded-2xl border border-border bg-background p-3 shadow-sm"
+      className={`flex w-full flex-col gap-2 rounded-2xl border border-border bg-background shadow-sm ${
+        isHero ? 'p-4' : 'p-3'
+      }`}
       data-testid="chat-input"
     >
       {attachments.length > 0 ? (
@@ -691,19 +697,19 @@ export function ChatInput({
           aria-label="Message input"
           data-testid="chat-textarea"
           rows={1}
-          className={`min-h-[92px] w-full resize-none border-0 bg-transparent p-0 pb-2 text-sm shadow-none focus-visible:ring-0 ${
+          className={`${isHero ? 'min-h-[110px] text-lg' : 'min-h-[92px] text-sm'} w-full resize-none border-0 bg-transparent p-0 pb-2 shadow-none focus-visible:ring-0 ${
             dragActive ? 'ring-2 ring-primary/40' : ''
           }`}
         />
       </div>
       <div className="flex w-full items-center justify-between gap-2 text-xs text-muted-foreground">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
           <Select
             value={settings.model ?? modelItems[0]?.id ?? ''}
             onValueChange={handleModelChange}
             disabled={disabled || isSettingsLoading || isSavingModel}
           >
-            <SelectTrigger className="h-8 w-[180px] rounded-full text-xs">
+            <SelectTrigger className="h-8 w-[180px] shrink-0 rounded-full text-xs">
               <SelectValue placeholder="Select model" />
             </SelectTrigger>
             <SelectContent>
@@ -748,7 +754,7 @@ export function ChatInput({
                 <button
                   key={item.value}
                   type="button"
-                  className={`inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] transition-colors ${
+                  className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-[11px] transition-colors ${
                     active
                       ? 'bg-background text-foreground shadow-sm'
                       : 'text-muted-foreground hover:text-foreground'
@@ -765,7 +771,7 @@ export function ChatInput({
             })}
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center justify-end gap-1">
           <Button
             type="button"
             variant="ghost"

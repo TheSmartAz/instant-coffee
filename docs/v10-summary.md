@@ -48,7 +48,7 @@ This document is a status snapshot against the old v10 roadmap, not a new plan.
 
 ### Web
 
-- Run Status Strip and Run Inspector.
+- Run Status Strip for lightweight run state; ProjectPage Run details drawer and Run Inspector were removed.
 - Run/build/review/tool-policy handling in chat stream hooks.
 - Workbench tabs for preview, code, product doc, and data.
 - Playwright coverage for run status inspector and existing upload/data/preview flows.

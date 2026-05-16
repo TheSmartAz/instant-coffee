@@ -91,7 +91,7 @@ Current specs:
 - `DataTab.spec.ts`
 - `ImageUpload.spec.ts`
 - `PreviewBridge.spec.ts`
-- `RunStatusInspector.spec.ts`
+- `RunStatus.spec.ts`
 - `v08DataTabOverhaul.spec.ts`
 
 Shared helpers live in `packages/web/src/e2e/helpers`.
@@ -107,7 +107,7 @@ Run a single spec:
 
 ```bash
 cd packages/web
-npx playwright test src/e2e/RunStatusInspector.spec.ts
+npx playwright test src/e2e/RunStatus.spec.ts
 ```
 
 Debug:
@@ -147,9 +147,8 @@ Backend evidence:
 
 Web evidence:
 
-- `RunStatusInspector.spec.ts`, including run SSE status, shell approvals, verification failure
-  route grouping, automatic verification-fix requests, deterministic fix-gate review, and admin
-  approval refresh.
+- `RunStatus.spec.ts`, including run SSE status, shell approval status display, build preview
+  availability, and absence of the removed Run details entry.
 
 ### 2) Product Doc And Page Persistence
 

@@ -38,6 +38,7 @@ from ..services.event_store import EventStoreService
 from ..services.thread import ThreadService
 from ..utils.chat import parse_page_mentions
 from ..utils.style import build_global_style_css
+from .sessions import _generate_session_title
 from .utils import build_page_preview_url, build_preview_url
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -1133,7 +1134,7 @@ async def chat(
     service = SessionService(db)
     session = db.get(SessionModel, payload.session_id) if payload.session_id else None
     if session is None:
-        session = service.create_session(title=None)
+        session = service.create_session(title=await _generate_session_title(payload.message))
         db.commit()
         db.refresh(session)
 
@@ -1538,7 +1539,7 @@ async def stream_post(
     service = SessionService(db)
     session = db.get(SessionModel, payload.session_id) if payload.session_id else None
     if session is None:
-        session = service.create_session(title=None)
+        session = service.create_session(title=await _generate_session_title(payload.message))
         db.commit()
         db.refresh(session)
 
@@ -1745,7 +1746,7 @@ async def stream(
         service = SessionService(db)
         session = db.get(SessionModel, session_id) if session_id else None
         if session is None:
-            session = service.create_session(title=None)
+            session = service.create_session(title=await _generate_session_title(message))
             db.commit()
             db.refresh(session)
 

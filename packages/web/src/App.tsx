@@ -7,6 +7,9 @@ import { useOnlineStatus } from '@/hooks/useOnlineStatus'
 const HomePage = React.lazy(() =>
   import('@/pages/HomePage').then((module) => ({ default: module.HomePage }))
 )
+const RecentProjectsPage = React.lazy(() =>
+  import('@/pages/RecentProjectsPage').then((module) => ({ default: module.RecentProjectsPage }))
+)
 
 const ProjectPage = React.lazy(() =>
   import('@/pages/ProjectPage').then((module) => ({ default: module.ProjectPage }))
@@ -44,6 +47,7 @@ function App() {
         >
           <Routes>
             <Route path="/" element={<ErrorBoundary><HomePage /></ErrorBoundary>} />
+            <Route path="/recent-projects" element={<ErrorBoundary><RecentProjectsPage /></ErrorBoundary>} />
             <Route path="/project/:id" element={<ErrorBoundary><ProjectPage /></ErrorBoundary>} />
             <Route path="/project/:id/flow" element={<ErrorBoundary><ExecutionPage /></ErrorBoundary>} />
             <Route path="/settings" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />

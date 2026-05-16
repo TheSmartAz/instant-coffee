@@ -61,11 +61,11 @@ test.describe('Data Tab E2E', () => {
     })
   })
 
-  test('renders as a top-level workbench tab with table data', async ({ page }) => {
+  test('renders from the project header data drawer with table data', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
 
-    await expect(page.getByTestId('workbench-tab-data')).toBeVisible()
-    await page.getByTestId('workbench-tab-data').click()
+    await expect(page.getByTestId('workbench-tab-data')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
 
     await expect(page.getByTestId('data-tab')).toBeVisible()
     await expect(page.getByTestId('data-view-table')).toBeVisible()
@@ -78,7 +78,7 @@ test.describe('Data Tab E2E', () => {
 
   test('switches tables in table view', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
-    await page.getByTestId('workbench-tab-data').click()
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
 
     await expect(page.getByTestId('data-grid-row')).toHaveCount(2)
     await page.getByTestId('data-table-tab-customers').click()
@@ -90,7 +90,7 @@ test.describe('Data Tab E2E', () => {
 
   test('renders dashboard summaries for the active table', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
-    await page.getByTestId('workbench-tab-data').click()
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
     await page.getByTestId('data-view-dashboard').click()
 
     await expect(page.getByTestId('data-view-dashboard')).toHaveAttribute('class', /bg-primary/)
@@ -118,7 +118,7 @@ test.describe('Data Tab E2E', () => {
     })
 
     await page.goto(`/project/${sessionId}`)
-    await page.getByTestId('workbench-tab-data').click()
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
     await expect(page.getByTestId('data-grid-row')).toHaveCount(2)
 
     const beforeRefresh = ordersRequestCount

@@ -9,10 +9,7 @@ type StoredMessage = Omit<Message, 'timestamp' | 'steps'> & {
 
 export type PendingMessageRecord = {
   assistant: StoredMessage
-  user?: {
-    content?: string
-    timestamp?: string
-  }
+  user?: StoredMessage
   savedAt: string
 }
 

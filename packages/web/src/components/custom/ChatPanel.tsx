@@ -1,10 +1,8 @@
 import * as React from 'react'
 import { ChatInput, type ChatInputProps } from './ChatInput'
 import { ChatMessage } from './ChatMessage'
-import { RunDetailsDrawer } from './RunDetailsDrawer'
 import { RunStatusStrip } from './RunStatusStrip'
 import { TokenDisplay } from '@/components/TokenDisplay'
-import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -19,12 +17,10 @@ import type {
 
 export interface ChatPanelProps {
   messages: Message[]
-  sessionId?: string
   onSendMessage: ChatInputProps['onSend']
   onAssetUpload?: ChatInputProps['onAssetUpload']
   onInterviewAction?: (payload: InterviewActionPayload) => void
   onTabChange?: (tab: 'preview' | 'code' | 'product-doc' | 'data') => void
-  onOpenBuildPreview?: () => void
   isLoading?: boolean
   errorMessage?: string | null
   runStatus?: ChatRunStatus | null
@@ -35,12 +31,10 @@ export interface ChatPanelProps {
 
 export function ChatPanel({
   messages,
-  sessionId,
   onSendMessage,
   onAssetUpload,
   onInterviewAction,
   onTabChange,
-  onOpenBuildPreview,
   isLoading = false,
   errorMessage,
   runStatus,
@@ -49,7 +43,6 @@ export function ChatPanel({
   tokenUsage,
 }: ChatPanelProps) {
   const bottomRef = React.useRef<HTMLDivElement | null>(null)
-  const [isRunDetailsOpen, setIsRunDetailsOpen] = React.useState(false)
   const visibleMessages = React.useMemo(
     () => messages.filter((message) => !message.hidden),
     [messages]
@@ -210,33 +203,7 @@ export function ChatPanel({
           <div ref={bottomRef} />
         </div>
       </ScrollArea>
-      {runStatus ? (
-        <RunStatusStrip status={runStatus} onOpenDetails={() => setIsRunDetailsOpen(true)} />
-      ) : sessionId ? (
-        <div className="border-t border-border bg-background px-4 py-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => setIsRunDetailsOpen(true)}
-            onPointerDown={(event) => {
-              event.preventDefault()
-              setIsRunDetailsOpen(true)
-            }}
-            data-testid="run-details-open"
-          >
-            Run details
-          </Button>
-        </div>
-      ) : null}
-      <RunDetailsDrawer
-        open={isRunDetailsOpen}
-        onOpenChange={setIsRunDetailsOpen}
-        sessionId={sessionId}
-        runStatus={runStatus}
-        onOpenBuildPreview={onOpenBuildPreview}
-      />
+      {runStatus ? <RunStatusStrip status={runStatus} /> : null}
       {errorMessage ? (
         <div className="border-t border-border bg-destructive/10 px-4 py-2 text-xs text-destructive">
           {errorMessage}

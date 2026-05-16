@@ -74,6 +74,150 @@ export function useChatStream({
 }: UseChatStreamOptions) {
   const [isStreaming, setIsStreaming] = React.useState(false)
   const [connectionState, setConnectionState] = React.useState<ConnectionState>('idle')
+  const handleStreamDataRef = React.useRef<((data: string) => void) & { destroy?: () => void }>(() => undefined)
+  const runEventSourceRef = React.useRef<EventSource | null>(null)
+  const runEventRunIdRef = React.useRef<string | null>(null)
+
+  const closeRunEventStream = React.useCallback(() => {
+    if (runEventSourceRef.current) {
+      runEventSourceRef.current.close()
+      runEventSourceRef.current = null
+    }
+    runEventRunIdRef.current = null
+  }, [])
+
+  const isTerminalRunStatus = React.useCallback((status: ChatRunStatus) => {
+    const normalized = (status.status ?? '').toLowerCase()
+    return (
+      normalized === 'completed' ||
+      normalized === 'failed' ||
+      normalized === 'cancelled' ||
+      status.eventType === 'run_completed' ||
+      status.eventType === 'run_failed' ||
+      status.eventType === 'run_cancelled'
+    )
+  }, [])
+
+  const runDetailToStatus = React.useCallback(
+    (run: import('@/types').SessionRunDetail): ChatRunStatus => ({
+      eventType:
+        run.status === 'completed'
+          ? 'run_completed'
+          : run.status === 'failed'
+            ? 'run_failed'
+            : run.status === 'cancelled'
+              ? 'run_cancelled'
+              : run.status === 'waiting_input'
+                ? 'run_waiting_input'
+                : 'run_phase',
+      stage: 'run',
+      runId: run.run_id,
+      executionMode: run.execution_mode ?? run.executionMode ?? run.approval_mode ?? undefined,
+      phase: run.current_phase ?? undefined,
+      status: run.status,
+      message: run.waiting_reason ?? undefined,
+      error:
+        typeof run.latest_error?.message === 'string'
+          ? run.latest_error.message
+          : undefined,
+      summary: run.phase_metadata,
+      updatedAt: run.updated_at ?? undefined,
+    }),
+    [],
+  )
+
+  const reconcileRunStatus = React.useCallback(
+    async (runId: string) => {
+      try {
+        const run = await api.runs.get(runId)
+        handleStreamDataRef.current(
+          JSON.stringify({
+            type:
+              run.status === 'completed'
+                ? 'run_completed'
+                : run.status === 'failed'
+                  ? 'run_failed'
+                  : run.status === 'cancelled'
+                    ? 'run_cancelled'
+                    : run.status === 'waiting_input'
+                      ? 'run_waiting_input'
+                      : 'run_phase',
+            run_id: run.run_id,
+            execution_mode: run.execution_mode ?? run.executionMode ?? run.approval_mode,
+            phase: run.current_phase,
+            status: run.status,
+            waiting_reason: run.waiting_reason,
+            timestamp: run.updated_at,
+          }),
+        )
+      } catch {
+        // Keep the last streamed state when reconciliation is unavailable.
+      }
+    },
+    [],
+  )
+
+  const subscribeRunEventStream = React.useCallback(
+    (runId: string) => {
+      if (runEventRunIdRef.current === runId && runEventSourceRef.current) return
+      closeRunEventStream()
+
+      const eventSource = new EventSource(api.runs.streamUrl(runId))
+      runEventSourceRef.current = eventSource
+      runEventRunIdRef.current = runId
+
+      eventSource.onmessage = (event) => {
+        if (event.data === '[DONE]') {
+          closeRunEventStream()
+          void reconcileRunStatus(runId)
+          return
+        }
+        handleStreamDataRef.current(event.data)
+      }
+
+      eventSource.onerror = () => {
+        closeRunEventStream()
+        void reconcileRunStatus(runId)
+      }
+    },
+    [closeRunEventStream, reconcileRunStatus],
+  )
+
+  const handleRunStatusChange = React.useCallback(
+    (status: ChatRunStatus | null) => {
+      onRunStatusChange?.(status)
+      if (!status?.runId) return
+      if (isTerminalRunStatus(status)) {
+        closeRunEventStream()
+        return
+      }
+      subscribeRunEventStream(status.runId)
+    },
+    [closeRunEventStream, isTerminalRunStatus, onRunStatusChange, subscribeRunEventStream],
+  )
+
+  React.useEffect(() => {
+    if (!sessionId || isStreaming) return
+    let active = true
+
+    const restoreActiveRun = async () => {
+      try {
+        const response = await api.runs.list(sessionId, { limit: 1 })
+        if (!active) return
+        const latestRun = response.runs?.[0]
+        if (!latestRun) return
+        if (!['queued', 'running', 'waiting_input'].includes(latestRun.status)) return
+        handleRunStatusChange(runDetailToStatus(latestRun))
+      } catch {
+        // Run status recovery is best-effort; the persisted chat still renders.
+      }
+    }
+
+    void restoreActiveRun()
+    return () => {
+      active = false
+    }
+  }, [handleRunStatusChange, isStreaming, runDetailToStatus, sessionId])
 
   const appendStep = React.useCallback(
     (step: ChatStep, options?: { updateKey?: string }) => {
@@ -411,7 +555,6 @@ export function useChatStream({
     ]
   )
 
-  const handleStreamDataRef = React.useRef<((data: string) => void) & { destroy?: () => void }>(() => undefined)
   React.useEffect(() => {
     // Destroy previous handler's delta buffer
     handleStreamDataRef.current.destroy?.()
@@ -429,7 +572,7 @@ export function useChatStream({
       updateMessageById,
       dispatchProductDocEvent,
       handleActionTabSwitch,
-      onRunStatusChange,
+      onRunStatusChange: handleRunStatusChange,
       onPreview,
     })
   }, [
@@ -446,7 +589,7 @@ export function useChatStream({
     updateMessageById,
     dispatchProductDocEvent,
     handleActionTabSwitch,
-    onRunStatusChange,
+    handleRunStatusChange,
     onPreview,
   ])
 
@@ -557,8 +700,9 @@ export function useChatStream({
       if (fetchAbortRef.current) {
         fetchAbortRef.current.abort()
       }
+      closeRunEventStream()
     }
-  }, [eventSourceRef, fetchAbortRef])
+  }, [closeRunEventStream, eventSourceRef, fetchAbortRef])
 
   return {
     isStreaming,

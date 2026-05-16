@@ -55,7 +55,7 @@ test.describe('Preview Message Bridge E2E', () => {
     await expect(page.getByTestId('preview-panel')).toBeVisible()
     await expect(page.getByTestId('preview-iframe')).toBeVisible()
 
-    await page.getByTestId('workbench-tab-data').click()
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
     await expect(page.getByTestId('data-tab')).toBeVisible()
     await expect(page.getByTestId('data-view-table')).toBeVisible()
     await expect(page.getByTestId('data-grid-row')).toHaveCount(2)
@@ -70,7 +70,7 @@ test.describe('Preview Message Bridge E2E', () => {
       window.postMessage('not-json', '*')
     })
 
-    await page.getByTestId('workbench-tab-data').click()
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
     await expect(page.getByTestId('data-tab')).toBeVisible()
     await expect(page.getByTestId('data-grid-row')).toHaveCount(2)
     await expect(page.getByTestId('data-tab')).toContainText('ready')
@@ -94,7 +94,7 @@ test.describe('Preview Message Bridge E2E', () => {
     })
 
     await page.goto(`/project/${sessionId}`)
-    await page.getByTestId('workbench-tab-data').click()
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
     await expect(page.getByTestId('data-grid-row')).toHaveCount(2)
 
     const beforeMessage = ordersRequestCount
@@ -109,7 +109,7 @@ test.describe('Preview Message Bridge E2E', () => {
     await page.goto(`/project/${sessionId}`)
     await expect(page.getByTestId('preview-iframe')).toBeVisible()
 
-    await page.getByTestId('workbench-tab-data').click()
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
     await page.getByTestId('data-view-dashboard').click()
 
     await expect(page.getByTestId('data-view-dashboard')).toHaveAttribute('class', /bg-primary/)

@@ -230,7 +230,7 @@ export const buildStepsFromEvents = (
           agent_id: payload.agent_id as string ?? '',
           tool_name: payload.tool_name as string ?? '',
           tool_input: payload.tool_input as Record<string, unknown> | undefined,
-          tool_output: payload.tool_output as Record<string, unknown> | undefined,
+          tool_output: payload.tool_output,
           success: payload.success as boolean ?? true,
           error: payload.error as string | undefined,
         }

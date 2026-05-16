@@ -42,8 +42,9 @@ class TsxFileWriter:
         for page in pages:
             slug = page["slug"]
             component_name = self._slug_to_component(slug)
+            import_path = self._resolve_page_import_path(slug)
             imports.append(
-                f"import {component_name} from './pages/{slug}'"
+                f"import {component_name} from './pages/{import_path}'"
             )
             if slug == "index":
                 routes.append(
@@ -112,6 +113,54 @@ export default function App({{ pageSlug = 'index' }}: AppProps) {{
         parts = slug.replace("-", " ").replace("_", " ").split()
         name = "".join(word.capitalize() for word in parts) if parts else "Index"
         return f"{name}Page"
+
+    def _resolve_page_import_path(self, slug: str) -> str:
+        """Resolve the actual page module for a slug.
+
+        The React SSG template includes placeholder pages that call back into
+        App via createPage(). Those placeholders are valid for schema builds,
+        but in the HTML-to-React path App imports pages directly. Importing a
+        placeholder there causes App -> Page -> App recursion during prerender.
+        """
+        pages_dir = self.root / "src" / "pages"
+        slug_path = pages_dir / f"{slug}.tsx"
+        if slug_path.exists() and not self._is_template_page(slug_path):
+            return slug
+
+        candidates = [
+            path
+            for path in sorted(pages_dir.glob("*.tsx"))
+            if path.stem != "_template" and not self._is_template_page(path)
+        ]
+        preferred = next((path for path in candidates if path.stem == slug), None)
+        if preferred is None and slug == "index" and len(candidates) == 1:
+            preferred = candidates[0]
+
+        if preferred is not None:
+            self._write_slug_wrapper(slug_path, preferred)
+        return slug
+
+    @staticmethod
+    def _is_template_page(path: Path) -> bool:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        return "createPage(" in content and "from './_template'" in content
+
+    @staticmethod
+    def _relative_import(from_path: Path, to_path: Path) -> str:
+        relative = to_path.with_suffix("").relative_to(from_path.parent)
+        value = relative.as_posix()
+        return value if value.startswith(".") else f"./{value}"
+
+    def _write_slug_wrapper(self, slug_path: Path, target_path: Path) -> None:
+        import_path = self._relative_import(slug_path, target_path)
+        slug_path.parent.mkdir(parents=True, exist_ok=True)
+        slug_path.write_text(
+            f"export {{ default }} from '{import_path}'\n",
+            encoding="utf-8",
+        )
 
 
 __all__ = ["TsxFileWriter"]

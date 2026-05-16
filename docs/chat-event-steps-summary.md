@@ -4,7 +4,7 @@ Last updated: 2026-05-13
 
 ## Goal
 
-Agent, tool, and run execution visibility should appear in the chat stream without overwhelming the user. The chat view should show compact sub-steps under the assistant response, while run-specific status and diagnostics are handled by `RunStatusStrip` and `RunInspector`.
+Agent, tool, and run execution visibility should appear in the chat stream without overwhelming the user. The chat view should show compact sub-steps under the assistant response, while run-specific status is handled by `RunStatusStrip`. The former ProjectPage Run details drawer and Run Inspector are intentionally removed and should not be reintroduced.
 
 ## Current Behavior
 
@@ -30,8 +30,6 @@ Agent, tool, and run execution visibility should appear in the chat stream witho
   - structured question UI
 - `packages/web/src/components/custom/RunStatusStrip.tsx`
   - compact run status
-- `packages/web/src/components/custom/RunInspector.tsx`
-  - phase history and review diagnostics
 - `packages/web/src/hooks/useChat.ts`
   - high-level chat state
 - `packages/web/src/hooks/chat/useChatStream.ts`

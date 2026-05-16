@@ -158,7 +158,7 @@ class Settings:
     run_api_enabled: bool = field(default_factory=lambda: _get_bool("RUN_API_ENABLED", True))
     chat_use_run_adapter: bool = field(default_factory=lambda: _get_bool("CHAT_USE_RUN_ADAPTER", True))
     run_stale_timeout_seconds: float = field(
-        default_factory=lambda: _get_float("RUN_STALE_TIMEOUT_SECONDS", 30 * 60.0)
+        default_factory=lambda: _get_float("RUN_STALE_TIMEOUT_SECONDS", 15 * 60.0)
     )
     tool_policy_enabled: bool = field(default_factory=lambda: _get_bool("TOOL_POLICY_ENABLED", True))
     tool_policy_mode: str = field(default_factory=lambda: _get_env("TOOL_POLICY_MODE", "log_only") or "log_only")

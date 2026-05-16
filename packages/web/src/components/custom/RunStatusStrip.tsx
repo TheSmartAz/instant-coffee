@@ -1,12 +1,10 @@
 import { AlertCircle, CheckCircle2, Clock, Loader2, ShieldAlert, XCircle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { ChatRunStatus, ChatRunStatusStage } from '@/types'
 
 interface RunStatusStripProps {
   status?: ChatRunStatus | null
-  onOpenDetails?: () => void
 }
 
 type StatusTone = 'running' | 'success' | 'failed' | 'waiting' | 'warning'
@@ -142,7 +140,7 @@ const clampPercent = (percent?: number) => {
   return Math.max(0, Math.min(100, percent))
 }
 
-export function RunStatusStrip({ status, onOpenDetails }: RunStatusStripProps) {
+export function RunStatusStrip({ status }: RunStatusStripProps) {
   if (!status) return null
 
   const tone = getTone(status)
@@ -152,9 +150,6 @@ export function RunStatusStrip({ status, onOpenDetails }: RunStatusStripProps) {
   const detail = status.error ?? status.message ?? formatSummary(status.summary)
   const runId = formatRunId(status.runId)
   const executionMode = status.executionMode ? EXECUTION_MODE_LABELS[status.executionMode] : undefined
-  const detailsLabel =
-    tone === 'waiting' || status.eventType === 'shell_approval' ? 'Resolve run' : 'Details'
-
   return (
     <div
       className="border-t border-border bg-background px-4 py-2"
@@ -196,22 +191,6 @@ export function RunStatusStrip({ status, onOpenDetails }: RunStatusStripProps) {
           <span className="shrink-0 rounded-full border border-current/20 px-2 py-0.5 text-[11px] font-medium text-current/75">
             {executionMode}
           </span>
-        ) : null}
-        {onOpenDetails ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 shrink-0 px-2 text-xs text-current hover:bg-background/70 hover:text-current"
-            onClick={onOpenDetails}
-            onPointerDown={(event) => {
-              event.preventDefault()
-              onOpenDetails()
-            }}
-            data-testid="run-details-open"
-          >
-            {detailsLabel}
-          </Button>
         ) : null}
       </div>
     </div>

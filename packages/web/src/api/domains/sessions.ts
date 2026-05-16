@@ -20,9 +20,10 @@ export const createSessionsApi = () => ({
     ),
   get: (id: string) => request<SessionResponse>(`/api/sessions/${id}`),
   getMetadata: (id: string) => request<SessionMetadataResponse>(`/api/sessions/${id}/metadata`),
-  create: (data: { title?: string }) =>
+  create: (data: { title?: string; initial_prompt?: string }) =>
     request<SessionResponse>('/api/sessions', {
       method: 'POST',
+      cache: 'no-store',
       body: JSON.stringify(data),
     }),
   remove: (id: string) =>

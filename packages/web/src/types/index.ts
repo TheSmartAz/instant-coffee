@@ -13,7 +13,7 @@ export interface ChatStep {
   key?: string
   toolName?: string
   toolInput?: Record<string, unknown>
-  toolOutput?: Record<string, unknown>
+  toolOutput?: unknown
   error?: string
   progressMessage?: string
   progressPercent?: number
@@ -338,7 +338,7 @@ export interface Project {
   updatedAt: Date
   versionCount: number
   messageCount?: number
-  thumbnail?: string
+  thumbnail?: string | null
 }
 
 export interface SessionDetail {

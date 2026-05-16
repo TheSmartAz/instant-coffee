@@ -131,9 +131,12 @@ function RichToolSummary({ steps }: { steps: ChatStep[] }) {
 
 /* ── Tool output preview (collapsible) ── */
 
-function ToolOutputPreview({ output }: { output: Record<string, unknown> }) {
+function ToolOutputPreview({ output }: { output: unknown }) {
   const [open, setOpen] = useState(false)
-  const preview = JSON.stringify(output, null, 2)
+  const preview =
+    typeof output === 'string'
+      ? output
+      : JSON.stringify(output, null, 2)
   if (preview.length < 10) return null
 
   return (

@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 
@@ -10,6 +11,7 @@ from app.db.models import SessionRun
 from app.db.models import SessionEvent, SessionEventSource
 from app.db.utils import get_db
 from app.services.memory import ProjectMemoryService
+from app.utils.datetime import utcnow
 
 
 def _create_app(tmp_path, monkeypatch, *, run_api_enabled: bool = True):
@@ -143,6 +145,45 @@ def test_runs_api_create_get_resume_cancel_and_idempotency(tmp_path, monkeypatch
         )
         assert len(events) == 1
         assert events[0].payload["payload"]["status"] == "cancelled"
+
+
+def test_runs_api_get_and_list_recover_stale_active_run(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/api/runs",
+            json={"session_id": session_id, "message": "hello"},
+        )
+        assert create_resp.status_code == 201
+        run_id = create_resp.json()["run_id"]
+
+        with get_db() as session:
+            run = session.get(SessionRun, run_id)
+            assert run is not None
+            run.status = "running"
+            run.started_at = utcnow() - timedelta(hours=2)
+            run.updated_at = utcnow() - timedelta(hours=2)
+            session.add(run)
+            session.commit()
+
+        get_resp = client.get(f"/api/runs/{run_id}")
+        assert get_resp.status_code == 200
+        get_payload = get_resp.json()
+        assert get_payload["status"] == "failed"
+        assert get_payload["latest_error"] is None
+
+        list_resp = client.get("/api/runs", params={"session_id": session_id})
+        assert list_resp.status_code == 200
+        list_payload = list_resp.json()
+        assert list_payload["runs"][0]["run_id"] == run_id
+        assert list_payload["runs"][0]["status"] == "failed"
+
+        with get_db() as session:
+            stored = session.get(SessionRun, run_id)
+            assert stored is not None
+            assert stored.latest_error["code"] == "run_stale_timeout"
 
 
 def test_runs_api_create_conflicts_with_active_run(tmp_path, monkeypatch) -> None:

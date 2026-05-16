@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from ..db.models import (
+    SessionRun,
     SessionEvent,
     SessionEventSequence,
     SessionEventSource,
@@ -318,6 +319,12 @@ class EventStoreService:
                             created_at=event.timestamp,
                             db=db,
                         )
+                        self._touch_run_heartbeat(
+                            db,
+                            run_id=payload.get("run_id") if isinstance(payload, dict) else None,
+                            event_type=str(event_type),
+                            created_at=event.timestamp,
+                        )
                 return
             except OperationalError as exc:
                 if self._is_sqlite_locked(exc):
@@ -327,6 +334,35 @@ class EventStoreService:
                     logger.warning("Event store busy, dropping event after retries")
                     return
                 raise
+
+    def _touch_run_heartbeat(
+        self,
+        db: DbSession,
+        *,
+        run_id: Any,
+        event_type: str,
+        created_at: datetime | None,
+    ) -> None:
+        if not isinstance(run_id, str) or not run_id:
+            return
+        if event_type in RUN_SCOPED_EVENT_TYPES:
+            return
+        run = db.get(SessionRun, run_id)
+        if run is None or run.status not in {"queued", "running"}:
+            return
+        at = created_at or datetime.now(timezone.utc)
+        metrics = dict(run.metrics) if isinstance(run.metrics, dict) else {}
+        heartbeat = dict(metrics.get("heartbeat") or {})
+        heartbeat["at"] = at.isoformat().replace("+00:00", "Z")
+        heartbeat["step"] = event_type
+        if metrics.get("phase"):
+            heartbeat["phase"] = metrics.get("phase")
+        if metrics.get("phase_status"):
+            heartbeat["status"] = metrics.get("phase_status")
+        metrics["heartbeat"] = heartbeat
+        run.metrics = metrics
+        run.updated_at = at
+        db.add(run)
 
 
 __all__ = ["EventStoreService"]

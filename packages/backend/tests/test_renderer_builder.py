@@ -3,6 +3,8 @@ from pathlib import Path
 
 from app.renderer.builder import ReactSSGBuilder
 from app.renderer.file_generator import SchemaFileGenerator
+from app.renderer.html_to_react import ConvertedFile
+from app.renderer.tsx_writer import TsxFileWriter
 
 
 def test_schema_file_generator_writes_json_and_pages(tmp_path: Path) -> None:
@@ -110,3 +112,31 @@ def test_react_ssg_builder_builds_from_workspace_source(tmp_path: Path, monkeypa
     assert result["status"] == "success"
     assert result["source_mode"] == "workspace"
     assert (builder.dist_dir / "index.html").exists()
+
+
+def test_tsx_writer_replaces_template_page_wrapper_for_html_conversion(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    pages_dir = project_root / "src" / "pages"
+    pages_dir.mkdir(parents=True)
+    (pages_dir / "_template.tsx").write_text("export const template = true\n", encoding="utf-8")
+    (pages_dir / "index.tsx").write_text(
+        "import { createPage } from './_template'\n\nexport default createPage('index')\n",
+        encoding="utf-8",
+    )
+
+    writer = TsxFileWriter(project_root)
+    writer.write_files(
+        [
+            ConvertedFile(
+                path="src/pages/LandingPage.tsx",
+                content="export default function LandingPage() { return <main>Landing</main> }\n",
+            )
+        ]
+    )
+    writer.write_entry_points([{"slug": "index", "title": "Home"}])
+
+    index_page = (pages_dir / "index.tsx").read_text(encoding="utf-8")
+    app_tsx = (project_root / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "createPage(" not in index_page
+    assert "from './LandingPage'" in index_page
+    assert "import IndexPage from './pages/index'" in app_tsx

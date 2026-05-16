@@ -36,6 +36,7 @@ from .db.data_migration_v04 import migrate_existing_sessions
 from .db.migrations import init_db
 from .db.database import get_database
 from .services.app_data_store import close_app_data_store, initialize_app_data_store
+from .services.run import RunService
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,13 @@ async def _lifespan(_: FastAPI):
     settings = get_settings()
     if settings.migrate_v04_on_startup:
         migrate_existing_sessions(database)
+    with database.session() as session:
+        failed_runs = RunService(session).fail_stale_runs(
+            stale_after_seconds=settings.run_stale_timeout_seconds,
+        )
+        if failed_runs:
+            session.commit()
+            logger.warning("Marked %d stale active run(s) failed on startup", len(failed_runs))
     await initialize_app_data_store()
     try:
         yield

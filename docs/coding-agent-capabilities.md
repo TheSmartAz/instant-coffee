@@ -7,12 +7,12 @@ Last updated: 2026-05-16
 Instant Coffee now has a run-centric coding-agent loop that can:
 
 - create and track run state through `/api/runs`;
-- expose phase history, artifacts, review results, verification status, and project memory evidence in the Run Inspector;
+- persist phase history, artifacts, review results, verification status, and project memory evidence for API and non-chat diagnostics;
 - build a verification profile from run artifacts and memory notes;
 - execute allowlisted verification commands from the backend;
 - parse pytest, TypeScript, and ESLint failures into structured failure evidence with failure
   routing metadata for repair prompts and action audit flags;
-- group routed verification failures in the Run Inspector by route/kind, including counts and
+- group routed verification failures by route/kind, including counts and
   route-specific fix hints;
 - persist verification command results under run coordinator artifacts;
 - request an automatic verification fix when the last verification run failed;
@@ -25,7 +25,7 @@ Instant Coffee now has a run-centric coding-agent loop that can:
 - persist visual verification status, quality score, screenshot path, errors, and warnings under run artifacts.
 - expose non-HTML workspace files under the file tree `workspace/` folder so coding-agent file writes are visible alongside DB-backed HTML pages.
 - build directly from agent-authored workspace React source when `src/App.tsx` or `src/pages/*.tsx` exists, falling back to the DB HTML path otherwise.
-- request, resolve, and audit shell-command approvals through run-scoped events and the Run Inspector.
+- request, resolve, and audit shell-command approvals through run-scoped events. The old ProjectPage Run details drawer and Run Inspector UI are removed.
 
 ## Two-Layer Model
 
@@ -204,8 +204,7 @@ The current M1-M5 closeout is verified by:
 - an API-level dogfood test that fails verification, runs automatic fix, records change summary,
   accepts the low/medium-risk fix gate, and proves final verification passes without leaking raw
   prompt, engine, failure, or command-output details;
-- Run Inspector Playwright coverage for streamed run state, grouped verification failure routes,
-  fix-verification requests, deterministic gate review, and admin gate approval refresh;
+- Playwright coverage for streamed run status and the absence of the removed ProjectPage Run details drawer;
 - an opt-in real-provider smoke that creates a durable chat run and executes run verification,
   while intentionally avoiding automatic fix attempts against the live worktree;
 - a second, doubly gated real-provider dogfood path can invoke automatic verification fix when

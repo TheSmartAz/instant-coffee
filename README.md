@@ -25,7 +25,7 @@ The current implementation is DeepSeek-oriented by default (`DEEPSEEK_API_KEY` o
 - Durable run lifecycle through `/api/runs`: implement, build, review, optional fix, done, complete/fail/cancel, plus verification events from review.
 - Deterministic build/review gate for generated output quality checks.
 - Event persistence and replay via `/api/sessions/{session_id}/events`.
-- Web Run Status Strip and Run Inspector for phase history, build state, review issues, heartbeat, cancellation, and tool-policy events.
+- Web Run Status Strip for lightweight chat-adjacent run/build/review state. The former Run details drawer and Run Inspector UI are intentionally removed from ProjectPage.
 - App Data API and Data tab for generated app state/tables.
 - Standalone `ic` CLI agent for direct terminal use.
 

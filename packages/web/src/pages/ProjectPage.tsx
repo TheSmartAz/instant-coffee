@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Activity, ArrowLeft, Code, Database, FileText, History, Settings } from 'lucide-react'
+import { Activity, ArrowLeft, Code, Database, History, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ChatPanel } from '@/components/custom/ChatPanel'
 import type { WorkbenchTab } from '@/components/custom/WorkbenchPanel'
@@ -20,6 +20,7 @@ import { useSessionCost } from '@/hooks/useCost'
 import { usePreviewManager } from '@/hooks/usePreviewManager'
 import { useAsyncAction } from '@/hooks/useAsyncAction'
 import { toast } from '@/hooks/use-toast'
+import { consumeHomePrompt } from '@/lib/homePromptStorage'
 
 const LAST_PROJECT_KEY = 'instant-coffee:last-project-id'
 
@@ -36,11 +37,6 @@ const VersionDrawer = React.lazy(() =>
 const CodeDrawer = React.lazy(() =>
   import('@/components/custom/CodeDrawer').then((module) => ({
     default: module.CodeDrawer,
-  }))
-)
-const DocDrawer = React.lazy(() =>
-  import('@/components/custom/DocDrawer').then((module) => ({
-    default: module.DocDrawer,
   }))
 )
 const DataDrawer = React.lazy(() =>
@@ -68,7 +64,6 @@ export function ProjectPage() {
   const [workbenchTab, setWorkbenchTab] = React.useState<WorkbenchTab>('preview')
   const [previewMode, setPreviewMode] = React.useState<'live' | 'build'>('live')
   const [isCodeDrawerOpen, setIsCodeDrawerOpen] = React.useState(false)
-  const [isDocDrawerOpen, setIsDocDrawerOpen] = React.useState(false)
   const [isDataDrawerOpen, setIsDataDrawerOpen] = React.useState(false)
   const sessionId = id && id !== 'new' ? id : undefined
   const {
@@ -202,6 +197,14 @@ export function ProjectPage() {
     },
     onPreview: handlePreview,
     onTabChange: (tab) => {
+      if (tab === 'code') {
+        setIsCodeDrawerOpen(true)
+        return
+      }
+      if (tab === 'data') {
+        setIsDataDrawerOpen(true)
+        return
+      }
       setWorkbenchTab(tab)
     },
     onPageSelect: async (slug) => {
@@ -213,6 +216,15 @@ export function ProjectPage() {
       }
     },
   })
+
+  const consumedHomePromptRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (!sessionId || !activeThreadId || isLoading || chat.isStreaming || messages.length > 0) return
+    const prompt = consumeHomePrompt(sessionId)
+    if (!prompt || consumedHomePromptRef.current === prompt) return
+    consumedHomePromptRef.current = prompt
+    void chat.sendMessage(prompt)
+  }, [activeThreadId, chat, isLoading, messages.length, sessionId])
 
   const isBuildRunning =
     buildState.status === 'building' || buildState.status === 'pending'
@@ -440,11 +452,6 @@ export function ProjectPage() {
     void handleBuildFromDoc()
   }, [handleBuildFromDoc])
 
-  const handleOpenBuildPreview = React.useCallback(() => {
-    setWorkbenchTab('preview')
-    setPreviewMode('build')
-  }, [])
-
   const handleBuildCancel = React.useCallback(async () => {
     if (!sessionId) return
     await runAction(
@@ -491,7 +498,7 @@ export function ProjectPage() {
   return (
     <AppLayout className="h-screen min-h-0 min-w-0 overflow-hidden animate-in fade-in">
       <PageHeader
-        className="min-w-0 shrink-0 flex-wrap gap-2 px-3 py-3 sm:flex-nowrap sm:px-6 sm:py-4"
+        className="min-w-0 shrink-0 flex-wrap items-start gap-2 px-3 py-3 sm:flex-nowrap sm:items-center sm:px-6 sm:py-4"
         leading={
           <Button variant="ghost" size="icon" className="shrink-0" asChild aria-label="Back to home">
             <Link to="/">
@@ -501,57 +508,64 @@ export function ProjectPage() {
         }
         title={session?.title ?? `Project ${id ?? 'Untitled'}`}
         trailing={
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 sm:flex-nowrap sm:gap-2">
+        <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-1 sm:flex-nowrap sm:gap-2">
           <Button
             variant="ghost"
-            size="icon"
-            className="shrink-0"
+            size="sm"
+            className="h-9 shrink-0 gap-2 px-2 sm:px-3"
             onClick={() => setIsCodeDrawerOpen(true)}
             disabled={!sessionId}
             aria-label="Open code drawer"
           >
             <Code className="h-4 w-4" />
+            <span className="hidden text-xs sm:inline">Code</span>
           </Button>
           <Button
             variant="ghost"
-            size="icon"
-            className="shrink-0"
-            onClick={() => setIsDocDrawerOpen(true)}
-            disabled={!sessionId}
-            aria-label="Open product doc drawer"
-          >
-            <FileText className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="shrink-0"
+            size="sm"
+            className="h-9 shrink-0 gap-2 px-2 sm:px-3"
             onClick={() => setIsDataDrawerOpen(true)}
             disabled={!sessionId}
-            aria-label="Open data and more drawer"
+            aria-label="Open data drawer"
           >
             <Database className="h-4 w-4" />
+            <span className="hidden text-xs sm:inline">Data</span>
           </Button>
           <Button
             variant="ghost"
-            size="icon"
-            className="shrink-0"
+            size="sm"
+            className="h-9 shrink-0 gap-2 px-2 sm:px-3"
             onClick={() => setIsVersionDrawerOpen(true)}
             disabled={!sessionId}
             aria-label="Open versions drawer"
           >
             <History className="h-4 w-4" />
+            <span className="hidden text-xs sm:inline">Versions</span>
           </Button>
           {sessionId ? (
-            <Button variant="ghost" size="icon" className="shrink-0" asChild aria-label="Execution flow">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 shrink-0 gap-2 px-2 sm:px-3"
+              asChild
+              aria-label="Execution flow"
+            >
               <Link to={`/project/${sessionId}/flow`}>
                 <Activity className="h-4 w-4" />
+                <span className="hidden text-xs sm:inline">Flow</span>
               </Link>
             </Button>
           ) : null}
-          <Button variant="ghost" size="icon" className="shrink-0" asChild aria-label="Open settings">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 shrink-0 gap-2 px-2 sm:px-3"
+            asChild
+            aria-label="Open settings"
+          >
             <Link to="/settings">
               <Settings className="h-4 w-4" />
+              <span className="hidden text-xs sm:inline">Settings</span>
             </Link>
           </Button>
         </div>
@@ -592,12 +606,20 @@ export function ProjectPage() {
                 </div>
                 <ChatPanel
                   messages={messages}
-                  sessionId={sessionId}
                   onSendMessage={chat.sendMessage}
                   onAssetUpload={chat.uploadAsset}
                   onInterviewAction={chat.handleInterviewAction}
-                  onTabChange={setWorkbenchTab}
-                  onOpenBuildPreview={handleOpenBuildPreview}
+                  onTabChange={(tab) => {
+                    if (tab === 'code') {
+                      setIsCodeDrawerOpen(true)
+                      return
+                    }
+                    if (tab === 'data') {
+                      setIsDataDrawerOpen(true)
+                      return
+                    }
+                    setWorkbenchTab(tab)
+                  }}
                   isLoading={isLoading || chat.isStreaming}
                   errorMessage={chat.error}
                   runStatus={chat.runStatus}
@@ -655,16 +677,6 @@ export function ProjectPage() {
             open={isCodeDrawerOpen}
             onOpenChange={setIsCodeDrawerOpen}
             sessionId={sessionId}
-          />
-          <DocDrawer
-            open={isDocDrawerOpen}
-            onOpenChange={setIsDocDrawerOpen}
-            sessionId={sessionId}
-            onBuild={handleBuildFromDoc}
-            buildDisabled={chat.isStreaming || isBuildRunning || isBuildLoading}
-            productDoc={productDoc}
-            isLoading={isProductDocLoading}
-            error={productDocError}
           />
           <DataDrawer
             open={isDataDrawerOpen}

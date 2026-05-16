@@ -39,7 +39,6 @@ Review focus:
 
 Files:
 - `packages/web/src/components/custom/RunStatusStrip.tsx`
-- `packages/web/src/components/custom/RunInspector.tsx`
 - `packages/web/src/hooks/chat/*`
 - `packages/web/src/types/index.ts`
 - `packages/web/src/api/client.ts`

@@ -1,9 +1,8 @@
-import type { ChangeEvent, KeyboardEvent } from 'react'
+import { useState, type ChangeEvent, type KeyboardEvent } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { formatRelativeDate } from '@/lib/formatRelativeDate'
 import { cn } from '@/lib/utils'
-import { PhoneFrame } from './PhoneFrame'
 
 export interface ProjectCardProps {
   id: string
@@ -29,6 +28,9 @@ export function ProjectCard({
   onSelectChange,
   badgeLabel,
 }: ProjectCardProps) {
+  const [previewFailed, setPreviewFailed] = useState(false)
+  const showThumbnail = Boolean(thumbnail) && !previewFailed
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!onClick) return
     if (event.key === 'Enter' || event.key === ' ') {
@@ -75,28 +77,31 @@ export function ProjectCard({
           </Badge>
         </div>
       ) : null}
-      <CardContent className="p-4">
-        <div className="flex flex-col items-center gap-3">
-          <PhoneFrame scale={0.52} className="max-w-[200px]">
-            {thumbnail ? (
+      <CardContent className="p-0">
+        <div className="relative aspect-[9/14.625] w-full overflow-hidden rounded-lg bg-muted/40">
+            {showThumbnail ? (
               <img
                 src={thumbnail}
                 alt={`${name} preview`}
                 loading="lazy"
                 decoding="async"
-                className="h-full w-full object-cover"
+                onError={() => setPreviewFailed(true)}
+                className="h-full w-full object-cover object-top"
               />
             ) : (
-              <div className="flex h-full w-full items-center justify-center bg-muted text-xs text-muted-foreground">
+              <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
                 No preview
               </div>
             )}
-          </PhoneFrame>
-          <div className="w-full space-y-1 text-left">
-            <div className="text-sm font-semibold text-foreground">{name}</div>
-            <div className="text-xs text-muted-foreground">
-              {formatRelativeDate(updatedAt)} · {versionCount}{' '}
-              {versionCount === 1 ? 'version' : 'versions'}
+          <div className="absolute inset-x-0 bottom-0 h-[9.333%] border-t border-white/45 bg-white/82 px-3 pb-1.5 pt-1 text-black shadow-[0_-12px_28px_rgba(255,255,255,0.36)] backdrop-blur-md">
+            <div className="flex h-full min-h-0 flex-col justify-end">
+              <div className="truncate text-[13px] font-semibold leading-4 text-black">
+                {name}
+              </div>
+              <div className="mt-0.5 truncate text-[10px] font-medium leading-3 text-black/65">
+                {formatRelativeDate(updatedAt)} · {versionCount}{' '}
+                {versionCount === 1 ? 'version' : 'versions'}
+              </div>
             </div>
           </div>
         </div>

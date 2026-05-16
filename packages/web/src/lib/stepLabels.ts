@@ -100,10 +100,11 @@ export const buildAgentLabel = (event: ExecutionEvent) => {
 }
 
 export const buildToolLabel = (event: ToolCallEvent | ToolResultEvent) => {
+  const toolName = event.tool_name || 'tool'
   const summarySource =
     event.type === 'tool_call' ? event.tool_input : event.tool_output
   const summary = summarizeRecord(summarySource)
-  const base = summary ? `${event.tool_name} (${summary})` : event.tool_name
+  const base = summary ? `${toolName} (${summary})` : toolName
   if (event.type === 'tool_call') {
     return `Calling ${base}`
   }

@@ -233,19 +233,21 @@ test.describe('v08 F1 Data Tab Overhaul', () => {
     )
   })
 
-  test('shows Data as top-level workbench tab', async ({ page }) => {
+  test('keeps Code and Data in the project header instead of workbench tabs', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
     await page.waitForSelector('[data-testid="workbench-tab-preview"]')
 
     await expect(page.locator('[data-testid="workbench-tab-preview"]')).toBeVisible()
-    await expect(page.locator('[data-testid="workbench-tab-code"]')).toBeVisible()
     await expect(page.locator('[data-testid="workbench-tab-product-doc"]')).toBeVisible()
-    await expect(page.locator('[data-testid="workbench-tab-data"]')).toBeVisible()
+    await expect(page.locator('[data-testid="workbench-tab-code"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="workbench-tab-data"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Open code drawer' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Open data drawer' })).toBeVisible()
   })
 
   test('table view renders tables, rows and pagination', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
-    await page.click('[data-testid="workbench-tab-data"]')
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
 
     await expect(page.locator('[data-testid="data-tab"]')).toBeVisible()
     await expect(page.locator('[data-testid="data-view-table"]')).toBeVisible()
@@ -260,7 +262,7 @@ test.describe('v08 F1 Data Tab Overhaul', () => {
 
   test('dashboard view renders summaries and distributions', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
-    await page.click('[data-testid="workbench-tab-data"]')
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
     await page.click('[data-testid="data-view-dashboard"]')
 
     await expect(page.locator('[data-testid="data-dashboard-table-summary"]')).toBeVisible()
@@ -302,7 +304,7 @@ test.describe('v08 F1 Data Tab Overhaul', () => {
     })
 
     await page.goto(`/project/${sessionId}`)
-    await page.click('[data-testid="workbench-tab-data"]')
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
 
     await expect(page.locator('[data-testid="data-grid-row"]')).toHaveCount(2)
     const beforeRequests = ordersRequestCount

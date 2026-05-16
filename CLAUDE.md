@@ -157,7 +157,7 @@ Routes in `packages/web/src/App.tsx`:
 - Left: `ChatPanel`
 - Center: `WorkbenchPanel` with `preview`, `code`, `product-doc`, and `data` tabs
 - Right: `VersionPanel`
-- Chat integrates `RunStatusStrip` and `RunInspector` for run/build/review/policy state.
+- Chat integrates `RunStatusStrip` for lightweight run/build/review/policy state. Do not reintroduce the removed ProjectPage Run details drawer or Run Inspector UI.
 
 `packages/web/src/api/client.ts` contains current API domains for sessions, chat, pages, product docs, snapshots, files, export, build, runs, events, settings, and event-store-backed task compatibility actions.
 

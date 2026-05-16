@@ -68,7 +68,7 @@ test.describe('Project drawers', () => {
     )
   })
 
-  test('opens code, product doc, data, and versions drawers from the project header', async ({ page }) => {
+  test('opens code, data, and versions drawers from the project header', async ({ page }) => {
     await page.goto(`/project/${sessionId}`)
 
     await page.getByRole('button', { name: 'Open code drawer' }).click()
@@ -77,13 +77,7 @@ test.describe('Project drawers', () => {
     await expect(codeDialog.getByText('index.html')).toBeVisible()
     await page.getByRole('button', { name: 'Close drawer' }).click()
 
-    await page.getByRole('button', { name: 'Open product doc drawer' }).click()
-    const docDialog = page.getByRole('dialog', { name: 'Product Doc' })
-    await expect(docDialog).toBeVisible()
-    await expect(docDialog.getByText('Drawer Product Doc')).toBeVisible()
-    await page.getByRole('button', { name: 'Close drawer' }).click()
-
-    await page.getByRole('button', { name: 'Open data and more drawer' }).click()
+    await page.getByRole('button', { name: 'Open data drawer' }).click()
     const dataDialog = page.getByRole('dialog', { name: 'Data' })
     await expect(dataDialog).toBeVisible()
     await expect(dataDialog.getByTestId('data-tab')).toBeVisible()

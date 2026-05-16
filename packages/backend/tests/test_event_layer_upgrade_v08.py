@@ -7,6 +7,7 @@ from app.db.migrations import init_db
 from app.db.models import Session as SessionModel
 from app.db.models import SessionEvent
 from app.db.models import SessionEventSource
+from app.db.models import SessionRun
 from app.db.utils import get_db, transaction_scope
 from app.events.emitter import EventEmitter
 from app.events.models import BaseEvent
@@ -153,6 +154,42 @@ def test_run_dimension_query_and_since_seq_filter(tmp_path) -> None:
 
         all_events = store.get_events(session_id)
         assert len(all_events) == 3
+
+
+def test_run_event_persistence_touches_active_run_heartbeat(tmp_path) -> None:
+    database = _make_database(tmp_path)
+    session_id = uuid.uuid4().hex
+    run_id = uuid.uuid4().hex
+
+    with transaction_scope(database) as session:
+        session.add(SessionModel(id=session_id, title="Run Touch"))
+        session.add(
+            SessionRun(
+                id=run_id,
+                session_id=session_id,
+                trigger_source="chat",
+                status="running",
+                metrics={"phase": "implement", "phase_status": "running"},
+            )
+        )
+
+    with get_db(database) as session:
+        store = EventStoreService(session)
+        emitter = EventEmitter(
+            session_id=session_id,
+            run_id=run_id,
+            event_store=store,
+        )
+        event = BaseEvent(type=EventType.TOOL_RESULT, payload={"tool_name": "read_file"})
+        emitter.emit(event)
+        session.commit()
+
+    with get_db(database) as session:
+        run = session.get(SessionRun, run_id)
+        assert run is not None
+        assert run.status == "running"
+        assert run.metrics["heartbeat"]["step"] == "tool_result"
+        assert run.metrics["heartbeat"]["phase"] == "implement"
 
 
 def test_run_scoped_store_event_without_run_id_rejected(tmp_path) -> None:

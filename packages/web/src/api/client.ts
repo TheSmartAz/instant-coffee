@@ -271,6 +271,12 @@ export const api = {
           limit: options?.limit,
         })}`
       ),
+    streamUrl: (runId: string, options?: { sinceSeq?: number }) =>
+      buildUrl(
+        `/api/runs/${encodeURIComponent(runId)}/events${buildQuery({
+          since_seq: options?.sinceSeq,
+        })}`
+      ),
     resolveApproval: (runId: string, approvalId: string, approved: boolean) =>
       request<import('../types').SessionRunDetail>(
         `/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,

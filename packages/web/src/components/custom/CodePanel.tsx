@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { useFileTree } from '../../hooks/useFileTree'
-import { Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { RefreshCw } from 'lucide-react'
 
@@ -67,7 +67,11 @@ export function CodePanel({ sessionId, active = true }: CodePanelProps) {
 
   return (
     <div className="code-panel flex h-full overflow-hidden">
-      <div className="file-tree-wrapper w-56 border-r shrink-0 overflow-hidden flex flex-col bg-background">
+      <div
+        className={`file-tree-wrapper w-full shrink-0 overflow-hidden border-r bg-background flex-col md:flex md:w-56 ${
+          selectedPath ? 'hidden md:flex' : 'flex'
+        }`}
+      >
         <div className="p-2 border-b flex items-center justify-between">
           <span className="text-xs font-medium text-muted-foreground uppercase">Files</span>
           <Button
@@ -85,7 +89,21 @@ export function CodePanel({ sessionId, active = true }: CodePanelProps) {
           <FileTree tree={tree} selectedPath={selectedPath} onSelectFile={handleSelectFile} />
         </div>
       </div>
-      <div className="flex-1 overflow-hidden">
+      <div className={`min-w-0 flex-1 overflow-hidden ${selectedPath ? 'block' : 'hidden md:block'}`}>
+        {selectedPath ? (
+          <div className="flex items-center border-b bg-muted/30 px-2 py-2 md:hidden">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-2 px-2 text-xs"
+              onClick={() => setSelectedPath(null)}
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Files
+            </Button>
+          </div>
+        ) : null}
         <FileViewer file={selectedFile} isLoading={isContentLoading} />
       </div>
     </div>
