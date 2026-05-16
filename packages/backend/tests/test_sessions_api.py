@@ -5,8 +5,9 @@ from app.db.models import Session as SessionModel
 from app.db.utils import get_db
 from app.db.database import reset_database
 from app.db.migrations import init_db
+from app.services.page import PageService
+from app.services.page_version import PageVersionService
 from app.services.thumbnail import ThumbnailService
-from app.services.version import VersionService
 
 
 def _create_app(tmp_path, monkeypatch):
@@ -118,9 +119,14 @@ def test_list_sessions_returns_lazy_thumbnail_url_for_previewable_session(tmp_pa
     with get_db() as session:
         session.add(SessionModel(id="preview-session", title="Preview Session"))
         session.flush()
-        VersionService(session).create_version(
-            "preview-session",
-            "<!doctype html><html><body><main>Homepage</main></body></html>",
+        page = PageService(session).create(
+            session_id="preview-session",
+            title="Home",
+            slug="index",
+        )
+        PageVersionService(session).create(
+            page_id=page.id,
+            html="<!doctype html><html><body><main>Homepage</main></body></html>",
         )
         session.commit()
 
@@ -134,15 +140,36 @@ def test_list_sessions_returns_lazy_thumbnail_url_for_previewable_session(tmp_pa
     )
 
 
+def test_list_sessions_handles_sessions_without_current_version_field(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+
+    with get_db() as session:
+        session.add(SessionModel(id="plain-session", title="Plain Session"))
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.get("/api/sessions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sessions"][0]["id"] == "plain-session"
+    assert payload["sessions"][0]["thumbnail"] is None
+
+
 def test_thumbnail_endpoint_generates_from_session_preview(tmp_path, monkeypatch) -> None:
     app = _create_app(tmp_path, monkeypatch)
 
     with get_db() as session:
         session.add(SessionModel(id="legacy-session", title="Legacy Session"))
         session.flush()
-        VersionService(session).create_version(
-            "legacy-session",
-            "<!doctype html><html><body><main>Homepage</main></body></html>",
+        page = PageService(session).create(
+            session_id="legacy-session",
+            title="Home",
+            slug="index",
+        )
+        PageVersionService(session).create(
+            page_id=page.id,
+            html="<!doctype html><html><body><main>Homepage</main></body></html>",
         )
         session.commit()
 

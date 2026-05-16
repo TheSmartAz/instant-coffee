@@ -17,7 +17,6 @@ class OrchestratorResponse:
     message: str
     is_complete: bool
     preview_url: Optional[str] = None
-    preview_html: Optional[str] = None
     progress: Optional[int] = None
     questions: Optional[list[dict]] = None
     action: Optional[str] = None
@@ -34,8 +33,6 @@ class OrchestratorResponse:
         }
         if self.preview_url is not None:
             payload["preview_url"] = self.preview_url
-        if self.preview_html is not None:
-            payload["preview_html"] = self.preview_html
         if self.progress is not None:
             payload["progress"] = self.progress
         if self.questions is not None:

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 import { APP_MODE_SOURCE, injectAppModeRuntime } from '@/lib/appModeRuntime'
+import { api } from '@/api/client'
 import { PhoneFrame } from './PhoneFrame'
 import { PageSelector } from './PageSelector'
 import { AestheticScoreCard } from './AestheticScoreCard'
@@ -134,7 +135,286 @@ export interface PreviewPanelProps {
   pages?: PageInfo[]
   selectedPageId?: string | null
   onSelectPage?: (pageId: string) => void
+  onMentionPage?: (page: PageInfo) => void
   onRefreshPage?: (pageId: string) => void
+}
+
+interface LiveLinkConnector {
+  id: string
+  sourcePageId: string
+  targetPageId: string
+  color: string
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+const CONNECTOR_COLORS = [
+  '#dc2626',
+  '#2563eb',
+  '#16a34a',
+  '#d97706',
+  '#7c3aed',
+  '#0891b2',
+  '#be123c',
+  '#4f46e5',
+]
+
+const stableColor = (value: string) => {
+  let hash = 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0
+  }
+  return CONNECTOR_COLORS[hash % CONNECTOR_COLORS.length]
+}
+
+const normalizeLinkSlug = (href: string, knownSlugs: Set<string>) => {
+  const trimmed = href.trim()
+  if (!trimmed || trimmed.startsWith('#')) return null
+
+  let url: URL
+  try {
+    url = new URL(trimmed, window.location.origin)
+  } catch {
+    return null
+  }
+
+  if (url.origin !== window.location.origin) return null
+
+  const path = decodeURIComponent(url.pathname)
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\\/g, '/')
+  if (!path) return knownSlugs.has('index') ? 'index' : null
+
+  const withoutHtml = path.replace(/\.html$/i, '')
+  const candidates = new Set<string>()
+  candidates.add(withoutHtml)
+  candidates.add(withoutHtml.replace(/^pages\//, '').replace(/\/index$/i, ''))
+  candidates.add(withoutHtml.replace(/\/index$/i, ''))
+
+  if (/^index$/i.test(withoutHtml)) {
+    candidates.add('index')
+  }
+
+  for (const candidate of candidates) {
+    const normalized = candidate.replace(/^\/+|\/+$/g, '')
+    if (knownSlugs.has(normalized)) return normalized
+  }
+  return null
+}
+
+interface LivePageMapProps {
+  pages: PageInfo[]
+  refreshKey: number
+  onSelectPage?: (pageId: string) => void
+  onMentionPage?: (page: PageInfo) => void
+}
+
+function LivePageMap({ pages, refreshKey, onSelectPage, onMentionPage }: LivePageMapProps) {
+  const mapRef = React.useRef<HTMLDivElement | null>(null)
+  const frameRefs = React.useRef(new Map<string, HTMLDivElement>())
+  const iframeRefs = React.useRef(new Map<string, HTMLIFrameElement>())
+  const [connectors, setConnectors] = React.useState<LiveLinkConnector[]>([])
+  const [overlaySize, setOverlaySize] = React.useState({ width: 0, height: 0 })
+  const [htmlByPageId, setHtmlByPageId] = React.useState<Record<string, string>>({})
+
+  const pageBySlug = React.useMemo(() => {
+    const map = new Map<string, PageInfo>()
+    for (const page of pages) {
+      map.set(page.slug, page)
+    }
+    return map
+  }, [pages])
+
+  React.useEffect(() => {
+    let cancelled = false
+    const loadPreviews = async () => {
+      const entries = await Promise.all(
+        pages.map(async (page) => {
+          try {
+            const preview = await api.pages.getPreview(page.id)
+            return [page.id, preview.html] as const
+          } catch {
+            return [page.id, EMPTY_PREVIEW_HTML] as const
+          }
+        })
+      )
+      if (cancelled) return
+      setHtmlByPageId(Object.fromEntries(entries))
+    }
+
+    void loadPreviews()
+    return () => {
+      cancelled = true
+    }
+  }, [pages, refreshKey])
+
+  const measureConnectors = React.useCallback(() => {
+    const mapEl = mapRef.current
+    if (!mapEl) return
+
+    const mapRect = mapEl.getBoundingClientRect()
+    const knownSlugs = new Set(pageBySlug.keys())
+    const next: LiveLinkConnector[] = []
+
+    for (const page of pages) {
+      const iframe = iframeRefs.current.get(page.id)
+      if (!iframe) continue
+
+      let doc: Document | null = null
+      try {
+        doc = iframe.contentDocument
+      } catch {
+        doc = null
+      }
+      if (!doc) continue
+
+      const iframeRect = iframe.getBoundingClientRect()
+      const links = Array.from(doc.querySelectorAll<HTMLAnchorElement>('a[href]'))
+
+      links.forEach((link, index) => {
+        const href = link.getAttribute('href') ?? ''
+        const targetSlug = normalizeLinkSlug(href, knownSlugs)
+        if (!targetSlug) return
+
+        const targetPage = pageBySlug.get(targetSlug)
+        if (!targetPage || targetPage.id === page.id) return
+
+        const targetFrame = frameRefs.current.get(targetPage.id)
+        if (!targetFrame) return
+
+        const linkRect = link.getBoundingClientRect()
+        if (linkRect.width === 0 || linkRect.height === 0) return
+
+        const targetRect = targetFrame.getBoundingClientRect()
+        const sourceX = iframeRect.left - mapRect.left + mapEl.scrollLeft + linkRect.left + linkRect.width / 2
+        const sourceY = iframeRect.top - mapRect.top + mapEl.scrollTop + linkRect.top + linkRect.height / 2
+        const targetX = targetRect.left - mapRect.left + mapEl.scrollLeft + targetRect.width / 2
+        const targetY = targetRect.top - mapRect.top + mapEl.scrollTop + 18
+        const id = `${page.id}:${targetPage.id}:${index}:${href}`
+
+        next.push({
+          id,
+          sourcePageId: page.id,
+          targetPageId: targetPage.id,
+          color: stableColor(id),
+          x1: sourceX,
+          y1: sourceY,
+          x2: targetX,
+          y2: targetY,
+        })
+      })
+    }
+
+    setOverlaySize({ width: mapEl.scrollWidth, height: mapEl.scrollHeight })
+    setConnectors(next)
+  }, [pageBySlug, pages])
+
+  React.useEffect(() => {
+    const mapEl = mapRef.current
+    if (!mapEl) return
+
+    const observer = new ResizeObserver(measureConnectors)
+    observer.observe(mapEl)
+    for (const frame of frameRefs.current.values()) {
+      observer.observe(frame)
+    }
+
+    window.addEventListener('resize', measureConnectors)
+    mapEl.addEventListener('scroll', measureConnectors, { passive: true })
+
+    measureConnectors()
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measureConnectors)
+      mapEl.removeEventListener('scroll', measureConnectors)
+    }
+  }, [measureConnectors])
+
+  React.useEffect(() => {
+    const timeout = window.setTimeout(measureConnectors, 80)
+    return () => window.clearTimeout(timeout)
+  }, [measureConnectors, refreshKey])
+
+  return (
+    <div
+      ref={mapRef}
+      data-testid="live-page-map"
+      className="relative h-full w-full overflow-auto bg-muted/30 p-5 sm:p-8"
+    >
+      <svg
+        data-testid="live-link-overlay"
+        className="pointer-events-none absolute left-0 top-0 z-20"
+        width={overlaySize.width}
+        height={overlaySize.height}
+        viewBox={`0 0 ${overlaySize.width} ${overlaySize.height}`}
+        aria-hidden="true"
+      >
+        {connectors.map((connector) => (
+          <path
+            key={connector.id}
+            data-testid="live-link-connector"
+            d={`M ${connector.x1} ${connector.y1} C ${connector.x1} ${connector.y1 + 80}, ${connector.x2} ${connector.y2 - 80}, ${connector.x2} ${connector.y2}`}
+            fill="none"
+            stroke={connector.color}
+            strokeWidth={6}
+            strokeDasharray="12 10"
+            strokeLinecap="round"
+            opacity={0.92}
+          />
+        ))}
+      </svg>
+
+      <div className="relative z-10 grid min-w-0 grid-cols-1 justify-items-center gap-x-10 gap-y-12 xl:grid-cols-2 2xl:grid-cols-3">
+        {pages.map((page) => {
+          const html = htmlByPageId[page.id]
+          const srcDoc = html ? injectHideScrollbarStyle(html) : EMPTY_PREVIEW_HTML
+          return (
+            <div
+              key={page.id}
+              ref={(node) => {
+                if (node) frameRefs.current.set(page.id, node)
+                else frameRefs.current.delete(page.id)
+              }}
+              data-testid="live-page-frame"
+              className="flex w-[260px] flex-col items-center gap-3 sm:w-[300px]"
+            >
+              <div className="relative w-full">
+                <PhoneFrame>
+                  <iframe
+                    ref={(node) => {
+                      if (node) iframeRefs.current.set(page.id, node)
+                      else iframeRefs.current.delete(page.id)
+                    }}
+                    title={`${page.title} preview`}
+                    data-testid="live-page-iframe"
+                    className="h-full w-full border-0"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                    srcDoc={srcDoc}
+                    onLoad={measureConnectors}
+                  />
+                  <div className="absolute inset-0 z-10 bg-transparent" aria-hidden="true" />
+                </PhoneFrame>
+              </div>
+              <button
+                type="button"
+                data-testid="live-page-label"
+                className="max-w-full rounded-full border border-border bg-background px-3 py-1.5 text-center text-xs font-semibold text-foreground shadow-sm transition hover:border-primary hover:text-primary"
+                onClick={() => {
+                  onSelectPage?.(page.id)
+                  onMentionPage?.(page)
+                }}
+              >
+                <span className="block truncate">{page.title || page.slug}</span>
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export const PreviewPanel = React.memo(function PreviewPanel({
@@ -154,6 +434,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
   pages,
   selectedPageId,
   onSelectPage,
+  onMentionPage,
   onRefreshPage,
 }: PreviewPanelProps) {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
@@ -169,6 +450,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
   const isBuildActive = buildStatus === 'building' || buildStatus === 'pending'
   const isBuildPreview = previewMode === 'build'
   const effectiveAppMode = appMode && !isBuildPreview
+  const [liveRefreshKey, setLiveRefreshKey] = React.useState(0)
 
   const storageKey = sessionId ? `instant-coffee:app-state:${sessionId}` : null
 
@@ -236,6 +518,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
       // ignore storage failures
     }
   }, [appState, storageKey])
+
   const injectedHtml = React.useMemo(() => {
     if (!currentHtml) return ''
     const withRuntime = effectiveAppMode ? injectAppModeRuntime(currentHtml) : currentHtml
@@ -251,12 +534,8 @@ export const PreviewPanel = React.memo(function PreviewPanel({
       return
     }
     setCurrentHtml(htmlContent ?? null)
-  }, [buildPreviewUrl, htmlContent, isBuildPreview])
-
-  React.useEffect(() => {
-    if (isBuildPreview) return
     setCurrentUrl(effectiveAppMode ? null : previewUrl ?? null)
-  }, [effectiveAppMode, isBuildPreview, previewUrl])
+  }, [buildPreviewUrl, effectiveAppMode, htmlContent, previewUrl, isBuildPreview])
 
   // Reset scroll position when page changes
   React.useEffect(() => {
@@ -267,14 +546,18 @@ export const PreviewPanel = React.memo(function PreviewPanel({
   }, [selectedPageId])
 
   const isMultiPage = pages && pages.length > 1
+  const showLivePageMap = !isBuildPreview && Boolean(isMultiPage)
 
   const handleRefresh = React.useCallback(() => {
-    if (isMultiPage && selectedPageId && onRefreshPage) {
+    if (showLivePageMap) {
+      setLiveRefreshKey((key) => key + 1)
+      onRefresh?.()
+    } else if (isMultiPage && selectedPageId && onRefreshPage) {
       onRefreshPage(selectedPageId)
     } else if (onRefresh) {
       onRefresh()
     }
-  }, [isMultiPage, selectedPageId, onRefreshPage, onRefresh])
+  }, [isMultiPage, selectedPageId, onRefreshPage, onRefresh, showLivePageMap])
 
   const sendStateToIframe = React.useCallback(() => {
     if (!effectiveAppMode) return
@@ -423,7 +706,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
 
       <div className="mt-0 flex-1">
         <div className="flex h-full flex-col">
-          {isMultiPage && onSelectPage && (
+          {isMultiPage && onSelectPage && !showLivePageMap && (
             <PageSelector
               pages={pages}
               selectedPageId={selectedPageId ?? null}
@@ -435,6 +718,14 @@ export const PreviewPanel = React.memo(function PreviewPanel({
             ref={containerRef}
             className="flex flex-1 items-center justify-center bg-muted/30 p-3 sm:p-6"
           >
+            {showLivePageMap && pages ? (
+              <LivePageMap
+                pages={pages}
+                refreshKey={liveRefreshKey}
+                onSelectPage={onSelectPage}
+                onMentionPage={onMentionPage}
+              />
+            ) : (
             <PhoneFrame scale={scale}>
               {isBuildActive ? (
                 <div className="flex h-full w-full items-center justify-center bg-background">
@@ -454,7 +745,7 @@ export const PreviewPanel = React.memo(function PreviewPanel({
                       Build output not available
                     </span>
                     <span className="text-xs">
-                      Run a build to generate the static preview.
+                      Run a build to generate the preview.
                     </span>
                   </div>
                 </div>
@@ -467,10 +758,12 @@ export const PreviewPanel = React.memo(function PreviewPanel({
                   className="h-full w-full border-0"
                   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                   onLoad={sendStateToIframe}
-                  {...(currentUrl ? { src: currentUrl } : { srcDoc: htmlValue })}
+                  src={currentUrl ?? undefined}
+                  srcDoc={currentUrl ? undefined : htmlValue}
                 />
               )}
             </PhoneFrame>
+            )}
           </div>
 
           {aestheticScore ? (

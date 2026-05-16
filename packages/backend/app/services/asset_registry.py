@@ -11,8 +11,9 @@ from uuid import uuid4
 from fastapi import UploadFile
 from PIL import Image
 
-from ..utils.datetime import utcnow
+from ..config import get_settings
 from ..schemas.asset import AssetRef, AssetRegistry, AssetType
+from ..utils.datetime import utcnow
 
 _ALLOWED_MIME_TYPES = {
     "image/png",
@@ -52,7 +53,7 @@ class AssetRegistryService:
         if not session_id:
             raise ValueError("session_id is required")
         self.session_id = session_id
-        base = base_dir or Path("~/.instant-coffee/sessions").expanduser()
+        base = base_dir or Path(get_settings().output_dir).expanduser()
         self.base_path = (base / session_id / "assets").resolve()
         self.base_path.mkdir(parents=True, exist_ok=True)
 

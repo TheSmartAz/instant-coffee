@@ -26,7 +26,6 @@ from .models import (
     SessionRun,
     TokenUsage,
     VersionSource,
-    Version,
 )
 from .utils import get_db, transaction_scope
 
@@ -45,7 +44,6 @@ __all__ = [
     "downgrade_v04_product_doc_pages",
     "Session",
     "Message",
-    "Version",
     "TokenUsage",
     "ProductDocStatus",
     "VersionSource",

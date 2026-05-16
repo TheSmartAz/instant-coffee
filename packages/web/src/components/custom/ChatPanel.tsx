@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ChatInput, type ChatInputProps } from './ChatInput'
+import { ChatInput, type ChatInputHandle, type ChatInputProps } from './ChatInput'
 import { ChatMessage } from './ChatMessage'
 import { RunStatusStrip } from './RunStatusStrip'
 import { TokenDisplay } from '@/components/TokenDisplay'
@@ -29,7 +29,10 @@ export interface ChatPanelProps {
   tokenUsage?: SessionTokenSummary
 }
 
-export function ChatPanel({
+export type ChatPanelHandle = ChatInputHandle
+
+export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
+function ChatPanel({
   messages,
   onSendMessage,
   onAssetUpload,
@@ -41,8 +44,9 @@ export function ChatPanel({
   className,
   pages,
   tokenUsage,
-}: ChatPanelProps) {
+}: ChatPanelProps, ref) {
   const bottomRef = React.useRef<HTMLDivElement | null>(null)
+  const chatInputRef = React.useRef<ChatInputHandle>(null)
   const visibleMessages = React.useMemo(
     () => messages.filter((message) => !message.hidden),
     [messages]
@@ -127,6 +131,16 @@ export function ChatPanel({
 
   const windowedMessages = visibleMessages.slice(start, end)
 
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      insertPageMention: (page) => {
+        chatInputRef.current?.insertPageMention(page)
+      },
+    }),
+    []
+  )
+
   return (
     <div className={cn('flex h-full flex-col', className)}>
       <ScrollArea ref={rootRef} className="flex-1">
@@ -156,7 +170,7 @@ export function ChatPanel({
                   What would you like to build?
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  Describe your idea and I&apos;ll create a mobile-optimized page for you.
+                  Describe your idea and I&apos;ll create a mobile-optimized React app for you.
                 </p>
               </div>
               <div className="grid w-full max-w-md gap-2">
@@ -216,6 +230,7 @@ export function ChatPanel({
       ) : null}
       <div className="p-4">
         <ChatInput
+          ref={chatInputRef}
           onSend={onSendMessage}
           onAssetUpload={onAssetUpload}
           disabled={isLoading}
@@ -224,4 +239,6 @@ export function ChatPanel({
       </div>
     </div>
   )
-}
+})
+
+ChatPanel.displayName = 'ChatPanel'

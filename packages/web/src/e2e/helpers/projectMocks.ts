@@ -61,6 +61,7 @@ export type ProjectPageMockOptions = {
   runs?: unknown[]
   threadId?: string
   previewHtmlByPageId?: Record<string, string>
+  buildPreviewHtmlByPath?: Record<string, string>
 }
 
 export const jsonResponse = (body: unknown, status = 200) => ({
@@ -125,6 +126,7 @@ export async function setupProjectPageMocks(
     runs = [],
     threadId = 'thread-1',
     previewHtmlByPageId = {},
+    buildPreviewHtmlByPath = {},
   } = options
   const normalizedPages = pages.map((item, index) => normalizePage(sessionId, item, index))
 
@@ -187,17 +189,26 @@ export async function setupProjectPageMocks(
     fulfillJson(route, { pages: normalizedPages, total: normalizedPages.length })
   )
 
-  await page.route('**/api/pages/*/preview', (route) => {
+  await page.route('**/api/pages/*/preview**', (route) => {
     const url = new URL(route.request().url())
     const parts = url.pathname.split('/')
     const pageId = parts[parts.indexOf('pages') + 1]
     const matched = normalizedPages.find((item) => item.id === pageId)
+    const html =
+      previewHtmlByPageId[pageId] ??
+      '<!doctype html><html><body><main>Preview ready</main></body></html>'
+    const acceptsHtml = route.request().headers().accept?.includes('text/html')
+    if (acceptsHtml) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: html,
+      })
+    }
     return fulfillJson(route, {
       page_id: pageId,
       slug: matched?.slug ?? 'preview',
-      html:
-        previewHtmlByPageId[pageId] ??
-        '<!doctype html><html><body><main>Preview ready</main></body></html>',
+      html,
       version: 1,
     })
   })
@@ -228,6 +239,19 @@ export async function setupProjectPageMocks(
   await page.route(`**/api/sessions/${sessionId}/build/stream**`, (route) =>
     route.fulfill(eventStreamResponse(['[DONE]']))
   )
+
+  await page.route(`**/preview/${sessionId}/**`, (route) => {
+    const url = new URL(route.request().url())
+    const prefix = `/preview/${sessionId}/`
+    const path = decodeURIComponent(url.pathname.slice(prefix.length)) || 'index.html'
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body:
+        buildPreviewHtmlByPath[path] ??
+        '<!doctype html><html><body><main>Build preview ready</main></body></html>',
+    })
+  })
 
   await page.route(`**/api/sessions/${sessionId}/events**`, (route) =>
     fulfillJson(route, { events, last_seq: events.length, has_more: false })

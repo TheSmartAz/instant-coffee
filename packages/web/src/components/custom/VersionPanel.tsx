@@ -106,6 +106,7 @@ export function VersionPanel({
 
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [previewHtml, setPreviewHtml] = React.useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
   const [previewMeta, setPreviewMeta] = React.useState<PageVersion | null>(null)
   const [isPreviewLoading, setIsPreviewLoading] = React.useState(false)
   const previewContainerRef = React.useRef<HTMLDivElement | null>(null)
@@ -477,17 +478,23 @@ export function VersionPanel({
 
   const handlePreviewVersion = React.useCallback(
     async (version: PageVersion) => {
-      if (!selectedPageId) return
+      if (!selectedPageId || !sessionId) return
       setPreviewOpen(true)
       setIsPreviewLoading(true)
       setPreviewMeta(version)
       setPreviewHtml(null)
+      setPreviewUrl(null)
       setActionState({ id: version.id, action: 'view' })
       await runAction(
         () => api.pages.previewVersion(selectedPageId, version.id),
         {
           onSuccess: (preview) => {
-            setPreviewHtml(preview.html ?? '')
+            if (preview.html && preview.html.trim()) {
+              setPreviewHtml(preview.html)
+            } else {
+              // React workspace builds: use dist preview URL instead of HTML
+              setPreviewUrl(api.build.previewUrl(sessionId, 'index.html'))
+            }
           },
           onError: (error) => {
             if (error.status === 410) {
@@ -513,7 +520,7 @@ export function VersionPanel({
         }
       )
     },
-    [runAction, selectedPageId, resetPreview]
+    [runAction, selectedPageId, sessionId, resetPreview]
   )
 
   const handleViewProductDoc = React.useCallback(
@@ -720,7 +727,8 @@ export function VersionPanel({
                 <iframe
                   title="Version preview"
                   className="h-full w-full border-0 bg-background"
-                  srcDoc={previewHtml ?? ''}
+                  src={previewUrl ?? undefined}
+                  srcDoc={previewUrl ? undefined : (previewHtml ?? '')}
                 />
               </PhoneFrame>
             )}

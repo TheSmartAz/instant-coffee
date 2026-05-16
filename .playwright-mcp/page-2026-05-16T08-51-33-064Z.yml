@@ -1,0 +1,41 @@
+- generic [ref=e3]:
+  - generic [ref=e323]:
+    - banner [ref=e324]:
+      - generic [ref=e325]:
+        - link "Back to project" [ref=e326] [cursor=pointer]:
+          - /url: /project/e0deed0b8f654b19b06c3f7983ebf0f0
+          - img
+        - generic [ref=e327]: Execution Flow • e0deed0b8f654b19b06c3f7983ebf0f0
+    - main [ref=e328]:
+      - generic [ref=e329]:
+        - generic [ref=e330]:
+          - generic [ref=e331]:
+            - generic [ref=e332]: Todo
+            - button "Collapse todo panel" [ref=e333]:
+              - img
+          - generic [ref=e334]:
+            - generic [ref=e335]:
+              - generic [ref=e336]: Plan Goal
+              - generic [ref=e337]: No plan yet.
+              - generic [ref=e338]:
+                - generic [ref=e339]:
+                  - generic [ref=e340]: Progress
+                  - generic [ref=e341]: 0/0
+                - progressbar [ref=e342]
+            - generic [ref=e347]: Waiting for tasks to arrive.
+        - generic [ref=e349]:
+          - generic [ref=e350]:
+            - tablist [ref=e351]:
+              - tab "Events" [selected] [ref=e352]
+              - tab "Tasks" [ref=e353]
+            - generic [ref=e354]: Disconnected
+          - tabpanel "Events" [ref=e355]:
+            - generic [ref=e356]: Waiting for execution events...
+  - region "Notifications (F8)":
+    - list [ref=e358]:
+      - listitem [ref=e359]:
+        - generic [ref=e360]:
+          - generic [ref=e361]: SSE connection error
+          - generic [ref=e362]: SSE connection error
+        - button [ref=e363]:
+          - img [ref=e364]

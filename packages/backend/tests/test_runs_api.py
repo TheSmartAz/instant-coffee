@@ -10,6 +10,10 @@ from app.db.models import Session as SessionModel
 from app.db.models import SessionRun
 from app.db.models import SessionEvent, SessionEventSource
 from app.db.utils import get_db
+from app.events.emitter import EventEmitter
+from app.events.models import run_lifecycle_event
+from app.events.types import EventType
+from app.services.event_store import EventStoreService
 from app.services.memory import ProjectMemoryService
 from app.utils.datetime import utcnow
 
@@ -72,6 +76,23 @@ def _seed_run_events(session_id: str, run_id: str) -> None:
                 source=SessionEventSource.SESSION,
             )
         )
+        session.commit()
+
+
+def _seed_run_lifecycle_event(session_id: str, run_id: str) -> None:
+    with get_db() as session:
+        event = run_lifecycle_event(
+            EventType.RUN_COMPLETED,
+            phase="build",
+            status="completed",
+            summary="done",
+            run_id=run_id,
+        )
+        EventEmitter(
+            session_id=session_id,
+            run_id=run_id,
+            event_store=EventStoreService(session),
+        ).emit(event)
         session.commit()
 
 
@@ -1291,6 +1312,30 @@ def test_runs_api_events_filter_by_run_id(tmp_path, monkeypatch) -> None:
         assert events_since.status_code == 200
         payload_since = events_since.json()
         assert [event["seq"] for event in payload_since["events"]] == [3]
+
+
+def test_runs_api_events_preserve_nested_lifecycle_payload(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/api/runs",
+            json={"session_id": session_id, "message": "hello"},
+        )
+        run_id = create_resp.json()["run_id"]
+
+    _seed_run_lifecycle_event(session_id, run_id)
+
+    with TestClient(app) as client:
+        events_resp = client.get(f"/api/runs/{run_id}/events")
+
+    assert events_resp.status_code == 200
+    payload = events_resp.json()
+    lifecycle = next(event for event in payload["events"] if event["type"] == "run_completed")
+    assert lifecycle["payload"]["phase"] == "build"
+    assert lifecycle["payload"]["status"] == "completed"
+    assert lifecycle["payload"]["summary"] == "done"
 
 
 def test_session_events_endpoint_includes_run_and_event_ids(tmp_path, monkeypatch) -> None:

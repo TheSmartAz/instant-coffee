@@ -17,6 +17,23 @@ from .state_store import StateStoreService
 logger = logging.getLogger(__name__)
 
 
+def build_artifact_base_dir() -> Path:
+    """Directory used by ReactSSGBuilder for per-session build artifacts."""
+    return Path(get_settings().output_dir).expanduser().resolve()
+
+
+def build_artifact_session_dir(session_id: str) -> Path:
+    return build_artifact_base_dir() / session_id
+
+
+def build_artifact_dist_dir(session_id: str) -> Path:
+    return build_artifact_session_dir(session_id) / "dist"
+
+
+def build_artifact_log_path(session_id: str) -> Path:
+    return build_artifact_session_dir(session_id) / "build.log"
+
+
 def _format_build_error(exc: Exception) -> str:
     if isinstance(exc, BuildError):
         return exc.summary()
@@ -82,6 +99,7 @@ class BuildRunner:
         workspace_source = self._resolve_workspace_source(session_id)
         builder = ReactSSGBuilder(
             session_id,
+            base_dir=build_artifact_base_dir(),
             event_emitter=self.event_emitter,
             cancel_event=self.cancel_event,
         )

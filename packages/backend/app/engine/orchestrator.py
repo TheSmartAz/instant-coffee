@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Sequence
 
@@ -35,6 +37,9 @@ from .web_user_io import WebUserIO
 
 logger = logging.getLogger(__name__)
 
+_PAGE_SLUG_MAX_LENGTH = 40
+_PAGE_SOURCE_EXTENSIONS = {".jsx", ".tsx"}
+
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -48,6 +53,48 @@ def _waiting_reason_from_questions(questions: list[dict[str, Any]]) -> str:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return "Waiting for user input"
+
+
+def _normalize_workspace_page_slug(name: str, used: set[str] | None = None) -> str:
+    """Convert common React filenames into valid PageService slugs."""
+    stem = Path(name).stem if "." in name else name
+    normalized = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-")
+    if not normalized:
+        normalized = "page"
+    normalized = normalized[:_PAGE_SLUG_MAX_LENGTH].strip("-") or "page"
+
+    if used is None:
+        return normalized
+
+    candidate = normalized
+    suffix = 2
+    while candidate in used:
+        suffix_text = f"-{suffix}"
+        candidate = f"{normalized[: _PAGE_SLUG_MAX_LENGTH - len(suffix_text)].rstrip('-')}{suffix_text}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _source_snapshot_html(slug: str, title: str, sources: Sequence[tuple[str, str]]) -> str:
+    sections = []
+    for relative_path, content in sources:
+        sections.append(
+            "<section>"
+            f"<h2>{escape(relative_path)}</h2>"
+            f"<pre><code>{escape(content)}</code></pre>"
+            "</section>"
+        )
+    return (
+        "<!doctype html><html><head>"
+        '<meta charset="utf-8">'
+        f"<title>{escape(title)}</title>"
+        "</head><body>"
+        f'<main data-instant-coffee-source-snapshot="react" data-page-slug="{escape(slug)}">'
+        f"<h1>{escape(title)}</h1>"
+        + "".join(sections)
+        + "</main></body></html>"
+    )
 
 
 class EngineOrchestrator:
@@ -741,19 +788,36 @@ class EngineOrchestrator:
         from ..services.page_version import PageVersionService
 
         ws = Path(workspace)
-        pages_dir = ws / "src" / "pages"
-        slugs: list[str] = []
+        src_dir = ws / "src"
+        pages_dir = src_dir / "pages"
+        page_sources: list[tuple[str, Path]] = []
+        used_slugs: set[str] = set()
 
         if pages_dir.is_dir():
-            for path in sorted(pages_dir.glob("*.tsx")):
+            paths = sorted(
+                path
+                for path in pages_dir.iterdir()
+                if path.is_file() and path.suffix.lower() in _PAGE_SOURCE_EXTENSIONS
+            )
+            for path in paths:
                 if path.name.startswith("_"):
                     continue
-                slugs.append(path.stem)
+                slug = _normalize_workspace_page_slug(path.stem, used_slugs)
+                page_sources.append((slug, path))
 
-        if not slugs and (ws / "src" / "App.tsx").is_file():
-            slugs.append("index")
+        app_path = next(
+            (
+                src_dir / filename
+                for filename in ("App.tsx", "App.jsx")
+                if (src_dir / filename).is_file()
+            ),
+            None,
+        )
+        if not page_sources and app_path is not None:
+            used_slugs.add("index")
+            page_sources.append(("index", app_path))
 
-        if not slugs:
+        if not page_sources:
             return []
 
         page_service = PageService(self.db, event_emitter=self.event_emitter)
@@ -761,12 +825,13 @@ class EngineOrchestrator:
         existing = {p.slug: p for p in page_service.list_by_session(self.session.id)}
         synced: list[str] = []
 
-        for idx, slug in enumerate(slugs):
+        for idx, (slug, source_path) in enumerate(page_sources):
             title = slug.replace("-", " ").title()
             if slug in existing:
                 page = existing[slug]
-                if page.title != title:
-                    page_service.update(page.id, title=title)
+                # Update order_index if changed, but preserve user-edited title
+                if page.order_index != idx:
+                    page_service.update(page.id, order_index=idx)
             else:
                 page = page_service.create(
                     session_id=self.session.id,
@@ -775,15 +840,35 @@ class EngineOrchestrator:
                     order_index=idx,
                 )
 
-            # Ensure a PageVersion record exists so preview API has something to return
+            try:
+                source_content = source_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                logger.warning("Failed to read React page source %s: %s", source_path, exc)
+                continue
+
+            relative_path = str(source_path.relative_to(ws))
+            sources = [(relative_path, source_content)]
+            if app_path is not None and app_path != source_path:
+                try:
+                    app_content = app_path.read_text(encoding="utf-8")
+                    sources.append((str(app_path.relative_to(ws)), app_content))
+                except OSError as exc:
+                    logger.warning("Failed to read React app source %s: %s", app_path, exc)
+            snapshot_html = _source_snapshot_html(
+                slug,
+                page.title or title,
+                sources,
+            )
+
+            # Keep previews/version history meaningful for source-first React workspaces.
             current = page_version_service.get_current(page.id)
-            if current is None:
+            if current is None or (current.html or "") != snapshot_html:
                 page_version_service.create(
                     page_id=page.id,
-                    html="",
+                    html=snapshot_html,
                     description="React source page",
                     fallback_used=True,
-                    fallback_excerpt="Page version created from React workspace source",
+                    fallback_excerpt=f"React source snapshot: {relative_path}",
                 )
             synced.append(slug)
 

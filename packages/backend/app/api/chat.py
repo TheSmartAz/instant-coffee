@@ -923,9 +923,8 @@ def _resolve_preview(
     db: DbSession,
     session: SessionModel,
     request: Request,
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str]]:
     preview_url = response.preview_url
-    preview_html = response.preview_html
     active_slug = response.active_page_slug
 
     page_service = PageService(db)
@@ -952,18 +951,11 @@ def _resolve_preview(
     if active_page is not None:
         active_slug = active_page.slug
         preview_url = build_page_preview_url(request, active_page.id)
-        version_service = PageVersionService(db)
-        product_doc = ProductDocService(db).get_by_session_id(session.id)
-        global_style_css = _build_preview_css(product_doc)
-        preview = version_service.build_preview(active_page.id, global_style_css=global_style_css)
-        if preview is not None:
-            _version, html = preview
-            preview_html = html
 
     if preview_url is None:
         preview_url = build_preview_url(request, session.id)
 
-    return preview_url, preview_html, active_slug
+    return preview_url, active_slug
 
 
 def _build_response_fields(
@@ -974,7 +966,7 @@ def _build_response_fields(
     request: Request,
     start_tokens: int,
 ) -> dict:
-    preview_url, preview_html, active_slug = _resolve_preview(
+    preview_url, active_slug = _resolve_preview(
         response=response,
         db=db,
         session=session,
@@ -983,7 +975,6 @@ def _build_response_fields(
     tokens_used = max(0, _token_total(db, session.id) - start_tokens)
     return {
         "preview_url": preview_url,
-        "preview_html": preview_html,
         "active_page_slug": active_slug,
         "product_doc_updated": bool(response.product_doc_updated)
         if response.product_doc_updated is not None
@@ -1513,7 +1504,6 @@ async def chat(
     else:
         response_fields = {
             "preview_url": build_preview_url(request, session.id),
-            "preview_html": None,
             "active_page_slug": None,
             "product_doc_updated": False,
             "affected_pages": [],
@@ -1525,7 +1515,6 @@ async def chat(
         session_id=session.id,
         message=assistant_message,
         preview_url=response_fields["preview_url"],
-        preview_html=response_fields["preview_html"],
         active_page_slug=response_fields["active_page_slug"],
         product_doc_updated=response_fields["product_doc_updated"],
         affected_pages=response_fields["affected_pages"],

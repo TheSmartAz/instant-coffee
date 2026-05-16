@@ -30,6 +30,7 @@ export interface WorkbenchPanelProps {
   pages?: PageInfo[]
   selectedPageId?: string | null
   onSelectPage?: (pageId: string) => void
+  onMentionPage?: (page: PageInfo) => void
   previewHtml?: string | null
   previewUrl?: string | null
   buildPreviewUrl?: string | null
@@ -74,6 +75,7 @@ export function WorkbenchPanel({
   pages,
   selectedPageId,
   onSelectPage,
+  onMentionPage,
   previewHtml,
   previewUrl,
   buildPreviewUrl,
@@ -95,7 +97,6 @@ export function WorkbenchPanel({
 
   const previewVersionLabel = previewVersion ? `v${previewVersion}` : null
   const productDocVersionLabel = productDocVersion ? `v${productDocVersion}` : null
-
   return (
     <div className="workbench-panel flex h-full flex-col overflow-hidden">
       {/* Tab Bar */}
@@ -156,6 +157,7 @@ export function WorkbenchPanel({
             pages={pages}
             selectedPageId={selectedPageId}
             onSelectPage={onSelectPage}
+            onMentionPage={onMentionPage}
             aestheticScore={aestheticScore}
             buildState={buildState}
             onBuildRetry={onBuildRetry}

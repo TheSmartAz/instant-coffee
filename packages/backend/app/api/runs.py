@@ -107,11 +107,43 @@ _PUBLIC_EVENT_PAYLOAD_KEYS = {
     "message",
     "error",
     "waiting_reason",
+    "payload",
+    "summary",
+    "retry_count",
+    "batch_id",
+    "percent",
+    "step",
+}
+_PUBLIC_NESTED_EVENT_PAYLOAD_KEYS = {
+    "phase",
+    "status",
+    "summary",
+    "message",
+    "error",
+    "reason",
+    "waiting_reason",
+    "batch_id",
+    "retry_count",
+    "percent",
+    "step",
+    "passed",
+    "run_id",
 }
 
 
 def _public_dict(value: dict, allowed_keys: set[str]) -> dict:
     return {key: value[key] for key in allowed_keys if key in value}
+
+
+def _public_event_payload(value: dict) -> dict:
+    payload = _public_dict(value, _PUBLIC_EVENT_PAYLOAD_KEYS)
+    nested = payload.get("payload")
+    if isinstance(nested, dict):
+        public_nested = _public_dict(nested, _PUBLIC_NESTED_EVENT_PAYLOAD_KEYS)
+        payload["payload"] = public_nested
+        for key, item in public_nested.items():
+            payload.setdefault(key, item)
+    return payload
 
 
 def _redact_failure(failure: dict) -> dict:
@@ -187,7 +219,7 @@ def _serialize_event(event: SessionEvent) -> RunEventResponse:
     if not isinstance(payload, dict):
         payload = {}
     else:
-        payload = _public_dict(payload, _PUBLIC_EVENT_PAYLOAD_KEYS)
+        payload = _public_event_payload(payload)
     return RunEventResponse(
         id=event.id,
         session_id=event.session_id,

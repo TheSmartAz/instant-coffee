@@ -1,0 +1,26 @@
+- generic [ref=e3]:
+  - generic [ref=e5]:
+    - banner [ref=e6]:
+      - generic [ref=e7]:
+        - button "Back to project" [ref=e8]:
+          - img
+        - heading "Settings" [level=1] [ref=e9]
+    - main [ref=e10]:
+      - navigation [ref=e11]:
+        - button "Account" [ref=e12]
+        - button "Model" [ref=e13]
+        - button "Preferences" [ref=e14]
+      - generic [ref=e16]:
+        - generic [ref=e18]: Account
+        - generic [ref=e19]:
+          - generic [ref=e20]:
+            - text: Admin Token
+            - textbox "Admin Token" [ref=e21]:
+              - /placeholder: Required when configured
+          - generic [ref=e22]:
+            - text: API Key
+            - textbox "API Key" [ref=e23]:
+              - /placeholder: sk-ant-...
+          - button "Save" [ref=e24]
+  - region "Notifications (F8)":
+    - list

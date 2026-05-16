@@ -162,7 +162,7 @@ class ReactSSGBuilder:
 
         self._emit_progress("Applying mobile shell", 92)
         self._check_cancelled("mobile_shell")
-        self._apply_mobile_shell()
+        self._apply_mobile_shell(preview_mode=True)
 
         html_pages = sorted(
             str(path.relative_to(self.dist_dir))
@@ -313,7 +313,7 @@ class ReactSSGBuilder:
 
         self._emit_progress("Applying mobile shell", 92)
         self._check_cancelled("mobile_shell")
-        self._apply_mobile_shell()
+        self._apply_mobile_shell(preview_mode=True)
 
         pages = sorted(
             str(path.relative_to(self.dist_dir))
@@ -453,7 +453,7 @@ class ReactSSGBuilder:
         "</script>"
     )
 
-    def _apply_mobile_shell(self) -> None:
+    def _apply_mobile_shell(self, *, preview_mode: bool = False) -> None:
         for path in self.dist_dir.rglob("*.html"):
             if not path.is_file():
                 continue
@@ -461,7 +461,8 @@ class ReactSSGBuilder:
                 html = path.read_text(encoding="utf-8")
                 patched = ensure_mobile_shell(html)
                 # Inject app-mode runtime for iframe state sync / nav bridging
-                if self._APP_MODE_SCRIPT not in patched:
+                # Only inject in preview mode; exported/dist builds should not have it
+                if preview_mode and self._APP_MODE_SCRIPT not in patched:
                     if "</body>" in patched:
                         patched = patched.replace("</body>", f"{self._APP_MODE_SCRIPT}</body>")
                     elif "</head>" in patched:

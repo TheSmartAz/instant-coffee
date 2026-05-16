@@ -299,6 +299,9 @@ const completePreviewReadyPlanSteps = (plan: PlanStep[] | undefined) => {
       label.includes('generate') ||
       label.includes('index.html') ||
       label.includes('html') ||
+      label.includes('tsx') ||
+      label.includes('react') ||
+      label.includes('app') ||
       label.includes('output')
     if (!isGenerationStep) return step
     changed = true

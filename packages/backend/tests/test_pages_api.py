@@ -161,3 +161,34 @@ def test_page_version_preview_released_returns_410(tmp_path, monkeypatch) -> Non
         assert response.status_code == 410
         payload = response.json()
         assert payload["error"] == "version_released"
+
+
+def test_react_empty_page_preview_without_dist_returns_404(tmp_path, monkeypatch) -> None:
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("OUTPUT_DIR", str(output_dir))
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = uuid.uuid4().hex
+
+    workspace = output_dir / session_id / "src"
+    workspace.mkdir(parents=True)
+    (workspace / "App.tsx").write_text(
+        "export default function App() { return <main>React</main> }\n",
+        encoding="utf-8",
+    )
+
+    with get_db() as session:
+        session.add(SessionModel(id=session_id, title="API Session"))
+        session.flush()
+        page = PageService(session).create(
+            session_id=session_id,
+            title="Index",
+            slug="index",
+        )
+        page_id = page.id
+        PageVersionService(session).create(page_id, "")
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/pages/{page_id}/preview")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "No preview available"

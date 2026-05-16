@@ -76,7 +76,6 @@ class ChatResponse(BaseModel):
     message: str
 
     preview_url: Optional[str] = None
-    preview_html: Optional[str] = None
     active_page_slug: Optional[str] = None
 
     product_doc_updated: bool = False
@@ -91,7 +90,6 @@ class ChatResponse(BaseModel):
                 "session_id": "123e4567-e89b-12d3-a456-426614174000",
                 "message": "Your product doc is ready. Please check the Product Doc tab.",
                 "preview_url": None,
-                "preview_html": None,
                 "active_page_slug": None,
                 "product_doc_updated": True,
                 "affected_pages": [],

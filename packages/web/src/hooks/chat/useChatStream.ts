@@ -488,9 +488,8 @@ export function useChatStream({
                 activePageSlug: response.active_page_slug ?? message.activePageSlug,
               }))
             }
-            if (response?.preview_html || response?.preview_url) {
+            if (response?.preview_url) {
               onPreview?.({
-                html: response.preview_html ?? undefined,
                 previewUrl: response.preview_url ?? undefined,
               })
             }

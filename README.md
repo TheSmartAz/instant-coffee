@@ -1,6 +1,6 @@
 # Instant Coffee
 
-> AI-assisted, mobile-first page and static-site generation through chat.
+> AI-assisted, mobile-first React app generation through chat.
 
 Last updated: 2026-05-13
 

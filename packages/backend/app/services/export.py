@@ -14,7 +14,6 @@ from ..services.file_tree import FileTreeService
 from ..services.page import PageService
 from ..services.page_version import PageVersionService
 from ..services.product_doc import ProductDocService
-from ..services.version import VersionService
 from ..utils.datetime import utcnow
 
 
@@ -137,14 +136,12 @@ class ExportService:
     ) -> list[dict[str, Any]]:
         page_entries = self._page_entries(session=session, pages=pages, paths=paths)
         page_entries_by_path = {entry["path"]: entry for entry in page_entries}
-        legacy_index_html = self._legacy_index_html(session.id, version) if version is not None else None
+        is_react = (Path(get_settings().output_dir).expanduser() / session.id / "src" / "App.tsx").is_file()
 
         for path in paths:
             content_payload = file_service.get_file_content(session.id, path)
             content = content_payload.content if content_payload is not None else None
-            if path == "index.html" and legacy_index_html is not None:
-                content = legacy_index_html
-            if content is None:
+            if content is None or (path.endswith(".html") and not content.strip()):
                 page_entry = page_entries_by_path.get(path)
                 if page_entry is not None:
                     page_entry["status"] = "failed"
@@ -154,6 +151,15 @@ class ExportService:
             destination = _destination_for_path(root, path)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(content, encoding="utf-8")
+
+            # For React workspaces, also copy workspace files to the root so the
+            # export is a runnable Vite project (src/ sits at the top level).
+            if is_react and path.startswith("workspace/"):
+                relative = path[len("workspace/"):]
+                if relative:
+                    alt = _destination_for_path(root, relative)
+                    alt.parent.mkdir(parents=True, exist_ok=True)
+                    alt.write_text(content, encoding="utf-8")
 
             page_entry = page_entries_by_path.get(path)
             if page_entry is not None:
@@ -209,10 +215,5 @@ class ExportService:
                 }
             )
         return entries
-
-    def _legacy_index_html(self, session_id: str, version: int) -> Optional[str]:
-        target = VersionService(self.db).get_version(session_id, version)
-        return target.html if target is not None else None
-
 
 __all__ = ["ExportResult", "ExportService"]

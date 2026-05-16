@@ -59,6 +59,10 @@ export interface ChatInputProps {
   size?: 'default' | 'hero'
 }
 
+export interface ChatInputHandle {
+  insertPageMention: (page: Page) => void
+}
+
 const MAX_ATTACHMENTS = 3
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_ASSET_FILE_SIZE = 10 * 1024 * 1024
@@ -152,14 +156,15 @@ const readImageFile = async (file: File): Promise<ChatAttachment | null> =>
     reader.readAsDataURL(file)
   })
 
-export function ChatInput({
+export const ChatInput = React.forwardRef<ChatInputHandle, ChatInputProps>(
+function ChatInput({
   onSend,
   onAssetUpload,
   disabled = false,
   placeholder = 'Describe what you want to build...',
   pages = [],
   size = 'default',
-}: ChatInputProps) {
+}: ChatInputProps, ref) {
   const [message, setMessage] = React.useState('')
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([])
   const [imageIntent, setImageIntent] = React.useState<ImageIntent>('asset')
@@ -218,6 +223,59 @@ export function ChatInput({
       textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
     }
   }, [message])
+
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      insertPageMention: (page: Page) => {
+        const textarea = textareaRef.current
+        const mention = `@${page.slug} `
+
+        closeMention()
+
+        setMessage((current) => {
+          const canUseSelection =
+            textarea &&
+            document.activeElement === textarea &&
+            typeof textarea.selectionStart === 'number' &&
+            typeof textarea.selectionEnd === 'number'
+
+          if (canUseSelection) {
+            const start = textarea.selectionStart
+            const end = textarea.selectionEnd
+            const before = current.slice(0, start)
+            const after = current.slice(end)
+            const prefix = before.length > 0 && !/\s$/.test(before) ? ' ' : ''
+            const suffix = after.length > 0 && !/^\s/.test(after) ? ' ' : ''
+            const insertion = `${prefix}${mention}${suffix}`
+            const next = `${before}${insertion}${after}`
+            const cursor = before.length + insertion.length
+
+            requestAnimationFrame(() => {
+              textarea.focus()
+              textarea.setSelectionRange(cursor, cursor)
+              updateMentionState(next, cursor)
+            })
+
+            return next
+          }
+
+          const before = current.trimEnd()
+          const next = before ? `${before} ${mention}` : mention
+          const cursor = next.length
+
+          requestAnimationFrame(() => {
+            textarea?.focus()
+            textarea?.setSelectionRange(cursor, cursor)
+            updateMentionState(next, cursor)
+          })
+
+          return next
+        })
+      },
+    }),
+    [closeMention, updateMentionState]
+  )
 
 
   React.useEffect(() => {
@@ -899,4 +957,6 @@ export function ChatInput({
       />
     </div>
   )
-}
+})
+
+ChatInput.displayName = 'ChatInput'

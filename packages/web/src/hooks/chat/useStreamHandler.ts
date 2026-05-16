@@ -427,6 +427,9 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
                 label.includes('generate') ||
                 label.includes('index.html') ||
                 label.includes('html') ||
+                label.includes('tsx') ||
+                label.includes('react') ||
+                label.includes('app') ||
                 label.includes('output')
               if (!isGenerationStep) return step
               changed = true
@@ -700,9 +703,6 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
       }
     }
 
-    if (payload.preview_html || payload.previewHtml) {
-      deps.onPreview?.({ html: payload.preview_html ?? payload.previewHtml })
-    }
     if (payload.preview_url || payload.previewUrl) {
       deps.onPreview?.({ previewUrl: payload.preview_url ?? payload.previewUrl })
     }

@@ -1,0 +1,149 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - banner:
+          - generic:
+            - link:
+              - /url: /
+              - img
+            - heading [level=1]: Create a mobile local service page with service packages, reviews, service area, booking CTA, and contact details.
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+            - button:
+              - img
+            - button:
+              - img
+            - link:
+              - /url: /project/e0deed0b8f654b19b06c3f7983ebf0f0/flow
+              - img
+            - link:
+              - /url: /settings
+              - img
+        - main:
+          - main:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - button:
+                        - img
+                        - generic: Thread 1
+                        - img
+                      - generic:
+                        - button:
+                          - img
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - log:
+                              - generic:
+                                - generic:
+                                  - heading "What would you like to build?" [level=3]
+                                  - paragraph: Describe your idea and I'll create a mobile-optimized page for you.
+                                - generic:
+                                  - button "A product landing page for a coffee subscription service"
+                                  - button "A personal portfolio with project showcase"
+                                  - button "A restaurant menu with online ordering"
+                                  - button "An event invitation page with RSVP form"
+                      - generic:
+                        - button: Run details
+                      - generic:
+                        - generic:
+                          - generic:
+                            - textbox:
+                              - /placeholder: Describe what you want to build...
+                          - generic:
+                            - generic:
+                              - combobox:
+                                - generic:
+                                  - generic:
+                                    - img
+                                    - generic: DeepSeek V4 Pro
+                                - img
+                              - generic:
+                                - button:
+                                  - img
+                                  - text: Plan only
+                                - button [pressed]:
+                                  - img
+                                  - text: Agent
+                                - button:
+                                  - img
+                                  - text: Auto
+                            - generic:
+                              - button:
+                                - img
+                              - button:
+                                - img
+                              - status
+                              - button [disabled]:
+                                - img
+              - separator:
+                - generic:
+                  - img
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - button:
+                        - img
+                        - text: Preview
+                      - button:
+                        - img
+                        - text: Code
+                      - button:
+                        - img
+                        - text: Product doc
+                      - button:
+                        - img
+                        - text: Data
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Preview
+                              - generic: Ready
+                            - generic:
+                              - generic:
+                                - button [pressed]: Live
+                                - button: Build
+                              - button: Static Mode
+                              - button:
+                                - img
+                              - button:
+                                - img
+                          - iframe [ref=e243]:
+                            - generic [ref=f5e2]:
+                              - img [ref=f5e3]
+                              - generic [ref=f5e6]: Instant Coffee
+      - list
+  - dialog "Data" [ref=e245]:
+    - generic [ref=e246]:
+      - generic [ref=e247]:
+        - heading "Data" [level=2] [ref=e248]
+        - paragraph [ref=e249]: Inspect generated app data.
+      - button "Close drawer" [active] [ref=e250]:
+        - img [ref=e251]
+        - generic [ref=e254]: Close drawer
+    - generic [ref=e256]:
+      - generic [ref=e258]:
+        - generic [ref=e259]:
+          - button "Table View" [ref=e260]:
+            - img [ref=e261]
+            - text: Table View
+          - button "Dashboard View" [ref=e265]:
+            - img [ref=e266]
+            - text: Dashboard View
+        - button "Refresh" [ref=e269]:
+          - img
+          - text: Refresh
+      - generic [ref=e272]:
+        - paragraph [ref=e273]: No data tables yet
+        - paragraph [ref=e274]: Generate app data first, then this panel will show structured table records.

@@ -86,9 +86,7 @@ const mapSession = (session: ApiSession): SessionDetail => ({
   title: session.title ?? 'Untitled project',
   createdAt: toDate(session.created_at),
   updatedAt: toDate(session.updated_at),
-  currentVersion: session.current_version,
   previewUrl: normalizePreviewUrl(session.preview_url),
-  previewHtml: session.preview_html ?? undefined,
 })
 
 const INTERVIEW_TAG_RE = /<INTERVIEW_ANSWERS>([\s\S]*?)<\/INTERVIEW_ANSWERS>/
@@ -591,7 +589,6 @@ const mapVersion = (
     isCurrent: version.is_current ?? number === currentVersion,
     description: version.description,
     previewUrl: normalizePreviewUrl(version.preview_url),
-    previewHtml: version.preview_html ?? undefined,
   }
 }
 

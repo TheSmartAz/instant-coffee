@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from sqlalchemy import case, func
@@ -9,7 +10,9 @@ from ..utils.datetime import utcnow
 from ..db.models import Page, PageVersion, VersionSource
 from ..events.emitter import EventEmitter
 from ..events.models import PagePreviewReadyEvent, PageVersionCreatedEvent
+from ..services.build_runner import build_artifact_dist_dir
 from ..services.thumbnail import ThumbnailService
+from ..services.state_store import StateStoreService
 from ..utils.html import inline_css, strip_prompt_artifacts
 
 
@@ -300,15 +303,15 @@ class PageVersionService:
         if not html.strip():
             # Fallback to built dist HTML for React workspace builds
             html = self._read_dist_html(page.session_id, page.slug) or ""
+            if not html.strip():
+                return None
         html = inline_css(html, global_style_css, position="prepend")
         html = strip_prompt_artifacts(html)
         return version, html
 
     def _read_dist_html(self, session_id: str, slug: str) -> Optional[str]:
-        from pathlib import Path
-        from ..config import get_settings
-
-        dist_dir = Path(get_settings().output_dir).expanduser() / session_id / "dist"
+        # Align with ReactSSGBuilder default base_dir and preview router
+        dist_dir = self._resolve_dist_dir(session_id)
         if not dist_dir.is_dir():
             return None
         candidates: list[Path] = []
@@ -324,6 +327,19 @@ class PageVersionService:
                 except OSError:
                     continue
         return None
+
+    def _resolve_dist_dir(self, session_id: str) -> Path:
+        metadata = StateStoreService(self.db).get_metadata(session_id)
+        candidate: Optional[Path] = None
+        artifacts = metadata.build_artifacts if metadata is not None else None
+        if isinstance(artifacts, dict):
+            dist_path = artifacts.get("dist_path")
+            if isinstance(dist_path, str) and dist_path.strip():
+                candidate = Path(dist_path).expanduser()
+
+        if candidate is None:
+            candidate = build_artifact_dist_dir(session_id)
+        return candidate
 
     def fallback_stats_by_session(self, session_id: str, *, limit: int = 10) -> dict:
         total_versions = (

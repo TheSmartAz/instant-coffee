@@ -32,7 +32,6 @@ from .api import (
     snapshots_router,
 )
 from .config import get_settings
-from .db.data_migration_v04 import migrate_existing_sessions
 from .db.migrations import init_db
 from .db.database import get_database
 from .services.app_data_store import close_app_data_store, initialize_app_data_store
@@ -65,8 +64,6 @@ async def _lifespan(_: FastAPI):
     database = get_database()
     init_db(database)
     settings = get_settings()
-    if settings.migrate_v04_on_startup:
-        migrate_existing_sessions(database)
     with database.session() as session:
         failed_runs = RunService(session).fail_stale_runs(
             stale_after_seconds=settings.run_stale_timeout_seconds,
@@ -119,7 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(snapshots_router)
     app.include_router(schemas_router)
 
-    assets_dir = Path("~/.instant-coffee/sessions").expanduser()
+    assets_dir = Path(get_settings().output_dir).expanduser()
     assets_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 

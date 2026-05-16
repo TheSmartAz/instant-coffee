@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from ..db.models import Message, Session as SessionModel, Version
+from ..db.models import Message, Session as SessionModel
 
 logger = logging.getLogger(__name__)
 

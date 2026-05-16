@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from ..db.models import Message, PageVersion, Session as SessionModel, Thread as ThreadModel, Version
+from ..db.models import Message, PageVersion, Session as SessionModel, Thread as ThreadModel
 from ..db.utils import get_db
 from ..config import get_settings
 from ..services.message import MessageService
@@ -26,7 +26,6 @@ from ..services.thumbnail import ThumbnailService
 from ..services.thread import ThreadService
 from ..services.token_tracker import TokenTrackerService
 from ..schemas.session_metadata import SessionMetadata, SessionMetadataUpdate
-from ..services.version import VersionService
 from ..utils.html import EMPTY_PREVIEW_HTML, inject_hide_scrollbar_style, strip_prompt_artifacts
 from ..utils.style import build_global_style_css
 from .auth import require_admin_token
@@ -39,10 +38,6 @@ logger = logging.getLogger(__name__)
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
     initial_prompt: Optional[str] = None
-
-
-class VersionRollbackRequest(BaseModel):
-    version: int
 
 
 def _get_db_session() -> Generator[DbSession, None, None]:
@@ -87,9 +82,7 @@ def _get_index_preview(session: DbSession, session_id: str) -> tuple[Optional[st
 
 def _has_home_preview_source(session: DbSession, record: SessionModel) -> bool:
     page = _get_index_page(session, record.id)
-    if page is not None and page.current_version_id is not None:
-        return True
-    return record.current_version is not None
+    return bool(page is not None and page.current_version_id is not None)
 
 
 def _fallback_session_title(prompt: str) -> str:
@@ -153,7 +146,6 @@ def _session_payload(
     *,
     request: Request | None = None,
     message_count: int | None = None,
-    version_count: int | None = None,
 ) -> dict:
     if message_count is None:
         message_count = (
@@ -162,19 +154,11 @@ def _session_payload(
             .scalar()
             or 0
         )
-    if version_count is None:
-        version_count = (
-            db.query(func.count(Version.id))
-            .filter(Version.session_id == record.id)
-            .scalar()
-            or 0
-        )
     payload = {
         "id": record.id,
         "title": record.title,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
-        "current_version": record.current_version,
         "product_type": record.product_type,
         "complexity": record.complexity,
         "skill_id": record.skill_id,
@@ -183,11 +167,8 @@ def _session_payload(
         "model_classifier": record.model_classifier,
         "model_writer": record.model_writer,
         "model_expander": record.model_expander,
-        "model_validator": record.model_validator,
         "model_style_refiner": record.model_style_refiner,
-        "build_status": record.build_status,
         "message_count": message_count,
-        "version_count": version_count,
     }
     if request is not None and (
         ThumbnailService().has_thumbnail(record.id) or _has_home_preview_source(db, record)
@@ -220,23 +201,12 @@ def list_sessions(
         .group_by(Message.session_id)
         .subquery()
     )
-    ver_count_sq = (
-        db.query(
-            Version.session_id,
-            func.count(Version.id).label("ver_count"),
-        )
-        .group_by(Version.session_id)
-        .subquery()
-    )
-
     query = (
         db.query(
             SessionModel,
             func.coalesce(msg_count_sq.c.msg_count, 0).label("message_count"),
-            func.coalesce(ver_count_sq.c.ver_count, 0).label("version_count"),
         )
         .outerjoin(msg_count_sq, SessionModel.id == msg_count_sq.c.session_id)
-        .outerjoin(ver_count_sq, SessionModel.id == ver_count_sq.c.session_id)
     )
 
     # Search filter
@@ -257,9 +227,8 @@ def list_sessions(
                 record,
                 request=request,
                 message_count=msg_c,
-                version_count=ver_c,
             )
-            for record, msg_c, ver_c in rows
+            for record, msg_c in rows
         ],
         "total": total,
     }
@@ -293,18 +262,7 @@ def get_session(
         raise HTTPException(status_code=404, detail="Session not found")
     payload = _session_payload(db, record, request=request)
     preview_html, _page_version = _get_index_preview(db, session_id)
-    if preview_html is None:
-        version = None
-        if record.current_version is not None:
-            version = (
-                db.query(Version)
-                .filter(Version.session_id == session_id)
-                .filter(Version.version == record.current_version)
-                .first()
-            )
-        payload["preview_html"] = strip_prompt_artifacts(version.html) if version is not None else None
-    else:
-        payload["preview_html"] = preview_html
+    payload["preview_html"] = preview_html or None
     payload["preview_url"] = build_preview_url(request, session_id)
     return payload
 
@@ -322,14 +280,6 @@ async def get_thumbnail(
     path = service.thumbnail_path(session_id)
     if not path.exists():
         preview_html, _page_version = _get_index_preview(db, session_id)
-        if preview_html is None and record.current_version is not None:
-            version = (
-                db.query(Version)
-                .filter(Version.session_id == session_id)
-                .filter(Version.version == record.current_version)
-                .first()
-            )
-            preview_html = strip_prompt_artifacts(version.html) if version is not None else None
         if not preview_html:
             raise HTTPException(status_code=404, detail="No preview available")
         try:
@@ -471,29 +421,11 @@ def get_versions(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     index_page = _get_index_page(db, session_id)
-    if index_page is not None:
-        page_version_service = PageVersionService(db)
-        versions = page_version_service.list_by_page(index_page.id)
-        current = page_version_service.get_current(index_page.id)
-        return {
-            "versions": [
-                {
-                    "id": version.id,
-                    "version": version.version,
-                    "description": version.description,
-                    "created_at": version.created_at,
-                    **(
-                        {"preview_html": strip_prompt_artifacts(version.html)}
-                        if include_preview_html
-                        else {}
-                    ),
-                }
-                for version in versions
-            ],
-            "current_version": current.version if current is not None else None,
-        }
-    service = VersionService(db)
-    versions = service.get_versions(session_id)
+    if index_page is None:
+        return {"versions": [], "current_version": None}
+    page_version_service = PageVersionService(db)
+    versions = page_version_service.list_by_page(index_page.id)
+    current = page_version_service.get_current(index_page.id)
     return {
         "versions": [
             {
@@ -509,7 +441,7 @@ def get_versions(
             }
             for version in versions
         ],
-        "current_version": session.current_version,
+        "current_version": current.version if current is not None else None,
     }
 
 
@@ -525,80 +457,7 @@ def get_preview(
     if preview_html is not None:
         preview_html = inject_hide_scrollbar_style(preview_html or "")
         return HTMLResponse(content=preview_html or "")
-
-    version_service = VersionService(db)
-    version = None
-    if session.current_version is not None:
-        version = version_service.get_version(session_id, session.current_version)
-    if version is None:
-        versions = version_service.get_versions(session_id, limit=1)
-        version = versions[0] if versions else None
-    if version is None:
-        return HTMLResponse(content=EMPTY_PREVIEW_HTML)
-    preview_html = inject_hide_scrollbar_style(strip_prompt_artifacts(version.html or ""))
-    return HTMLResponse(content=preview_html or "")
-
-
-@router.post("/{session_id}/rollback")
-def rollback_session(
-    session_id: str,
-    payload: VersionRollbackRequest,
-    request: Request,
-    db: DbSession = Depends(_get_db_session),
-    _: None = Depends(require_admin_token),
-) -> dict:
-    index_page = _get_index_page(db, session_id)
-    if index_page is not None:
-        return JSONResponse(
-            status_code=410,
-            content={
-                "error": "rollback_not_supported",
-                "message": "Session rollback via PageVersion is no longer supported. Use ProjectSnapshot rollback instead.",
-                "preview_url": build_preview_url(request, session_id),
-            },
-        )
-    service = VersionService(db)
-    version = service.rollback(session_id, payload.version)
-    if version is None:
-        raise HTTPException(status_code=404, detail="Version not found")
-    db.commit()
-    return {
-        "success": True,
-        "current_version": payload.version,
-        "preview_url": build_preview_url(request, session_id),
-        "preview_html": strip_prompt_artifacts(version.html),
-    }
-
-
-@router.post("/{session_id}/versions/{version_id}/revert")
-def revert_session_version(
-    session_id: str,
-    version_id: int,
-    request: Request,
-    db: DbSession = Depends(_get_db_session),
-    _: None = Depends(require_admin_token),
-) -> dict:
-    index_page = _get_index_page(db, session_id)
-    if index_page is not None:
-        return JSONResponse(
-            status_code=410,
-            content={
-                "error": "rollback_not_supported",
-                "message": "Session rollback via PageVersion is no longer supported. Use ProjectSnapshot rollback instead.",
-                "preview_url": build_preview_url(request, session_id),
-            },
-        )
-    service = VersionService(db)
-    version = service.rollback(session_id, int(version_id))
-    if version is None:
-        raise HTTPException(status_code=404, detail="Version not found")
-    db.commit()
-    return {
-        "success": True,
-        "current_version": int(version_id),
-        "preview_url": build_preview_url(request, session_id),
-        "preview_html": strip_prompt_artifacts(version.html),
-    }
+    return HTMLResponse(content=EMPTY_PREVIEW_HTML)
 
 
 class CreateThreadRequest(BaseModel):

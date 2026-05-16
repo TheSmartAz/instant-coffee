@@ -118,7 +118,7 @@ export function registerExportCommand(program: Command): void {
     .description('Export sessions or generated pages')
     .option('-o, --output <path>', 'Output directory')
     .option('-v, --version <number>', 'Specific version to export (default: latest)')
-    .option('-f, --format <format>', 'Export format (html, json, zip)', 'html')
+    .option('-f, --format <format>', 'Export format (html, json, zip)')
     .action(async (sessionId: string | undefined, options: ExportOptions) => {
       try {
         await exportCommand(sessionId, options)

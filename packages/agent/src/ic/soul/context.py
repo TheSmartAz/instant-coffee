@@ -324,15 +324,19 @@ class Context:
         old_estimate = self._token_estimate
         old_count = len(self.messages)
 
-        # Step 1: De-duplicate HTML in tool results (replace >2K char HTML with placeholder)
+        # Step 1: De-duplicate large file contents in tool results (replace >2K char blobs with placeholder)
         for m in self.messages:
             if m.role == "tool" and isinstance(m.content, str) and len(m.content) > 2000:
-                # Check if it looks like HTML
-                if "<html" in m.content.lower() or "<!doctype" in m.content.lower():
+                lowered = m.content.lower()
+                # HTML or TSX/JSX source files
+                is_html = "<html" in lowered or "<!doctype" in lowered
+                is_tsx = "import react" in lowered or "export default" in lowered or "jsx" in lowered
+                if is_html or is_tsx:
                     import re
                     title_match = re.search(r"<title>(.*?)</title>", m.content, re.IGNORECASE)
                     title = title_match.group(1) if title_match else "untitled"
-                    m.content = f"[HTML: {title}, {len(m.content)} chars]"
+                    kind = "HTML" if is_html else "TSX"
+                    m.content = f"[{kind}: {title}, {len(m.content)} chars]"
 
         # Step 2: Split messages into first/middle/recent
         first = self.messages[:keep_first]

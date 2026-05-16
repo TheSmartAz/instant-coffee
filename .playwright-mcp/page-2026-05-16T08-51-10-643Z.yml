@@ -1,0 +1,157 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - banner:
+          - generic:
+            - link:
+              - /url: /
+              - img
+            - heading [level=1]: Create a mobile local service page with service packages, reviews, service area, booking CTA, and contact details.
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+            - button:
+              - img
+            - button:
+              - img
+            - link:
+              - /url: /project/e0deed0b8f654b19b06c3f7983ebf0f0/flow
+              - img
+            - link:
+              - /url: /settings
+              - img
+        - main:
+          - main:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - button:
+                        - img
+                        - generic: Thread 1
+                        - img
+                      - generic:
+                        - button:
+                          - img
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - log:
+                              - generic:
+                                - generic:
+                                  - heading "What would you like to build?" [level=3]
+                                  - paragraph: Describe your idea and I'll create a mobile-optimized page for you.
+                                - generic:
+                                  - button "A product landing page for a coffee subscription service"
+                                  - button "A personal portfolio with project showcase"
+                                  - button "A restaurant menu with online ordering"
+                                  - button "An event invitation page with RSVP form"
+                      - generic:
+                        - button: Run details
+                      - generic:
+                        - generic:
+                          - generic:
+                            - textbox:
+                              - /placeholder: Describe what you want to build...
+                          - generic:
+                            - generic:
+                              - combobox:
+                                - generic:
+                                  - generic:
+                                    - img
+                                    - generic: DeepSeek V4 Pro
+                                - img
+                              - generic:
+                                - button:
+                                  - img
+                                  - text: Plan only
+                                - button [pressed]:
+                                  - img
+                                  - text: Agent
+                                - button:
+                                  - img
+                                  - text: Auto
+                            - generic:
+                              - button:
+                                - img
+                              - button:
+                                - img
+                              - status
+                              - button [disabled]:
+                                - img
+              - separator:
+                - generic:
+                  - img
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - button:
+                        - img
+                        - text: Preview
+                      - button:
+                        - img
+                        - text: Code
+                      - button:
+                        - img
+                        - text: Product doc
+                      - button:
+                        - img
+                        - text: Data
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Preview
+                              - generic: Ready
+                            - generic:
+                              - generic:
+                                - button [pressed]: Live
+                                - button: Build
+                              - button: Static Mode
+                              - button:
+                                - img
+                              - button:
+                                - img
+                          - iframe [ref=e243]:
+                            - generic [ref=f5e2]:
+                              - img [ref=f5e3]
+                              - generic [ref=f5e6]: Instant Coffee
+      - list
+  - dialog "Code" [ref=e276]:
+    - generic [ref=e277]:
+      - generic [ref=e278]:
+        - heading "Code" [level=2] [ref=e279]
+        - paragraph [ref=e280]: Browse generated project files.
+      - button "Close drawer" [active] [ref=e281]:
+        - img [ref=e282]
+        - generic [ref=e285]: Close drawer
+    - generic [ref=e287]:
+      - generic [ref=e288]:
+        - generic [ref=e289]:
+          - generic [ref=e290]: Files
+          - button "Refresh files" [ref=e291]:
+            - img
+        - generic [ref=e293]:
+          - generic [ref=e295] [cursor=pointer]:
+            - img [ref=e296]
+            - generic [ref=e299]: index.html
+            - generic [ref=e300]: 0B
+          - generic [ref=e301]:
+            - generic [ref=e302] [cursor=pointer]:
+              - img [ref=e303]
+              - img [ref=e305]
+              - generic [ref=e307]: assets
+            - generic [ref=e310] [cursor=pointer]:
+              - img [ref=e311]
+              - generic [ref=e314]: site.css
+              - generic [ref=e315]: 1.8KB
+      - generic [ref=e318]:
+        - img [ref=e319]
+        - paragraph [ref=e322]: Select a file on the left to view its contents

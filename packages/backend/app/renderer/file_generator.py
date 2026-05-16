@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..config import get_settings
 from ..schemas.asset import AssetRegistry, AssetRef
 from ..services.asset_registry import AssetRegistryService
 
@@ -144,7 +145,7 @@ class SchemaFileGenerator:
     def _assets_base_path(self) -> Path:
         if self.assets_base_dir is not None:
             return Path(self.assets_base_dir)
-        return Path("~/.instant-coffee/sessions").expanduser()
+        return Path(get_settings().output_dir).expanduser()
 
     def _registry_from_files(self, files: Iterable[dict[str, Any]]) -> dict[str, Any]:
         entries = []

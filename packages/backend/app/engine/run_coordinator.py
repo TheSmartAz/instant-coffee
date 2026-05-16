@@ -330,6 +330,7 @@ class RunCoordinator:
                     fix_attempts=fix_attempts,
                 ),
             )
+            self._ensure_not_cancelled(run_id)
         except RunCancelledError:
             cancelled_at = self._timestamp()
             artifacts[phase.value] = {"cancelled": True}

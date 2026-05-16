@@ -1,0 +1,111 @@
+- generic [ref=e3]:
+  - generic [ref=e127]:
+    - banner [ref=e128]:
+      - generic [ref=e129]:
+        - link "Back to home" [ref=e130] [cursor=pointer]:
+          - /url: /
+          - img
+        - heading "Create a mobile local service page with service packages, reviews, service area, booking CTA, and contact details." [level=1] [ref=e131]
+      - generic [ref=e132]:
+        - button "Open code drawer" [ref=e133]:
+          - img
+        - button "Open product doc drawer" [ref=e134]:
+          - img
+        - button "Open data and more drawer" [ref=e135]:
+          - img
+        - button "Open versions drawer" [ref=e136]:
+          - img
+        - link "Execution flow" [ref=e137] [cursor=pointer]:
+          - /url: /project/e0deed0b8f654b19b06c3f7983ebf0f0/flow
+          - img
+        - link "Open settings" [ref=e138] [cursor=pointer]:
+          - /url: /settings
+          - img
+    - main [ref=e139]:
+      - main [ref=e140]:
+        - generic [ref=e141]:
+          - generic [ref=e144]:
+            - generic [ref=e145]:
+              - button "Thread 1" [ref=e146]:
+                - img
+                - generic [ref=e147]: Thread 1
+                - img
+              - button "Abort current execution" [ref=e149]:
+                - img
+            - generic [ref=e150]:
+              - log [ref=e154]:
+                - generic [ref=e155]:
+                  - generic [ref=e156]:
+                    - heading "What would you like to build?" [level=3] [ref=e157]
+                    - paragraph [ref=e158]: Describe your idea and I'll create a mobile-optimized page for you.
+                  - generic [ref=e159]:
+                    - button "A product landing page for a coffee subscription service" [ref=e160]
+                    - button "A personal portfolio with project showcase" [ref=e161]
+                    - button "A restaurant menu with online ordering" [ref=e162]
+                    - button "An event invitation page with RSVP form" [ref=e163]
+              - button "Run details" [ref=e166]
+              - generic [ref=e168]:
+                - textbox "Message input" [ref=e170]:
+                  - /placeholder: Describe what you want to build...
+                - generic [ref=e171]:
+                  - generic [ref=e172]:
+                    - combobox [ref=e173]:
+                      - generic:
+                        - generic:
+                          - img "DeepSeek V4 Pro logo"
+                          - generic: DeepSeek V4 Pro
+                      - img [ref=e174]
+                    - generic "Execution mode" [ref=e176]:
+                      - button "Plan only" [ref=e177]:
+                        - img [ref=e178]
+                        - text: Plan only
+                      - button "Agent" [pressed] [ref=e181]:
+                        - img [ref=e182]
+                        - text: Agent
+                      - button "Auto" [ref=e185]:
+                        - img [ref=e186]
+                        - text: Auto
+                  - generic [ref=e188]:
+                    - button "Upload asset" [ref=e189]:
+                      - img
+                    - button "Start voice input" [ref=e190]:
+                      - img
+                    - status [ref=e191]
+                    - button "Send message" [disabled]:
+                      - img
+          - separator [ref=e192]:
+            - img [ref=e194]
+          - generic [ref=e203]:
+            - generic [ref=e204]:
+              - button "Preview" [ref=e205]:
+                - img [ref=e206]
+                - text: Preview
+              - button "Code" [ref=e209]:
+                - img [ref=e210]
+                - text: Code
+              - button "Product doc" [ref=e213]:
+                - img [ref=e214]
+                - text: Product doc
+              - button "Data" [ref=e217]:
+                - img [ref=e218]
+                - text: Data
+            - generic [ref=e224]:
+              - generic [ref=e225]:
+                - generic [ref=e226]:
+                  - generic [ref=e227]: Preview
+                  - generic [ref=e228]: Ready
+                - generic [ref=e229]:
+                  - generic [ref=e230]:
+                    - button "Live" [pressed] [ref=e231]
+                    - button "Build" [ref=e232]
+                  - button "Static Mode" [ref=e233]
+                  - button "Refresh preview" [ref=e234]:
+                    - img
+                  - button "Export preview" [ref=e235]:
+                    - img
+              - iframe [ref=e243]:
+                - generic [ref=f5e2]:
+                  - img [ref=f5e3]
+                  - generic [ref=f5e6]: Instant Coffee
+  - region "Notifications (F8)":
+    - list

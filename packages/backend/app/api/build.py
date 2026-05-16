@@ -22,6 +22,7 @@ from ..schemas.session_metadata import BuildInfo, BuildStatus, SessionMetadata
 from ..config import get_settings
 from ..services.event_store import EventStoreService
 from ..services.page import PageService
+from ..services.build_runner import build_artifact_base_dir, build_artifact_log_path
 from ..services.state_store import StateStoreService
 from .auth import require_admin_token
 
@@ -67,8 +68,7 @@ def _get_build_job(session_id: str) -> _BuildJob | None:
 
 
 def _build_log_path(session_id: str) -> Path:
-    base = Path("~/.instant-coffee/sessions").expanduser()
-    return (base / session_id / "build.log").resolve()
+    return build_artifact_log_path(session_id).resolve()
 
 
 def _get_db_session() -> Generator[DbSession, None, None]:
@@ -140,7 +140,12 @@ async def _run_build_task(
     with database.session() as db:
         store = StateStoreService(db)
         emitter = EventEmitter(session_id=session_id, event_store=EventStoreService(db))
-        builder = ReactSSGBuilder(session_id, event_emitter=emitter, cancel_event=cancel_event)
+        builder = ReactSSGBuilder(
+            session_id,
+            base_dir=build_artifact_base_dir(),
+            event_emitter=emitter,
+            cancel_event=cancel_event,
+        )
         try:
             workspace_source = _resolve_workspace_source(session_id)
             if workspace_source is None:
@@ -243,31 +248,18 @@ async def trigger_build(
     store.update_build_info(session_id, building_info)
     db.commit()
 
-    try:
-        loop = asyncio.get_running_loop()
-        cancel_event = Event()
-        task = loop.create_task(
-            _run_build_task(
-                session_id=session_id,
-                payload=payload,
-                started_at=started_at,
-                cancel_event=cancel_event,
-            )
+    loop = asyncio.get_running_loop()
+    cancel_event = Event()
+    task = loop.create_task(
+        _run_build_task(
+            session_id=session_id,
+            payload=payload,
+            started_at=started_at,
+            cancel_event=cancel_event,
         )
-        _register_build(session_id, _BuildJob(task=task, cancel_event=cancel_event))
-        task.add_done_callback(lambda finished: _clear_build(session_id, finished))
-    except RuntimeError:
-        cancel_event = Event()
-        _register_build(session_id, _BuildJob(task=None, cancel_event=cancel_event))
-        asyncio.run(
-            _run_build_task(
-                session_id=session_id,
-                payload=payload,
-                started_at=started_at,
-                cancel_event=cancel_event,
-            )
-        )
-        _clear_build(session_id)
+    )
+    _register_build(session_id, _BuildJob(task=task, cancel_event=cancel_event))
+    task.add_done_callback(lambda finished: _clear_build(session_id, finished))
 
     return building_info
 

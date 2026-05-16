@@ -1,6 +1,7 @@
 import uuid
 
 from app.db.database import Database
+from app.config import refresh_settings
 from app.db.migrations import init_db
 from app.db.models import PageVersion, Session as SessionModel
 from app.db.utils import get_db, transaction_scope
@@ -150,3 +151,56 @@ def test_review_session_reads_product_doc_pages_and_build_metadata(tmp_path) -> 
     assert codes == ["expected_page_missing"]
     assert result.summary["expected_pages"] == ["index", "profile"]
     assert result.summary["generated_pages"] == ["index"]
+
+
+def test_review_session_fails_react_success_metadata_when_dist_artifact_missing(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "review-react.db"
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("OUTPUT_DIR", str(output_dir))
+    refresh_settings()
+    database = Database(f"sqlite:///{db_path}")
+    init_db(database)
+
+    session_id = uuid.uuid4().hex
+    _create_session(database, session_id)
+    workspace = output_dir / session_id / "src"
+    workspace.mkdir(parents=True)
+    (workspace / "App.tsx").write_text(
+        "export default function App() { return <main>React</main> }\n",
+        encoding="utf-8",
+    )
+
+    with get_db(database) as session:
+        ProductDocService(session).create(
+            session_id=session_id,
+            content="## Pages\n- Home (/)",
+            structured={},
+            status="confirmed",
+        )
+        page = PageService(session).create(
+            session_id=session_id,
+            title="Home",
+            slug="index",
+        )
+        version = PageVersion(page_id=page.id, version=1, html="")
+        session.add(version)
+        session.flush()
+        page.current_version_id = version.id
+        metadata = session.get(SessionModel, session_id)
+        metadata.build_status = "success"
+        metadata.build_artifacts = {
+            "pages": ["index.html"],
+            "dist_path": str(output_dir / session_id / "dist"),
+        }
+        session.commit()
+
+    with get_db(database) as session:
+        result = ReviewService(session).review_session(session_id)
+
+    assert result.verdict == "fail"
+    codes = [issue.code for issue in result.issues]
+    assert "page_html_missing" in codes
+    assert "react_dist_missing" in codes
+
+    monkeypatch.delenv("OUTPUT_DIR", raising=False)
+    refresh_settings()

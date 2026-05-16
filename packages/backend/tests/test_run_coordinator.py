@@ -498,6 +498,40 @@ def test_run_coordinator_persists_cancelled_phase_without_failure(tmp_path) -> N
         assert event.payload["payload"]["status"] == "cancelled"
 
 
+def test_run_coordinator_honors_cancel_after_phase_returns(tmp_path) -> None:
+    database = _create_database(tmp_path, "run-coordinator-late-cancel.db")
+    run_id = _seed_run(database)
+    RunCoordinator, RunCoordinatorPhases = _load_run_coordinator_contract()
+
+    async def cancelled_after_work(_context):
+        RunService.mark_cancelled(run_id)
+        return {"artifact_id": "should-not-complete"}
+
+    phases = RunCoordinatorPhases(
+        build=cancelled_after_work,
+        review=lambda _context: {"passed": True},
+        fix=lambda _context: {"fixed": True},
+    )
+
+    with get_db(database) as session:
+        coordinator = RunCoordinator(
+            db=session,
+            run_service=RunService(session),
+            event_store=EventStoreService(session),
+            phases=phases,
+        )
+        with pytest.raises(RunCancelledError):
+            _run_coordinator(coordinator, run_id)
+        session.commit()
+
+    stored = _stored_run(database, run_id)
+    state = _coordinator_state(stored)
+    assert stored.status == "cancelled"
+    assert state["artifacts"]["build"] == {"cancelled": True}
+    assert state["phase_history"][0]["phase"] == "build"
+    assert state["phase_history"][0]["status"] == "cancelled"
+
+
 def test_event_emitter_persists_run_scoped_events_before_returning() -> None:
     class RecordingStore:
         _use_separate_session = True

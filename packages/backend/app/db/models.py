@@ -31,7 +31,6 @@ class Session(Base):
     title = Column(String, nullable=False)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
-    current_version = Column(Integer, default=0)
     product_type = Column(String(50))
     complexity = Column(String(20))
     skill_id = Column(String(100))
@@ -49,7 +48,6 @@ class Session(Base):
 
     threads = relationship("Thread", back_populates="session", cascade="all, delete-orphan")
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
-    versions = relationship("Version", back_populates="session", cascade="all, delete-orphan")
     token_usage = relationship("TokenUsage", back_populates="session", cascade="all, delete-orphan")
     product_doc = relationship(
         "ProductDoc",
@@ -179,24 +177,6 @@ class Message(Base):
         Index("idx_messages_session_ts", "session_id", "timestamp"),
         Index("idx_messages_thread_id", "thread_id"),
         Index("idx_messages_thread_ts", "thread_id", "timestamp"),
-    )
-
-
-class Version(Base):
-    __tablename__ = "versions"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
-    version = Column(Integer, nullable=False)
-    html = Column(Text, nullable=False)
-    description = Column(String)
-    created_at = Column(DateTime, default=utcnow)
-
-    session = relationship("Session", back_populates="versions")
-
-    __table_args__ = (
-        UniqueConstraint("session_id", "version", name="uq_versions_session"),
-        Index("idx_versions_session_id", "session_id"),
     )
 
 
@@ -502,7 +482,6 @@ __all__ = [
     "Session",
     "Thread",
     "Message",
-    "Version",
     "TokenUsage",
     "ProductDocStatus",
     "VersionSource",

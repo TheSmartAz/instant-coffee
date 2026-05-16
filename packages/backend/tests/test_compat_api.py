@@ -80,6 +80,37 @@ def test_session_export_and_legacy_export_routes_write_manifest(tmp_path, monkey
         assert (legacy_dir / "export_manifest.json").exists()
 
 
+def test_react_export_without_rendered_html_reports_failure(tmp_path, monkeypatch) -> None:
+    app, output_dir = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+
+    workspace = output_dir / session_id / "src"
+    workspace.mkdir(parents=True)
+    (workspace / "App.tsx").write_text(
+        "export default function App() { return <main>React</main> }\n",
+        encoding="utf-8",
+    )
+
+    with get_db() as session:
+        page = PageService(session).create(session_id=session_id, title="Home", slug="index")
+        PageVersionService(session).create(page.id, "")
+        metadata = session.get(SessionModel, session_id)
+        metadata.build_status = "failed"
+        metadata.build_artifacts = {"error": "npm run build failed"}
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/sessions/{session_id}/export")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["success"] is False
+        [page_entry] = payload["manifest"]["pages"]
+        assert page_entry["slug"] == "index"
+        assert page_entry["status"] == "failed"
+        assert page_entry["error"] == "File content unavailable"
+        assert not (output_dir / session_id / "export" / "index.html").exists()
+
+
 def test_stats_and_abort_compatibility_routes(tmp_path, monkeypatch) -> None:
     app, _output_dir = _create_app(tmp_path, monkeypatch)
     session_id = _seed_session()
@@ -238,7 +269,6 @@ def test_session_rollback_route_has_single_semantic_path(tmp_path, monkeypatch) 
         for route in app.routes
         if "POST" in getattr(route, "methods", set())
     ]
-    assert post_paths.count("/api/sessions/{session_id}/rollback") == 1
     assert "/api/sessions/{session_id}/agent/rollback" in post_paths
     assert "/api/plan" in post_paths
     assert "/api/task/{task_id}/retry" in post_paths

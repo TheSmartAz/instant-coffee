@@ -676,8 +676,6 @@ export interface SessionResponse {
   model_style_refiner: string | null
   build_status: string | null
   message_count: number
-  version_count: number
-  preview_html?: string | null
   preview_url?: string
 }
 
@@ -692,9 +690,7 @@ export interface SessionMetadataResponse {
 
 export interface SessionRevertResponse {
   success: boolean
-  current_version: number
   preview_url: string
-  preview_html: string
 }
 
 export interface SettingsResponse {

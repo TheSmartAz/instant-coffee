@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from app.db.models import Session as SessionModel
 from app.db.utils import get_db, transaction_scope
 from app.renderer.builder import BuildError
 from app.services.build_runner import BuildRunner
+from app.config import refresh_settings
 
 
 def _create_database(tmp_path, name: str) -> Database:
@@ -75,6 +77,46 @@ def test_build_runner_prefers_workspace_source_mode(tmp_path, monkeypatch) -> No
         runner = BuildRunner(session)
         result = asyncio.run(runner._build(session_id, {}))
 
+    assert result["source_mode"] == "workspace"
+
+    monkeypatch.delenv("OUTPUT_DIR", raising=False)
+    refresh_settings()
+
+
+def test_build_runner_uses_configured_output_dir_for_builder_base(tmp_path, monkeypatch) -> None:
+    output_dir = tmp_path / "configured-output"
+    monkeypatch.setenv("OUTPUT_DIR", str(output_dir))
+    refresh_settings()
+    database = _create_database(tmp_path, "build-runner-base-dir.db")
+    session_id = uuid.uuid4().hex
+    with transaction_scope(database) as session:
+        session.add(SessionModel(id=session_id, title="Build Runner Base Dir Test"))
+
+    workspace = output_dir / session_id / "src"
+    workspace.mkdir(parents=True)
+    (workspace / "App.tsx").write_text(
+        "export default function App() { return <main>Source mode</main> }\n",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Path] = {}
+
+    async def fake_build_from_workspace_source(self, source_dir, *, pages=None):
+        captured["base_dir"] = self.base_dir
+        captured["source_dir"] = source_dir
+        return {"status": "success", "pages": ["index.html"], "dist_path": "/tmp/dist"}
+
+    monkeypatch.setattr(
+        "app.services.build_runner.ReactSSGBuilder.build_from_workspace_source",
+        fake_build_from_workspace_source,
+    )
+
+    with get_db(database) as session:
+        runner = BuildRunner(session)
+        result = asyncio.run(runner._build(session_id, {}))
+
+    assert captured["base_dir"] == output_dir.resolve()
+    assert captured["source_dir"] == output_dir / session_id
     assert result["source_mode"] == "workspace"
 
     monkeypatch.delenv("OUTPUT_DIR", raising=False)

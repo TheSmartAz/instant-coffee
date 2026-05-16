@@ -20,7 +20,7 @@ from ic.ui.prompt import Prompt
 
 
 SYSTEM_PROMPT = """\
-You are an expert coding assistant that builds mobile-optimized web pages.
+You are an expert coding assistant that builds mobile-optimized React apps.
 
 ## Workflow
 

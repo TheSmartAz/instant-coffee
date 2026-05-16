@@ -1,0 +1,152 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - banner:
+          - generic:
+            - link:
+              - /url: /
+              - img
+            - heading [level=1]: Create a mobile local service page with service packages, reviews, service area, booking CTA, and contact details.
+          - generic:
+            - button:
+              - img
+            - button:
+              - img
+            - button:
+              - img
+            - button:
+              - img
+            - link:
+              - /url: /project/e0deed0b8f654b19b06c3f7983ebf0f0/flow
+              - img
+            - link:
+              - /url: /settings
+              - img
+        - main:
+          - main:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - button:
+                      - img
+                      - generic: Thread 1
+                      - img
+                    - generic:
+                      - button:
+                        - img
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - log:
+                            - generic:
+                              - generic:
+                                - heading "What would you like to build?" [level=3]
+                                - paragraph: Describe your idea and I'll create a mobile-optimized page for you.
+                              - generic:
+                                - button "A product landing page for a coffee subscription service"
+                                - button "A personal portfolio with project showcase"
+                                - button "A restaurant menu with online ordering"
+                                - button "An event invitation page with RSVP form"
+                    - generic:
+                      - button: Run details
+                    - generic:
+                      - generic:
+                        - generic:
+                          - textbox:
+                            - /placeholder: Describe what you want to build...
+                        - generic:
+                          - generic:
+                            - combobox:
+                              - generic:
+                                - generic:
+                                  - img
+                                  - generic: DeepSeek V4 Pro
+                              - img
+                            - generic:
+                              - button:
+                                - img
+                                - text: Plan only
+                              - button [pressed]:
+                                - img
+                                - text: Agent
+                              - button:
+                                - img
+                                - text: Auto
+                          - generic:
+                            - button:
+                              - img
+                            - button:
+                              - img
+                            - status
+                            - button [disabled]:
+                              - img
+              - generic:
+                - generic:
+                  - generic:
+                    - button:
+                      - img
+                      - text: Preview
+                    - button:
+                      - img
+                      - text: Code
+                    - button:
+                      - img
+                      - text: Product doc
+                    - button:
+                      - img
+                      - text: Data
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: Preview
+                            - generic: Ready
+                          - generic:
+                            - generic:
+                              - button [pressed]: Live
+                              - button: Build
+                            - button: Static Mode
+                            - button:
+                              - img
+                            - button:
+                              - img
+                        - iframe [ref=e110]:
+                          - generic [ref=f6e2]:
+                            - img [ref=f6e3]
+                            - generic [ref=f6e6]: Instant Coffee
+      - list
+  - dialog "Code" [ref=e112]:
+    - generic [ref=e113]:
+      - generic [ref=e114]:
+        - heading "Code" [level=2] [ref=e115]
+        - paragraph [ref=e116]: Browse generated project files.
+      - button "Close drawer" [active] [ref=e117]:
+        - img [ref=e118]
+        - generic [ref=e121]: Close drawer
+    - generic [ref=e123]:
+      - generic [ref=e124]:
+        - generic [ref=e125]:
+          - generic [ref=e126]: Files
+          - button "Refresh files" [ref=e127]:
+            - img
+        - generic [ref=e129]:
+          - generic [ref=e131] [cursor=pointer]:
+            - img [ref=e132]
+            - generic [ref=e135]: index.html
+            - generic [ref=e136]: 0B
+          - generic [ref=e137]:
+            - generic [ref=e138] [cursor=pointer]:
+              - img [ref=e139]
+              - img [ref=e141]
+              - generic [ref=e143]: assets
+            - generic [ref=e146] [cursor=pointer]:
+              - img [ref=e147]
+              - generic [ref=e150]: site.css
+              - generic [ref=e151]: 1.8KB
+      - generic [ref=e154]:
+        - img [ref=e155]
+        - paragraph [ref=e158]: Select a file on the left to view its contents

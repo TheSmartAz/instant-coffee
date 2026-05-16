@@ -13,8 +13,8 @@ from ..schemas.files import FileTreeNode
 from ..services.page import PageService
 from ..services.page_version import PageVersionService
 from ..services.product_doc import ProductDocService
+from ..services.build_runner import build_artifact_dist_dir
 from ..services.state_store import StateStoreService
-from ..services.version import VersionService
 import re
 
 from ..utils.html import ensure_css_link
@@ -281,10 +281,7 @@ class FileTreeService:
         if page is not None:
             return self._get_page_html(page)
         dist_html = self._read_dist_page_html(session_id, "index")
-        if dist_html is not None:
-            return dist_html
-        legacy_html = self._get_legacy_index_html(session_id)
-        return legacy_html or ""
+        return dist_html or ""
 
     def _get_page_html(self, page: Page) -> str:
         version = self._page_version_service.get_current(page.id)
@@ -340,7 +337,7 @@ class FileTreeService:
                 candidate = Path(dist_path).expanduser()
 
         if candidate is None:
-            candidate = Path("~/.instant-coffee/sessions").expanduser() / session_id / "dist"
+            candidate = build_artifact_dist_dir(session_id)
 
         try:
             resolved = candidate.resolve()
@@ -350,19 +347,6 @@ class FileTreeService:
         if not resolved.is_dir():
             return None
         return resolved
-
-    def _get_legacy_index_html(self, session_id: str) -> Optional[str]:
-        session = self.db.get(SessionModel, session_id)
-        if session is None:
-            return None
-        version_service = VersionService(self.db)
-        version = None
-        if session.current_version is not None:
-            version = version_service.get_version(session_id, session.current_version)
-        if version is None:
-            versions = version_service.get_versions(session_id, limit=1)
-            version = versions[0] if versions else None
-        return version.html if version is not None else None
 
     def _build_site_css(self, session_id: str) -> str:
         raw_style, design_direction = self._get_style_inputs(session_id)

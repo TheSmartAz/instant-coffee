@@ -2,8 +2,9 @@ import * as React from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Activity, ArrowLeft, Code, Database, History, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { ChatPanel } from '@/components/custom/ChatPanel'
+import { ChatPanel, type ChatPanelHandle } from '@/components/custom/ChatPanel'
 import type { WorkbenchTab } from '@/components/custom/WorkbenchPanel'
+import type { PageInfo } from '@/components/custom/PreviewPanel'
 import { ThreadSelector } from '@/components/custom/ThreadSelector'
 import { AbortDialog } from '@/components/custom/AbortDialog'
 import { AppLayout, ContentArea, PageHeader } from '@/components/Layout'
@@ -65,6 +66,7 @@ export function ProjectPage() {
   const [previewMode, setPreviewMode] = React.useState<'live' | 'build'>('live')
   const [isCodeDrawerOpen, setIsCodeDrawerOpen] = React.useState(false)
   const [isDataDrawerOpen, setIsDataDrawerOpen] = React.useState(false)
+  const chatPanelRef = React.useRef<ChatPanelHandle>(null)
   const sessionId = id && id !== 'new' ? id : undefined
   const {
     threads,
@@ -138,9 +140,6 @@ export function ProjectPage() {
   )
 
   const preview = usePreviewManager({
-    sessionId,
-    session,
-    versions,
     pages,
     selectedPageId,
     hasLoadedPages,
@@ -150,7 +149,6 @@ export function ProjectPage() {
   })
 
   const {
-    previewHtml,
     previewUrl,
     pagePreviewVersion,
     appMode,
@@ -481,8 +479,21 @@ export function ProjectPage() {
     [extractBuildSlug, handleSelectPage, pages, selectBuildPage]
   )
 
+  const handleMentionPage = React.useCallback(
+    (page: PageInfo) => {
+      const fullPage =
+        pages.find((candidate) => candidate.id === page.id) ??
+        pages.find((candidate) => candidate.slug === page.slug)
+
+      if (fullPage) {
+        chatPanelRef.current?.insertPageMention(fullPage)
+      }
+    },
+    [pages]
+  )
+
   const activeSessionVersion =
-    versions.find((version) => version.isCurrent)?.number ?? session?.currentVersion ?? null
+    versions.find((version) => version.isCurrent)?.number ?? null
   const previewVersionLabel = hasPages ? pagePreviewVersion : activeSessionVersion
 
   const buildPreviewUrl = React.useMemo(() => {
@@ -604,6 +615,7 @@ export function ProjectPage() {
                   </div>
                 </div>
                 <ChatPanel
+                  ref={chatPanelRef}
                   messages={messages}
                   onSendMessage={chat.sendMessage}
                   onAssetUpload={chat.uploadAsset}
@@ -647,7 +659,6 @@ export function ProjectPage() {
                   pages={pages}
                   selectedPageId={selectedPageId}
                   onSelectPage={handleSelectPage}
-                  previewHtml={previewHtml}
                   previewUrl={previewUrl}
                   buildPreviewUrl={buildPreviewUrl}
                   isRefreshing={isRefreshing}
@@ -661,6 +672,7 @@ export function ProjectPage() {
                   onBuildCancel={handleBuildCancel}
                   onBuildPageSelect={handleBuildPageSelect}
                   selectedBuildPage={selectedBuildPage}
+                  onMentionPage={handleMentionPage}
                 />
               </React.Suspense>
             }

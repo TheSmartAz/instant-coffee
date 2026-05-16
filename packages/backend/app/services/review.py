@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,6 +41,7 @@ class ReviewBuildInput(BaseModel):
     pages: list[str] = Field(default_factory=list)
     error: Optional[str] = None
     log_summary: Optional[str] = None
+    dist_path: Optional[str] = None
 
 
 class ReviewInput(BaseModel):
@@ -153,7 +155,7 @@ class ReviewService:
         self._review_pages(
             data.pages, expected_slugs, generated_slugs, issues, is_react=is_react
         )
-        self._review_build(data.build, generated_slugs, issues)
+        self._review_build(data.build, generated_slugs, issues, is_react=is_react)
 
         error_count = sum(1 for issue in issues if issue.severity == "error")
         warning_count = sum(1 for issue in issues if issue.severity == "warning")
@@ -226,13 +228,10 @@ class ReviewService:
         for page in pages:
             html = (page.html or "").strip()
             if not html:
-                # React workspaces use TSX source; empty HTML is OK until built
-                if is_react:
-                    continue
                 issues.append(
                     ReviewIssue(
                         code="page_html_missing",
-                        severity="error",
+                        severity="warning" if is_react else "error",
                         message=f"Generated page {page.slug!r} has no current HTML.",
                         subject=page.slug,
                         details={"current_version_id": page.current_version_id},
@@ -265,6 +264,8 @@ class ReviewService:
         build: ReviewBuildInput,
         generated_slugs: set[str],
         issues: list[ReviewIssue],
+        *,
+        is_react: bool = False,
     ) -> None:
         status = (build.status or "").strip().lower()
         if status in self.FAILING_BUILD_STATUSES:
@@ -319,6 +320,26 @@ class ReviewService:
 
         build_pages = {self._page_slug_from_build_path(page) for page in build.pages}
         build_pages.discard("")
+        if is_react and status != "success":
+            issues.append(
+                ReviewIssue(
+                    code="react_build_required",
+                    severity="error",
+                    message="React workspace requires a successful build before review can pass.",
+                    subject="build",
+                )
+            )
+        if is_react and status == "success" and not build_pages:
+            issues.append(
+                ReviewIssue(
+                    code="react_build_artifacts_empty",
+                    severity="error",
+                    message="React build succeeded but did not report any page artifacts.",
+                    subject="build",
+                )
+            )
+        if is_react and status == "success":
+            self._review_react_dist_artifacts(build, issues)
         for slug in sorted(generated_slugs - build_pages):
             issues.append(
                 ReviewIssue(
@@ -328,6 +349,92 @@ class ReviewService:
                     subject=slug,
                 )
             )
+
+    def _review_react_dist_artifacts(
+        self,
+        build: ReviewBuildInput,
+        issues: list[ReviewIssue],
+    ) -> None:
+        if not build.dist_path or not build.dist_path.strip():
+            issues.append(
+                ReviewIssue(
+                    code="react_dist_missing",
+                    severity="error",
+                    message="React build metadata is missing dist_path.",
+                    subject="build",
+                )
+            )
+            return
+
+        dist_dir = Path(build.dist_path).expanduser()
+        if not dist_dir.is_dir():
+            issues.append(
+                ReviewIssue(
+                    code="react_dist_missing",
+                    severity="error",
+                    message="React build dist directory does not exist.",
+                    subject="build",
+                    details={"dist_path": str(dist_dir)},
+                )
+            )
+            return
+
+        for page_path in build.pages:
+            candidate = self._react_dist_candidate(dist_dir, page_path)
+            if candidate is None:
+                issues.append(
+                    ReviewIssue(
+                        code="react_build_artifact_file_missing",
+                        severity="error",
+                        message=f"React build artifact {page_path!r} is missing from dist.",
+                        subject=self._page_slug_from_build_path(page_path) or "build",
+                    )
+                )
+                continue
+            try:
+                html = candidate.read_text(encoding="utf-8")
+            except OSError:
+                html = ""
+            if not html.strip():
+                issues.append(
+                    ReviewIssue(
+                        code="react_build_artifact_empty",
+                        severity="error",
+                        message=f"React build artifact {page_path!r} is empty.",
+                        subject=self._page_slug_from_build_path(page_path) or "build",
+                    )
+                )
+            elif _HTML_SHELL_RE.search(html) is None:
+                issues.append(
+                    ReviewIssue(
+                        code="react_build_artifact_invalid",
+                        severity="error",
+                        message=f"React build artifact {page_path!r} does not look like HTML.",
+                        subject=self._page_slug_from_build_path(page_path) or "build",
+                    )
+                )
+
+    def _react_dist_candidate(self, dist_dir: Path, page_path: str) -> Path | None:
+        raw_path = str(page_path).strip().replace("\\", "/")
+        if not raw_path:
+            return None
+        candidates = [dist_dir / raw_path]
+        slug = self._page_slug_from_build_path(raw_path)
+        if slug == "index":
+            candidates.append(dist_dir / "index.html")
+        elif slug:
+            candidates.append(dist_dir / "pages" / slug / "index.html")
+            candidates.append(dist_dir / "pages" / f"{slug}.html")
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved != dist_dir.resolve() and dist_dir.resolve() not in resolved.parents:
+                continue
+            if resolved.is_file():
+                return resolved
+        return None
 
     def _expected_page_slugs(self, data: ReviewInput) -> set[str]:
         structured_pages = data.product_doc_structured.get("pages")
@@ -367,6 +474,7 @@ class ReviewService:
             pages=[str(page) for page in artifacts.get("pages") or []],
             error=artifacts.get("error"),
             log_summary=build_log_summary,
+            dist_path=artifacts.get("dist_path") if isinstance(artifacts.get("dist_path"), str) else None,
         )
 
     def _page_slug_from_build_path(self, value: str) -> str:

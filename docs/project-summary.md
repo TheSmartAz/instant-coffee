@@ -4,7 +4,7 @@ Last updated: 2026-05-16
 
 ## Status
 
-Instant Coffee is a monorepo for chat-driven mobile-first HTML/static-site generation. The current runtime is centered on:
+Instant Coffee is a monorepo for chat-driven mobile-first React app generation. The current runtime is centered on:
 
 - FastAPI backend services in `packages/backend/app`
 - embedded Python `ic` agent engine from `packages/agent`
@@ -22,7 +22,7 @@ packages/backend
   app/engine           backend adapter around ic.soul.engine.Engine
   app/events           event models, emitter, event type constants
   app/llm              model catalog and provider config
-  app/renderer         HTML/React SSG build support
+  app/renderer         React SSG build pipeline (Vite + prerender)
   app/schemas          Pydantic API schemas
   app/services         run, build, review, pages, product docs, snapshots, app data
   tests                unit/e2e tests
