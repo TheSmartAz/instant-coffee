@@ -15,12 +15,10 @@ export function PhoneFrame({ children, className, scale = 1 }: PhoneFrameProps) 
       className={cn('relative w-full max-w-[430px] aspect-[9/19.5]', className)}
       style={{ transform: `scale(${clampedScale})`, transformOrigin: 'top center' }}
     >
-      <div className="absolute inset-0 rounded-[48px] bg-black shadow-[0_24px_60px_-30px_rgba(0,0,0,0.6)]" />
-      <div className="absolute inset-[6px] rounded-[44px] bg-zinc-900" />
-      <div className="relative z-10 m-[10px] h-[calc(100%-20px)] rounded-[36px] overflow-hidden bg-black">
-        <div className="absolute left-1/2 top-[10px] h-[28px] w-[120px] -translate-x-1/2 rounded-full bg-zinc-950 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]" />
-        <div className="absolute inset-0 bg-gradient-to-b from-white/10 via-transparent to-transparent" />
-        <div className="relative h-full w-full bg-background">{children}</div>
+      <div className="absolute inset-0 rounded-[34px] border border-border bg-background shadow-[0_18px_48px_-32px_rgba(15,23,42,0.55)]" />
+      <div className="relative h-full w-full overflow-hidden rounded-[32px] bg-background ring-1 ring-black/10">
+        <div className="pointer-events-none absolute left-1/2 top-2 z-10 h-5 w-24 -translate-x-1/2 rounded-full bg-black/85" />
+        <div className="h-full w-full pt-0">{children}</div>
       </div>
     </div>
   )

@@ -20,7 +20,6 @@ import type { ChatRunStatus, RunEventResponse, RunReviewIssue, SessionRunDetail 
 
 interface RunInspectorProps {
   sessionId?: string
-  threadId?: string
   runStatus?: ChatRunStatus | null
   onOpenBuildPreview?: () => void
 }
@@ -69,7 +68,7 @@ const runActionErrorMessage = (error: unknown, fallback: string) => {
 
 const REVIEW_SEVERITY_CLASS: Record<string, string> = {
   error: 'border-destructive/20 bg-destructive/10 text-destructive',
-  warning: 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100',
+  warning: 'border-warning/30 bg-warning-muted text-warning-muted-foreground',
 }
 
 const reviewSummaryText = (summary?: Record<string, unknown> | null) => {
@@ -185,10 +184,10 @@ const MEMORY_LABELS: Record<string, string> = {
 
 const timelineDotClass = (status?: string) => {
   const tone = statusTone(status)
-  if (tone === 'success') return 'bg-emerald-500'
+  if (tone === 'success') return 'bg-success'
   if (tone === 'failed') return 'bg-destructive'
-  if (tone === 'waiting') return 'bg-amber-500'
-  return 'bg-blue-500'
+  if (tone === 'waiting') return 'bg-warning'
+  return 'bg-info'
 }
 
 const getExecutionMode = (run?: SessionRunDetail | null, status?: ChatRunStatus | null) => {
@@ -247,23 +246,30 @@ const getPendingApproval = (
   return null
 }
 
-export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPreview }: RunInspectorProps) {
+export function RunInspector({ sessionId, runStatus, onOpenBuildPreview }: RunInspectorProps) {
   const [expanded, setExpanded] = React.useState(false)
   const [run, setRun] = React.useState<SessionRunDetail | null>(null)
   const [runEvents, setRunEvents] = React.useState<RunEventResponse[]>([])
   const [loading, setLoading] = React.useState(false)
   const [approvalBusy, setApprovalBusy] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const previousSessionIdRef = React.useRef<string | undefined>(undefined)
 
   const statusRunId = runStatus?.runId
 
   React.useEffect(() => {
+    if (previousSessionIdRef.current === undefined) {
+      previousSessionIdRef.current = sessionId
+      return
+    }
+    if (previousSessionIdRef.current === sessionId) return
+    previousSessionIdRef.current = sessionId
     setRun(null)
     setRunEvents([])
     setError(null)
     setLoading(false)
     setExpanded(false)
-  }, [sessionId, threadId])
+  }, [sessionId])
 
   const refreshRunEvents = React.useCallback(async (runId: string) => {
     try {
@@ -376,6 +382,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
     try {
       const data = await api.runs.fixVerification(actionableRunId)
       setRun(data)
+      setExpanded(true)
     } catch (err) {
       setError(runActionErrorMessage(err, 'Failed to fix verification'))
     } finally {
@@ -390,6 +397,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
     try {
       const data = await api.runs.resolveFixGate(actionableRunId, attempt, approved)
       setRun(data)
+      setExpanded(true)
     } catch (err) {
       setError(runActionErrorMessage(err, 'Failed to resolve fix gate'))
     } finally {
@@ -404,6 +412,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
     try {
       const data = await api.runs.reviewFixGate(actionableRunId, attempt)
       setRun(data)
+      setExpanded(true)
     } catch (err) {
       setError(runActionErrorMessage(err, 'Failed to review fix gate'))
     } finally {
@@ -479,6 +488,20 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
           </span>
         ) : null}
         <div className="ml-auto flex items-center gap-1">
+          {!expanded && verification?.last_run?.status === 'failed' ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs"
+              onClick={handleFixVerification}
+              disabled={!actionableRunId || loading}
+              data-testid="run-inspector-fix-verification"
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              Fix
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="ghost"
@@ -511,12 +534,12 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
         </div>
       ) : null}
       {pendingApproval ? (
-        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-950 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-100" data-testid="shell-approval-card">
+        <div className="mt-2 rounded-md border border-warning/40 bg-warning-muted px-3 py-2 text-warning-muted-foreground" data-testid="shell-approval-card">
           <div className="flex items-start gap-2">
             <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             <div className="min-w-0 flex-1">
               <div className="text-xs font-medium">Shell approval required</div>
-              <div className="mt-0.5 text-[11px] text-amber-900/80 dark:text-amber-100/80">
+              <div className="mt-0.5 text-[11px] text-warning-muted-foreground/80">
                 {pendingApproval.reason}
                 {pendingApproval.executionMode ? ` · ${pendingApproval.executionMode}` : ''}
               </div>
@@ -616,7 +639,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
                 <div className="mt-2 rounded-sm bg-background/70 px-2 py-1 text-[11px]">
                   <div className="flex min-w-0 items-center justify-between gap-2">
                     <span className="font-medium">Visual check</span>
-                    <span className={cn('shrink-0', visualCheck.passed ? 'text-emerald-600' : visualCheck.passed === false ? 'text-destructive' : 'text-muted-foreground')}>
+                    <span className={cn('shrink-0', visualCheck.passed ? 'text-success' : visualCheck.passed === false ? 'text-destructive' : 'text-muted-foreground')}>
                       {visualScore !== undefined ? `${visualScore}/100` : visualCheck.status}
                     </span>
                   </div>
@@ -654,7 +677,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
                     <div key={`${item.scope}-${item.command}`} className="rounded-sm bg-background/70 px-2 py-1 text-[11px]">
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <span className="truncate font-medium">{item.name}</span>
-                        <span className={cn('shrink-0', item.status === 'passed' ? 'text-emerald-600' : 'text-destructive')}>
+                        <span className={cn('shrink-0', item.status === 'passed' ? 'text-success' : 'text-destructive')}>
                           {item.status}
                         </span>
                       </div>
@@ -690,7 +713,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
                     <div key={attempt.attempt} className="rounded-sm bg-background/70 px-2 py-1 text-[11px]">
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <span className="font-medium">Attempt {attempt.attempt}</span>
-                        <span className={cn('shrink-0', attempt.status === 'passed' ? 'text-emerald-600' : 'text-destructive')}>
+                        <span className={cn('shrink-0', attempt.status === 'passed' ? 'text-success' : 'text-destructive')}>
                           {attempt.status}
                         </span>
                       </div>
@@ -793,7 +816,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
                     <div key={`${event.type}-${event.at ?? index}`} className="rounded-sm bg-background/70 px-2 py-1 text-[11px]">
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <span className="truncate font-medium">{event.type.replace(/_/g, ' ')}</span>
-                        <span className={cn('shrink-0', event.status === 'passed' ? 'text-emerald-600' : event.status.includes('error') || event.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
+                        <span className={cn('shrink-0', event.status === 'passed' ? 'text-success' : event.status.includes('error') || event.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
                           {event.status}
                         </span>
                       </div>
@@ -813,7 +836,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
                         <span className="truncate font-medium">
                           {event.category.replace(/_/g, ' ')} · {event.type.replace(/_/g, ' ')}
                         </span>
-                        <span className={cn('shrink-0', event.status === 'passed' ? 'text-emerald-600' : event.status.includes('error') || event.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
+                        <span className={cn('shrink-0', event.status === 'passed' ? 'text-success' : event.status.includes('error') || event.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
                           {event.status}
                         </span>
                       </div>

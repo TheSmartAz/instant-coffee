@@ -19,7 +19,6 @@ import type {
 export interface ChatPanelProps {
   messages: Message[]
   sessionId?: string
-  threadId?: string
   onSendMessage: ChatInputProps['onSend']
   onAssetUpload?: ChatInputProps['onAssetUpload']
   onInterviewAction?: (payload: InterviewActionPayload) => void
@@ -36,7 +35,6 @@ export interface ChatPanelProps {
 export function ChatPanel({
   messages,
   sessionId,
-  threadId,
   onSendMessage,
   onAssetUpload,
   onInterviewAction,
@@ -213,7 +211,6 @@ export function ChatPanel({
       <RunStatusStrip status={runStatus} />
       <RunInspector
         sessionId={sessionId}
-        threadId={threadId}
         runStatus={runStatus}
         onOpenBuildPreview={onOpenBuildPreview}
       />

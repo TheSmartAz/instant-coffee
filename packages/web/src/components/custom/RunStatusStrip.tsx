@@ -28,13 +28,13 @@ const PHASE_LABELS: Record<string, string> = {
 const TONE_STYLES: Record<StatusTone, { icon: LucideIcon; className: string; dot: string }> = {
   running: {
     icon: Loader2,
-    className: 'border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-100',
-    dot: 'bg-blue-500',
+    className: 'border-info/30 bg-info-muted text-info-muted-foreground',
+    dot: 'bg-info',
   },
   success: {
     icon: CheckCircle2,
-    className: 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100',
-    dot: 'bg-emerald-500',
+    className: 'border-success/30 bg-success-muted text-success-muted-foreground',
+    dot: 'bg-success',
   },
   failed: {
     icon: XCircle,
@@ -43,13 +43,13 @@ const TONE_STYLES: Record<StatusTone, { icon: LucideIcon; className: string; dot
   },
   waiting: {
     icon: Clock,
-    className: 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100',
-    dot: 'bg-amber-500',
+    className: 'border-warning/30 bg-warning-muted text-warning-muted-foreground',
+    dot: 'bg-warning',
   },
   warning: {
     icon: AlertCircle,
-    className: 'border-orange-200 bg-orange-50 text-orange-900 dark:border-orange-900/60 dark:bg-orange-950/30 dark:text-orange-100',
-    dot: 'bg-orange-500',
+    className: 'border-warning/30 bg-warning-muted text-warning-muted-foreground',
+    dot: 'bg-warning',
   },
 }
 

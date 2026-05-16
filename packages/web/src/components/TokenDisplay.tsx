@@ -26,7 +26,7 @@ function TokenUsageRow({ label, usage, showLabel = true, className }: TokenUsage
       )}
       <div className="flex items-center gap-4">
         <span className="text-foreground">{usage.total_tokens.toLocaleString()} tokens</span>
-        <span className="min-w-[60px] text-right font-mono text-emerald-600">
+        <span className="min-w-[60px] text-right font-mono text-success">
           ${usage.cost_usd.toFixed(4)}
         </span>
       </div>
@@ -49,14 +49,14 @@ function TokenProgressBar({ input, output, total, className }: TokenProgressBarP
     <div className={cn('flex h-2 w-full overflow-hidden rounded-full bg-muted', className)}>
       {inputPercent > 0 && (
         <div
-          className="bg-blue-500"
+          className="bg-info"
           style={{ width: `${inputPercent}%` }}
           title={`Input: ${input.toLocaleString()} tokens`}
         />
       )}
       {outputPercent > 0 && (
         <div
-          className="bg-emerald-500"
+          className="bg-success"
           style={{ width: `${outputPercent}%` }}
           title={`Output: ${output.toLocaleString()} tokens`}
         />
@@ -84,13 +84,13 @@ export function TokenDisplay({ usage, showDetails = false, className }: TokenDis
         className="flex w-full items-center gap-3 px-4 py-3 text-left"
         aria-expanded={isExpanded}
       >
-        <Coins className="h-4 w-4 text-amber-500" />
+        <Coins className="h-4 w-4 text-warning" />
         <span className="text-sm font-semibold text-foreground">Token Usage</span>
         <div className="flex items-center gap-3">
           <span className="text-sm text-foreground">
             {usage.total.total_tokens.toLocaleString()} tokens
           </span>
-          <span className="min-w-[50px] text-right font-mono text-sm font-semibold text-emerald-600">
+          <span className="min-w-[50px] text-right font-mono text-sm font-semibold text-success">
             ${usage.total.cost_usd.toFixed(4)}
           </span>
         </div>
@@ -112,11 +112,11 @@ export function TokenDisplay({ usage, showDetails = false, className }: TokenDis
             />
             <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
               <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-blue-500" />
+                <div className="h-2 w-2 rounded-full bg-info" />
                 <span>Input: {usage.total.input_tokens.toLocaleString()}</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                <div className="h-2 w-2 rounded-full bg-success" />
                 <span>Output: {usage.total.output_tokens.toLocaleString()}</span>
               </div>
             </div>

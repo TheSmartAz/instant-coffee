@@ -47,7 +47,7 @@ export function ToolCallLog({ event }: ToolCallLogProps) {
       <div
         className={cn(
           'rounded-md border',
-          isSuccess ? 'border-emerald-200' : 'border-destructive/40'
+          isSuccess ? 'border-success/30' : 'border-destructive/40'
         )}
       >
         <button
@@ -55,11 +55,11 @@ export function ToolCallLog({ event }: ToolCallLogProps) {
           onClick={() => setIsExpanded((prev) => !prev)}
           className={cn(
             'flex w-full items-center gap-2 px-2 py-2 text-left text-sm',
-            isSuccess ? 'hover:bg-emerald-50/50' : 'hover:bg-destructive/10'
+            isSuccess ? 'hover:bg-success-muted/50' : 'hover:bg-destructive/10'
           )}
         >
           {isSuccess ? (
-            <Check className="h-4 w-4 text-emerald-600" />
+            <Check className="h-4 w-4 text-success" />
           ) : (
             <X className="h-4 w-4 text-destructive" />
           )}
@@ -67,7 +67,7 @@ export function ToolCallLog({ event }: ToolCallLogProps) {
           <span
             className={cn(
               'text-xs',
-              isSuccess ? 'text-emerald-600' : 'text-destructive'
+              isSuccess ? 'text-success' : 'text-destructive'
             )}
           >
             {isSuccess ? 'Success' : 'Failed'}
@@ -84,7 +84,7 @@ export function ToolCallLog({ event }: ToolCallLogProps) {
           <div
             className={cn(
               'border-t px-3 py-2',
-              isSuccess ? 'border-emerald-200 bg-emerald-50/60' : 'border-destructive/40 bg-destructive/10'
+              isSuccess ? 'border-success/30 bg-success-muted/60' : 'border-destructive/40 bg-destructive/10'
             )}
           >
             {isSuccess && event.tool_output ? (

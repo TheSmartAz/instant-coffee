@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { MainContent } from '@/components/Layout/MainContent'
+import { AppLayout, ContentArea, MainContent, PageHeader } from '@/components/Layout'
 import { api } from '@/api/client'
 import { toast } from '@/hooks/use-toast'
 import { useSSE } from '@/hooks/useSSE'
@@ -64,9 +64,9 @@ export function ExecutionPage() {
   )
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-border px-6 py-4">
-        <div className="flex items-center gap-3">
+    <AppLayout className="h-screen min-h-0">
+      <PageHeader
+        leading={
           <Button
             variant="ghost"
             size="icon"
@@ -77,12 +77,13 @@ export function ExecutionPage() {
               <ArrowLeft className="h-4 w-4" />
             </Link>
           </Button>
-          <div className="text-sm font-semibold text-foreground">
-            Execution Flow {sessionId ? `• ${sessionId}` : ''}
-          </div>
+        }
+      >
+        <div className="text-sm font-semibold text-foreground">
+          Execution Flow {sessionId ? `• ${sessionId}` : ''}
         </div>
-      </header>
-      <div className="flex-1">
+      </PageHeader>
+      <ContentArea>
         <MainContent
           plan={plan}
           events={sse.events}
@@ -92,7 +93,7 @@ export function ExecutionPage() {
           statusLabel={statusLabel}
           onTaskAction={handleTaskAction}
         />
-      </div>
-    </div>
+      </ContentArea>
+    </AppLayout>
   )
 }

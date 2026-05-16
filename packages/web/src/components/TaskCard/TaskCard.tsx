@@ -36,25 +36,25 @@ function TaskTokenUsage({ usage }: TaskTokenUsageProps) {
     <div className="space-y-2">
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-1.5 text-muted-foreground">
-          <Coins className="h-3 w-3 text-amber-500" />
+          <Coins className="h-3 w-3 text-warning" />
           <span>Token Usage</span>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-muted-foreground">{usage.total_tokens.toLocaleString()}</span>
-          <span className="font-mono text-emerald-600">${usage.cost_usd.toFixed(4)}</span>
+          <span className="font-mono text-success">${usage.cost_usd.toFixed(4)}</span>
         </div>
       </div>
       <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
         {inputPercent > 0 && (
           <div
-            className="bg-blue-500"
+            className="bg-info"
             style={{ width: `${inputPercent}%` }}
             title={`Input: ${usage.input_tokens.toLocaleString()}`}
           />
         )}
         {outputPercent > 0 && (
           <div
-            className="bg-emerald-500"
+            className="bg-success"
             style={{ width: `${outputPercent}%` }}
             title={`Output: ${usage.output_tokens.toLocaleString()}`}
           />
@@ -71,7 +71,7 @@ function TaskTokenUsage({ usage }: TaskTokenUsageProps) {
 const getStatusStyle = (status: Task['status']) => {
   switch (status) {
     case 'done':
-      return 'border-emerald-200 bg-emerald-50/60'
+      return 'border-success/30 bg-success-muted/60'
     case 'failed':
     case 'timeout':
       return 'border-destructive/30 bg-destructive/10'
@@ -80,9 +80,9 @@ const getStatusStyle = (status: Task['status']) => {
     case 'in_progress':
       return 'border-primary/20 bg-primary/5'
     case 'blocked':
-      return 'border-amber-200 bg-amber-50/60'
+      return 'border-warning/30 bg-warning-muted/60'
     case 'retrying':
-      return 'border-yellow-200 bg-yellow-50/60'
+      return 'border-warning/30 bg-warning-muted/60'
     default:
       return 'border-border bg-background'
   }

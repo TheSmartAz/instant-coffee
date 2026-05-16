@@ -113,12 +113,12 @@ function TaskItem({ task, output, onStop }: TaskItemProps) {
   const [isExpanded, setIsExpanded] = React.useState(false)
 
   const statusColors: Record<string, string> = {
-    starting: 'bg-yellow-500',
-    running: 'bg-green-500',
-    stopped: 'bg-gray-500',
-    failed: 'bg-red-500',
+    starting: 'bg-warning',
+    running: 'bg-success',
+    stopped: 'bg-muted-foreground',
+    failed: 'bg-destructive',
   }
-  const statusColor = statusColors[task.status] || 'bg-gray-500'
+  const statusColor = statusColors[task.status] || 'bg-muted-foreground'
 
   return (
     <div className="rounded-lg border border-border bg-background">

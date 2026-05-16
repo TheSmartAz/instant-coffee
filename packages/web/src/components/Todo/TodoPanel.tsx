@@ -53,7 +53,7 @@ export function TodoPanel({
                   className={cn(
                     'h-3 w-3 rounded-full border',
                     task.status === 'done'
-                      ? 'border-emerald-500 bg-emerald-500'
+                      ? 'border-success bg-success'
                       : task.status === 'failed' || task.status === 'timeout'
                         ? 'border-destructive bg-destructive'
                       : task.status === 'in_progress'

@@ -105,9 +105,9 @@ function getFileIcon(
 ): React.ReactNode {
   if (isDirectory) {
     return expanded ? (
-      <FolderOpen className="h-4 w-4 shrink-0 text-blue-500" />
+      <FolderOpen className="h-4 w-4 shrink-0 text-info" />
     ) : (
-      <Folder className="h-4 w-4 shrink-0 text-blue-500" />
+      <Folder className="h-4 w-4 shrink-0 text-info" />
     )
   }
 
@@ -116,11 +116,11 @@ function getFileIcon(
 
   switch (ext) {
     case 'html':
-      return <File className={cn(iconClassName, 'text-orange-500')} />
+      return <File className={cn(iconClassName, 'text-warning')} />
     case 'css':
-      return <File className={cn(iconClassName, 'text-blue-500')} />
+      return <File className={cn(iconClassName, 'text-info')} />
     case 'js':
-      return <File className={cn(iconClassName, 'text-yellow-500')} />
+      return <File className={cn(iconClassName, 'text-warning')} />
     case 'md':
       return <File className={cn(iconClassName, 'text-purple-500')} />
     default:

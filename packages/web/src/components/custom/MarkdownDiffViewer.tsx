@@ -40,10 +40,8 @@ const splitLines = (value: string) => {
 
 const lineClasses: Record<LineType, string> = {
   context: 'text-foreground',
-  added:
-    'bg-emerald-50 text-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-200',
-  removed:
-    'bg-rose-50 text-rose-900 dark:bg-rose-900/20 dark:text-rose-200',
+  added: 'bg-success-muted text-success-muted-foreground',
+  removed: 'bg-danger-muted text-danger-muted-foreground',
   empty: 'bg-muted/30 text-muted-foreground/60',
 }
 
@@ -209,11 +207,11 @@ export function MarkdownDiffViewer({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           <div className="flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
+            <span className="h-2 w-2 rounded-full bg-success" />
             Added
           </div>
           <div className="flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full bg-rose-400" />
+            <span className="h-2 w-2 rounded-full bg-danger" />
             Removed
           </div>
         </div>

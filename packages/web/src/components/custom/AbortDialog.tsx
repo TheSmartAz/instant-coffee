@@ -26,7 +26,7 @@ export function AbortDialog({ disabled, onAbort }: AbortDialogProps) {
           size="icon"
           disabled={disabled}
           aria-label="Abort current execution"
-          className="h-10 w-10 hover:bg-red-500"
+          className="h-10 w-10 hover:bg-destructive hover:text-destructive-foreground"
         >
           <Square className="h-4 w-4" />
         </Button>
@@ -40,7 +40,10 @@ export function AbortDialog({ disabled, onAbort }: AbortDialogProps) {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onAbort}>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={onAbort}
+          >
             Abort run
           </AlertDialogAction>
         </AlertDialogFooter>

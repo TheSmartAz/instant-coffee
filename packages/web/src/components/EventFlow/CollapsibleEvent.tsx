@@ -32,7 +32,7 @@ export function CollapsibleEvent({
 
   const containerClass = cn(
     'rounded-lg border px-3 py-2.5 transition-colors',
-    status === 'done' && 'border-emerald-200 bg-emerald-50/70',
+    status === 'done' && 'border-success/30 bg-success-muted/70',
     status === 'failed' && 'border-destructive/30 bg-destructive/10',
     status === 'in_progress' && 'border-primary/20 bg-primary/5',
     status === 'pending' && 'border-border bg-background'

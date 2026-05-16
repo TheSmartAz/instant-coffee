@@ -1,12 +1,13 @@
 import * as React from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Settings, Activity } from 'lucide-react'
+import { Activity, ArrowLeft, Code, Database, FileText, History, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ChatPanel } from '@/components/custom/ChatPanel'
-import { WorkbenchPanel, type WorkbenchTab } from '@/components/custom/WorkbenchPanel'
-import { VersionPanel } from '@/components/custom/VersionPanel'
+import type { WorkbenchTab } from '@/components/custom/WorkbenchPanel'
 import { ThreadSelector } from '@/components/custom/ThreadSelector'
 import { AbortDialog } from '@/components/custom/AbortDialog'
+import { AppLayout, ContentArea, PageHeader } from '@/components/Layout'
+import { ResizableSplitPane } from '@/components/Layout/ResizableSplitPane'
 import { api } from '@/api/client'
 import { useChat } from '@/hooks/useChat'
 import { useAestheticScore } from '@/hooks/useAestheticScore'
@@ -22,6 +23,40 @@ import { toast } from '@/hooks/use-toast'
 
 const LAST_PROJECT_KEY = 'instant-coffee:last-project-id'
 
+const WorkbenchPanel = React.lazy(() =>
+  import('@/components/custom/WorkbenchPanel').then((module) => ({
+    default: module.WorkbenchPanel,
+  }))
+)
+const VersionPanel = React.lazy(() =>
+  import('@/components/custom/VersionPanel').then((module) => ({
+    default: module.VersionPanel,
+  }))
+)
+const CodeDrawer = React.lazy(() =>
+  import('@/components/custom/CodeDrawer').then((module) => ({
+    default: module.CodeDrawer,
+  }))
+)
+const DocDrawer = React.lazy(() =>
+  import('@/components/custom/DocDrawer').then((module) => ({
+    default: module.DocDrawer,
+  }))
+)
+const DataDrawer = React.lazy(() =>
+  import('@/components/custom/DataDrawer').then((module) => ({
+    default: module.DataDrawer,
+  }))
+)
+
+function PanelFallback({ label }: { label: string }) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center bg-background text-sm text-muted-foreground">
+      {label}
+    </div>
+  )
+}
+
 export function ProjectPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -32,6 +67,9 @@ export function ProjectPage() {
   const [, setIsSwitchingThread] = React.useState(false)
   const [workbenchTab, setWorkbenchTab] = React.useState<WorkbenchTab>('preview')
   const [previewMode, setPreviewMode] = React.useState<'live' | 'build'>('live')
+  const [isCodeDrawerOpen, setIsCodeDrawerOpen] = React.useState(false)
+  const [isDocDrawerOpen, setIsDocDrawerOpen] = React.useState(false)
+  const [isDataDrawerOpen, setIsDataDrawerOpen] = React.useState(false)
   const sessionId = id && id !== 'new' ? id : undefined
   const {
     threads,
@@ -451,132 +489,203 @@ export function ProjectPage() {
   }, [buildPreviewPath, buildPreviewStamp, buildState.pages.length, sessionId])
 
   return (
-    <div className="flex h-screen flex-col animate-in fade-in">
-      <header className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild aria-label="Back to home">
+    <AppLayout className="h-screen min-h-0 min-w-0 overflow-hidden animate-in fade-in">
+      <PageHeader
+        className="min-w-0 shrink-0 flex-wrap gap-2 px-3 py-3 sm:flex-nowrap sm:px-6 sm:py-4"
+        leading={
+          <Button variant="ghost" size="icon" className="shrink-0" asChild aria-label="Back to home">
             <Link to="/">
               <ArrowLeft className="h-4 w-4" />
             </Link>
           </Button>
-          <div className="text-sm font-semibold text-foreground">
-            {session?.title ?? `Project ${id ?? 'Untitled'}`}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
+        }
+        title={session?.title ?? `Project ${id ?? 'Untitled'}`}
+        trailing={
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 sm:flex-nowrap sm:gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            onClick={() => setIsCodeDrawerOpen(true)}
+            disabled={!sessionId}
+            aria-label="Open code drawer"
+          >
+            <Code className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            onClick={() => setIsDocDrawerOpen(true)}
+            disabled={!sessionId}
+            aria-label="Open product doc drawer"
+          >
+            <FileText className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            onClick={() => setIsDataDrawerOpen(true)}
+            disabled={!sessionId}
+            aria-label="Open data and more drawer"
+          >
+            <Database className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            onClick={() => setIsVersionPanelCollapsed((prev) => !prev)}
+            disabled={!sessionId}
+            aria-label="Toggle versions panel"
+          >
+            <History className="h-4 w-4" />
+          </Button>
           {sessionId ? (
-            <Button variant="ghost" size="icon" asChild aria-label="Execution flow">
+            <Button variant="ghost" size="icon" className="shrink-0" asChild aria-label="Execution flow">
               <Link to={`/project/${sessionId}/flow`}>
                 <Activity className="h-4 w-4" />
               </Link>
             </Button>
           ) : null}
-          <Button variant="ghost" size="icon" asChild aria-label="Open settings">
+          <Button variant="ghost" size="icon" className="shrink-0" asChild aria-label="Open settings">
             <Link to="/settings">
               <Settings className="h-4 w-4" />
             </Link>
           </Button>
         </div>
-      </header>
+        }
+      />
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left: Chat + Preview (flex layout, no resizable) */}
-        <div className="flex flex-1 min-w-0">
+      <ContentArea className="flex min-h-0 flex-col overflow-hidden lg:flex-row">
+        <main className="flex min-h-0 min-w-0 flex-1">
           {error ? (
             <div className="mx-auto max-w-3xl p-6 text-sm text-destructive">
               {error}
             </div>
           ) : null}
-          {/* Chat Panel - 35% */}
-          <div className="flex flex-col border-r border-border w-[35%] max-w-[45%] min-w-[300px]">
-            <div className="flex h-16 items-center border-b border-border px-3 shrink-0 gap-2">
-              <ThreadSelector
-                threads={threads}
-                activeThreadId={activeThreadId}
-                onSwitchThread={async (threadId) => {
-                  setIsSwitchingThread(true)
-                  try {
-                    await switchThread(threadId)
-                  } finally {
-                    setIsSwitchingThread(false)
-                  }
-                }}
-                onNewThread={handleNewThread}
-                onDeleteThread={handleDeleteThread}
-              />
-              {/* Actions */}
-              <div className="flex items-center gap-0.5 shrink-0">
-                <AbortDialog disabled={!canAbort} onAbort={handleAbort} />
+          <ResizableSplitPane
+            className="flex-1"
+            leftClassName="bg-background"
+            rightClassName="bg-background"
+            left={
+              <div className="flex h-full min-w-0 flex-col">
+                <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-border px-2 py-2 sm:flex-nowrap sm:px-3">
+                  <ThreadSelector
+                    threads={threads}
+                    activeThreadId={activeThreadId}
+                    onSwitchThread={async (threadId) => {
+                      setIsSwitchingThread(true)
+                      try {
+                        await switchThread(threadId)
+                      } finally {
+                        setIsSwitchingThread(false)
+                      }
+                    }}
+                    onNewThread={handleNewThread}
+                    onDeleteThread={handleDeleteThread}
+                  />
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <AbortDialog disabled={!canAbort} onAbort={handleAbort} />
+                  </div>
+                </div>
+                <ChatPanel
+                  messages={messages}
+                  sessionId={sessionId}
+                  onSendMessage={chat.sendMessage}
+                  onAssetUpload={chat.uploadAsset}
+                  onInterviewAction={chat.handleInterviewAction}
+                  onTabChange={setWorkbenchTab}
+                  onOpenBuildPreview={handleOpenBuildPreview}
+                  isLoading={isLoading || chat.isStreaming}
+                  errorMessage={chat.error}
+                  runStatus={chat.runStatus}
+                  className="min-h-0 flex-1"
+                  pages={pages}
+                  tokenUsage={costData}
+                />
               </div>
-            </div>
-            <ChatPanel
-              messages={messages}
-              sessionId={sessionId}
-              threadId={activeThreadId ?? undefined}
-              onSendMessage={chat.sendMessage}
-              onAssetUpload={chat.uploadAsset}
-              onInterviewAction={chat.handleInterviewAction}
-              onTabChange={setWorkbenchTab}
-              onOpenBuildPreview={handleOpenBuildPreview}
-              isLoading={isLoading || chat.isStreaming}
-              errorMessage={chat.error}
-              runStatus={chat.runStatus}
-              className="flex-1 min-h-0"
-              pages={pages}
-              tokenUsage={costData}
-            />
-          </div>
-          {/* Resize Handle (visual only) */}
-          <div className="w-px bg-border hover:bg-accent cursor-col-resize active:cursor-col-resize" />
-          {/* Workbench Panel - remaining space */}
-          <div className="flex-1 min-w-0">
-            <WorkbenchPanel
-              sessionId={sessionId ?? ''}
-              activeTab={workbenchTab}
-              onTabChange={setWorkbenchTab}
-              appMode={appMode}
-              onAppModeChange={setAppMode}
-              previewMode={previewMode}
-              onPreviewModeChange={setPreviewMode}
-              onBuildFromDoc={handleBuildFromDoc}
-              buildDisabled={chat.isStreaming || isBuildRunning || isBuildLoading}
-              previewVersion={previewVersionLabel}
-              productDocVersion={productDoc?.version ?? null}
-              productDoc={productDoc}
-              isProductDocLoading={isProductDocLoading}
-              productDocError={productDocError}
-              pages={pages}
-              selectedPageId={selectedPageId}
-              onSelectPage={handleSelectPage}
-              previewHtml={previewHtml}
-              previewUrl={previewUrl}
-              buildPreviewUrl={buildPreviewUrl}
-              isRefreshing={isRefreshing}
-              isExporting={isExporting}
-              onRefresh={handleRefreshPreview}
-              onRefreshPage={handleRefreshPage}
-              onExport={handleExportPreview}
-              aestheticScore={aestheticScore}
-              buildState={buildState}
-              onBuildRetry={handleBuildRetry}
-              onBuildCancel={handleBuildCancel}
-              onBuildPageSelect={handleBuildPageSelect}
-              selectedBuildPage={selectedBuildPage}
-            />
-          </div>
-        </div>
+            }
+            right={
+              <React.Suspense fallback={<PanelFallback label="Loading workspace..." />}>
+                <WorkbenchPanel
+                  sessionId={sessionId ?? ''}
+                  activeTab={workbenchTab}
+                  onTabChange={setWorkbenchTab}
+                  appMode={appMode}
+                  onAppModeChange={setAppMode}
+                  previewMode={previewMode}
+                  onPreviewModeChange={setPreviewMode}
+                  onBuildFromDoc={handleBuildFromDoc}
+                  buildDisabled={chat.isStreaming || isBuildRunning || isBuildLoading}
+                  previewVersion={previewVersionLabel}
+                  productDocVersion={productDoc?.version ?? null}
+                  productDoc={productDoc}
+                  isProductDocLoading={isProductDocLoading}
+                  productDocError={productDocError}
+                  pages={pages}
+                  selectedPageId={selectedPageId}
+                  onSelectPage={handleSelectPage}
+                  previewHtml={previewHtml}
+                  previewUrl={previewUrl}
+                  buildPreviewUrl={buildPreviewUrl}
+                  isRefreshing={isRefreshing}
+                  isExporting={isExporting}
+                  onRefresh={handleRefreshPreview}
+                  onRefreshPage={handleRefreshPage}
+                  onExport={handleExportPreview}
+                  aestheticScore={aestheticScore}
+                  buildState={buildState}
+                  onBuildRetry={handleBuildRetry}
+                  onBuildCancel={handleBuildCancel}
+                  onBuildPageSelect={handleBuildPageSelect}
+                  selectedBuildPage={selectedBuildPage}
+                />
+              </React.Suspense>
+            }
+          />
+        </main>
 
-        {/* Version Panel - fixed width on right */}
-        <VersionPanel
-          sessionId={sessionId}
-          sessionTitle={session?.title ?? null}
-          selectedPageId={selectedPageId}
-          selectedPageTitle={pages.find((p) => p.id === selectedPageId)?.title ?? null}
-          activeTab={workbenchTab}
-          isCollapsed={isVersionPanelCollapsed}
-          onToggleCollapse={() => setIsVersionPanelCollapsed((prev) => !prev)}
-        />
-      </div>
-    </div>
+        <aside className="min-h-40 shrink-0 border-t border-border lg:h-auto lg:border-l-0 lg:border-t-0 [&>div]:w-full lg:[&>div]:w-80">
+          <React.Suspense fallback={<PanelFallback label="Loading versions..." />}>
+            <VersionPanel
+              sessionId={sessionId}
+              sessionTitle={session?.title ?? null}
+              selectedPageId={selectedPageId}
+              selectedPageTitle={pages.find((p) => p.id === selectedPageId)?.title ?? null}
+              activeTab={workbenchTab}
+              isCollapsed={isVersionPanelCollapsed}
+              onToggleCollapse={() => setIsVersionPanelCollapsed((prev) => !prev)}
+            />
+          </React.Suspense>
+        </aside>
+      </ContentArea>
+
+      {sessionId ? (
+        <React.Suspense fallback={null}>
+          <CodeDrawer
+            open={isCodeDrawerOpen}
+            onOpenChange={setIsCodeDrawerOpen}
+            sessionId={sessionId}
+          />
+          <DocDrawer
+            open={isDocDrawerOpen}
+            onOpenChange={setIsDocDrawerOpen}
+            sessionId={sessionId}
+            onBuild={handleBuildFromDoc}
+            buildDisabled={chat.isStreaming || isBuildRunning || isBuildLoading}
+            productDoc={productDoc}
+            isLoading={isProductDocLoading}
+            error={productDocError}
+          />
+          <DataDrawer
+            open={isDataDrawerOpen}
+            onOpenChange={setIsDataDrawerOpen}
+            sessionId={sessionId}
+          />
+        </React.Suspense>
+      ) : null}
+    </AppLayout>
   )
 }

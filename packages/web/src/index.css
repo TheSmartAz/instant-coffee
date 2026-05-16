@@ -5,6 +5,9 @@
 
 @layer base {
   :root {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+
     --background: 0 0% 100%;
     --foreground: 240 10% 3.9%;
     --card: 0 0% 100%;
@@ -24,7 +27,48 @@
     --primary-foreground: 0 0% 98%;
     --accent: 217 91% 60%;
     --accent-foreground: 0 0% 98%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --success-muted: 142 76% 96%;
+    --success-muted-foreground: 142 72% 29%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 24 10% 10%;
+    --warning-muted: 48 96% 89%;
+    --warning-muted-foreground: 32 95% 28%;
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 100%;
+    --info-muted: 214 100% 97%;
+    --info-muted-foreground: 217 91% 36%;
+    --danger: 0 84% 60%;
+    --danger-foreground: 0 0% 98%;
+    --danger-muted: 0 86% 97%;
+    --danger-muted-foreground: 0 74% 42%;
+
     --radius: 0.5rem;
+    --radius-xs: 0.125rem;
+    --radius-sm: calc(var(--radius) - 0.25rem);
+    --radius-md: calc(var(--radius) - 0.125rem);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) + 0.25rem);
+    --radius-2xl: calc(var(--radius) + 0.5rem);
+
+    --shadow-xs: 0 1px 2px 0 rgb(15 23 42 / 0.05);
+    --shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.08), 0 1px 1px -1px rgb(15 23 42 / 0.08);
+    --shadow-md: 0 4px 8px -4px rgb(15 23 42 / 0.16), 0 2px 4px -2px rgb(15 23 42 / 0.08);
+    --shadow-lg: 0 12px 24px -12px rgb(15 23 42 / 0.22), 0 4px 8px -4px rgb(15 23 42 / 0.12);
+    --shadow-xl: 0 20px 32px -16px rgb(15 23 42 / 0.28), 0 8px 16px -8px rgb(15 23 42 / 0.14);
+    --shadow-subtle: var(--shadow-sm);
+
+    --duration-fast: 120ms;
+    --duration-normal: 180ms;
+    --duration-slow: 240ms;
+
+    --z-dropdown: 50;
+    --z-sticky: 60;
+    --z-popover: 70;
+    --z-modal: 80;
+    --z-toast: 100;
   }
 
   * {
@@ -33,7 +77,7 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--font-sans);
     margin: 0;
     min-height: 100vh;
   }

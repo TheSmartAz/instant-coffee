@@ -10,10 +10,10 @@ export function Header() {
   }
 
   return (
-    <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-background">
-      <div className="flex items-center gap-2">
-        <Coffee className="w-6 h-6 text-amber-600" />
-        <span className="text-lg font-semibold text-foreground">
+    <header className="flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4 py-4 sm:px-6">
+      <div className="flex min-w-0 items-center gap-2">
+        <Coffee className="h-6 w-6 shrink-0 text-warning" />
+        <span className="truncate text-lg font-semibold text-foreground">
           Instant Coffee
         </span>
       </div>
@@ -21,9 +21,9 @@ export function Header() {
         variant="ghost"
         size="sm"
         onClick={handleNewSession}
-        className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+        className="shrink-0 gap-1 text-muted-foreground hover:text-foreground"
       >
-        <Plus className="w-4 h-4" />
+        <Plus className="h-4 w-4" />
         New session
       </Button>
     </header>

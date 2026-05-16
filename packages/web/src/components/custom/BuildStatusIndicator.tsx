@@ -15,23 +15,23 @@ const STATUS_CONFIG: Record<
   },
   pending: {
     label: 'Pending',
-    tone: 'bg-amber-100 text-amber-700',
+    tone: 'bg-warning-muted text-warning-muted-foreground',
     icon: Clock,
   },
   building: {
     label: 'Building',
-    tone: 'bg-blue-100 text-blue-700',
+    tone: 'bg-info-muted text-info-muted-foreground',
     icon: Loader2,
     spin: true,
   },
   success: {
     label: 'Complete',
-    tone: 'bg-emerald-100 text-emerald-700',
+    tone: 'bg-success-muted text-success-muted-foreground',
     icon: CheckCircle2,
   },
   failed: {
     label: 'Failed',
-    tone: 'bg-rose-100 text-rose-700',
+    tone: 'bg-danger-muted text-danger-muted-foreground',
     icon: XCircle,
   },
 }

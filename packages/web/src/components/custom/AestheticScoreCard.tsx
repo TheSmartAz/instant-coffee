@@ -17,11 +17,11 @@ const DIMENSION_LABELS: Record<string, string> = {
 const severityClass = (severity: string) => {
   switch (severity) {
     case 'critical':
-      return 'bg-red-500/10 text-red-600 border-red-500/30'
+      return 'border-destructive/30 bg-destructive/10 text-destructive'
     case 'warning':
-      return 'bg-amber-500/10 text-amber-600 border-amber-500/30'
+      return 'border-warning/30 bg-warning-muted text-warning-muted-foreground'
     default:
-      return 'bg-blue-500/10 text-blue-600 border-blue-500/30'
+      return 'border-info/30 bg-info-muted text-info-muted-foreground'
   }
 }
 

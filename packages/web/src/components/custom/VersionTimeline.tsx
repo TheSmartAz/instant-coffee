@@ -230,7 +230,7 @@ export const VersionTimeline = React.memo(function VersionTimeline({
                           'mt-1 h-3 w-3 rounded-full border-2 border-border bg-background',
                           isCurrent &&
                             'h-4 w-4 border-primary bg-primary shadow-[0_0_0_4px_rgba(59,130,246,0.12)]',
-                          isPinned && 'border-amber-400'
+                          isPinned && 'border-warning'
                         )}
                         style={isCurrent ? { transform: 'translate(-2px, -2px)' } : undefined}
                       />
@@ -248,7 +248,7 @@ export const VersionTimeline = React.memo(function VersionTimeline({
                               <Badge className="text-[10px]">Current</Badge>
                             ) : null}
                             {isPinned ? (
-                              <Badge className="bg-amber-100 text-[10px] text-amber-900">
+                              <Badge className="bg-warning-muted text-[10px] text-warning-muted-foreground">
                                 Pinned
                               </Badge>
                             ) : null}

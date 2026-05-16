@@ -43,7 +43,7 @@ export function AgentActivity({ event }: AgentActivityProps) {
         className={cn(
           'flex items-center gap-2 rounded-md border px-2 py-2',
           isSuccess
-            ? 'border-emerald-200 bg-emerald-50/70 text-emerald-700'
+            ? 'border-success/30 bg-success-muted text-success-muted-foreground'
             : 'border-destructive/30 bg-destructive/10 text-destructive'
         )}
       >

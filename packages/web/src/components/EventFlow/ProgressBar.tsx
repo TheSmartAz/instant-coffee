@@ -13,7 +13,7 @@ export function ProgressBar({ value, status = 'in_progress', className }: Progre
   const barClass = cn(
     'h-1.5 rounded-full transition-all',
     status === 'failed' && 'bg-destructive',
-    status === 'done' && 'bg-emerald-500',
+    status === 'done' && 'bg-success',
     status === 'pending' && 'bg-muted-foreground/40',
     status === 'in_progress' && 'bg-primary'
   )

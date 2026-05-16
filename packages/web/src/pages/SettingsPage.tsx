@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { ADMIN_TOKEN_STORAGE_KEY } from '@/api/client'
+import { AppLayout, ContentArea, PageHeader } from '@/components/Layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -80,39 +81,41 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col animate-in fade-in">
-      <header className="flex items-center gap-3 border-b border-border px-6 py-4">
-        {lastProjectId ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate(`/project/${lastProjectId}`)}
-            aria-label="Back to project"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        ) : null}
-        <h1 className="text-lg font-semibold">Settings</h1>
-      </header>
-      <div className="mx-auto flex w-full max-w-5xl gap-6 px-6 py-10 flex-1">
-      <nav className="w-48 space-y-2">
-        {(['account', 'model', 'preferences'] as SettingsSection[]).map((section) => (
-          <button
-            key={section}
-            type="button"
-            onClick={() => setActiveSection(section)}
-            aria-current={activeSection === section ? 'page' : undefined}
-            className={cn(
-              'w-full rounded-lg px-3 py-2 text-left text-sm font-medium transition',
-              activeSection === section
-                ? 'bg-muted text-foreground'
-                : 'text-muted-foreground hover:bg-muted/60'
-            )}
-          >
-            {section === 'account' ? 'Account' : section === 'model' ? 'Model' : 'Preferences'}
-          </button>
-        ))}
-      </nav>
+    <AppLayout className="animate-in fade-in">
+      <PageHeader
+        title="Settings"
+        leading={
+          lastProjectId ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate(`/project/${lastProjectId}`)}
+              aria-label="Back to project"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          ) : null
+        }
+      />
+      <ContentArea className="mx-auto flex w-full max-w-5xl gap-6 px-6 py-10">
+        <nav className="w-48 space-y-2">
+          {(['account', 'model', 'preferences'] as SettingsSection[]).map((section) => (
+            <button
+              key={section}
+              type="button"
+              onClick={() => setActiveSection(section)}
+              aria-current={activeSection === section ? 'page' : undefined}
+              className={cn(
+                'w-full rounded-lg px-3 py-2 text-left text-sm font-medium transition',
+                activeSection === section
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:bg-muted/60'
+              )}
+            >
+              {section === 'account' ? 'Account' : section === 'model' ? 'Model' : 'Preferences'}
+            </button>
+          ))}
+        </nav>
 
       <div className="flex-1 space-y-6">
         {error ? <div className="text-sm text-destructive">{error}</div> : null}
@@ -301,7 +304,7 @@ export function SettingsPage() {
           </Card>
         ) : null}
       </div>
-    </div>
-    </div>
+      </ContentArea>
+    </AppLayout>
   )
 }

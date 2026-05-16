@@ -13,7 +13,7 @@ export function StatusIcon({ status, className }: StatusIconProps) {
 
   switch (status) {
     case 'done':
-      return <Check className={cn(iconClass, 'text-emerald-600')} />
+      return <Check className={cn(iconClass, 'text-success')} />
     case 'failed':
       return <X className={cn(iconClass, 'text-destructive')} />
     case 'in_progress':

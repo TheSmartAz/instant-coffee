@@ -28,8 +28,8 @@ const statusLabels: Record<ProductDocStatus, string> = {
 }
 
 const statusClasses: Record<ProductDocStatus, string> = {
-  draft: 'bg-orange-600 text-white ring-1 ring-orange-400/60 dark:bg-orange-500 dark:text-white dark:ring-orange-300/40',
-  confirmed: 'bg-emerald-700 text-white ring-1 ring-emerald-500/60 dark:bg-emerald-600 dark:text-white dark:ring-emerald-400/40',
+  draft: 'bg-warning text-warning-foreground ring-1 ring-warning/50',
+  confirmed: 'bg-success text-success-foreground ring-1 ring-success/50',
   outdated: 'bg-black text-white ring-1 ring-black/60',
 }
 
@@ -333,7 +333,7 @@ export function ProductDocPanel({
                   size="lg"
                   onClick={onBuild}
                   disabled={!onBuild || buildDisabled || isLoading}
-                  className="h-11 rounded-full bg-emerald-500 px-8 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="h-11 rounded-full bg-success px-8 text-sm font-semibold text-success-foreground shadow-lg shadow-success/30 transition hover:bg-success/90 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {buildDisabled ? (
                     <span className="inline-flex items-center gap-2">

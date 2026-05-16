@@ -38,7 +38,7 @@ export function ToolResultEventDisplay({ event }: ToolResultEventProps) {
       className={cn(
         'flex items-start gap-3 rounded-md border p-3',
         success
-          ? 'border-emerald-200/70 bg-emerald-50/50'
+          ? 'border-success/30 bg-success-muted/50'
           : 'border-destructive/30 bg-destructive/10'
       )}
     >
@@ -46,11 +46,11 @@ export function ToolResultEventDisplay({ event }: ToolResultEventProps) {
         <div
           className={cn(
             'flex h-7 w-7 items-center justify-center rounded-full',
-            success ? 'bg-emerald-100' : 'bg-destructive/20'
+            success ? 'bg-success-muted' : 'bg-destructive/20'
           )}
         >
           {success ? (
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+            <CheckCircle2 className="h-3.5 w-3.5 text-success" />
           ) : (
             <XCircle className="h-3.5 w-3.5 text-destructive" />
           )}
@@ -64,7 +64,7 @@ export function ToolResultEventDisplay({ event }: ToolResultEventProps) {
             className={cn(
               'rounded-md px-2 py-0.5 text-xs font-medium',
               success
-                ? 'bg-emerald-100 text-emerald-700'
+                ? 'bg-success-muted text-success-muted-foreground'
                 : 'bg-destructive/20 text-destructive'
             )}
           >
@@ -74,7 +74,7 @@ export function ToolResultEventDisplay({ event }: ToolResultEventProps) {
             className={cn(
               'rounded-md px-2 py-0.5 text-xs font-medium',
               success
-                ? 'bg-emerald-500/10 text-emerald-600'
+                ? 'bg-success/10 text-success'
                 : 'bg-destructive/10 text-destructive'
             )}
           >
@@ -88,7 +88,7 @@ export function ToolResultEventDisplay({ event }: ToolResultEventProps) {
               <summary
                 className={cn(
                   'cursor-pointer text-xs',
-                  success ? 'text-emerald-700 hover:text-emerald-900' : ''
+                  success ? 'text-success-muted-foreground hover:text-success' : ''
                 )}
               >
                 {success ? 'Output' : 'Error details'} (click to expand)
@@ -107,7 +107,7 @@ export function ToolResultEventDisplay({ event }: ToolResultEventProps) {
               className={cn(
                 'rounded-md p-2 text-xs',
                 success
-                  ? 'bg-emerald-100 text-emerald-800'
+                  ? 'bg-success-muted text-success-muted-foreground'
                   : 'bg-destructive/20 text-destructive'
               )}
             >
