@@ -10,7 +10,10 @@ Instant Coffee now has a run-centric coding-agent loop that can:
 - expose phase history, artifacts, review results, verification status, and project memory evidence in the Run Inspector;
 - build a verification profile from run artifacts and memory notes;
 - execute allowlisted verification commands from the backend;
-- parse pytest, TypeScript, and ESLint failures into structured failure evidence;
+- parse pytest, TypeScript, and ESLint failures into structured failure evidence with failure
+  routing metadata for repair prompts and action audit flags;
+- group routed verification failures in the Run Inspector by route/kind, including counts and
+  route-specific fix hints;
 - persist verification command results under run coordinator artifacts;
 - request an automatic verification fix when the last verification run failed;
 - persist each verification-fix attempt, including `running`, `passed`, `failed`, and `error` outcomes;
@@ -88,6 +91,8 @@ Execution modes change local run behavior, not global trust boundaries.
 - Backend verification runs only allowlisted commands.
 - Automatic verification fixes are scoped to failed verification evidence and record a change summary.
 - Verification and fix actions record a redacted action audit trail without prompt text, engine payloads, raw diffs, or command output.
+- Automatic verification fixes pass through an acceptance gate: low/medium-risk passing fixes are accepted automatically; high-risk, sensitive, or non-passing fixes are blocked until admin resolution.
+- Blocked fix gates include deterministic reviewer recommendations and can refresh those recommendations through an admin endpoint.
 - The product should show `auto` as higher-autonomy execution, not as permission to bypass authentication, command allowlists, run cancellation, review evidence, or audit trails.
 
 ## API Surface
@@ -98,8 +103,11 @@ Run detail responses include:
 - `verification.checks[]` may include a `visual` check with a deterministic quality score and screenshot path;
 - `verification.profile`: recommended verification commands, risk flags, and memory keys;
 - `verification.last_run`: the most recent command-level verification result;
+- `verification.last_run.commands[].failures[]`: structured command failures, including safe
+  `route`, `kind`, and `fix_hint` fields for UI grouping and fix prompts when available;
 - `verification.fix_attempts`: automatic verification-fix attempts and their evidence;
 - `verification.fix_attempts[].change_summary`: file count, changed file paths, risk level, risk flags, captured timestamp, and the verification status linked to the attempted fix;
+- `verification.fix_attempts[].gate`: acceptance status, decision, reasons, deterministic reviewer recommendation, and optional admin resolution timestamp;
 - `verification.audit_trail`: ordered verification/fix/recovery events with status, timestamps, attempt number, command count, failure count, and risk flags;
 - `verification.action_audit_trail`: redacted command/edit/agent/visual action events with status, command metadata, duration, file count, risk level, and timestamps;
 - `context.memory`: project memory categories used to shape verification.
@@ -123,8 +131,18 @@ Mutation endpoints:
   - Reruns verification and updates `artifacts.verification_run`.
   - Captures a diff-style change summary from the worktree baseline around the fix attempt, without exposing raw diff content.
   - Records action-audit events for prompt preparation, agent execution, verification rerun commands, and edit summary, without exposing prompt text or engine payload.
+  - Evaluates a fix gate and blocks high-risk or non-passing fixes from being considered accepted.
   - Returns a normal run response even when the fix attempt records an `error`, so the UI can show saved evidence.
   - Marks stale `running` attempts as `stale_error` before retrying when they exceed the recovery timeout.
+- `POST /api/runs/{run_id}/fix-verification/{attempt_number}/gate`
+  - Requires admin token.
+  - Approves or rejects a blocked automatic-fix gate with `{ "approved": true | false }`.
+  - Rejects gates that are already resolved so duplicate admin actions do not rewrite a decision.
+  - Records a redacted gate-resolution action event.
+- `POST /api/runs/{run_id}/fix-verification/{attempt_number}/gate/review`
+  - Requires admin token.
+  - Refreshes the deterministic reviewer recommendation for a fix gate.
+  - Records a redacted reviewer action event.
 
 ## Verification Commands
 
@@ -169,18 +187,30 @@ Direct coding-agent writes to non-HTML workspace files are surfaced in the file 
 
 The loop is usable, but not yet a fully mature coding agent. The next maturity layer should add:
 
-- a stricter review gate that can block risky fix summaries until a human or reviewer agent accepts them;
-- richer failure routing for pytest, ESLint, TypeScript, build, and Playwright failures;
+- replacing the deterministic reviewer recommendation with an LLM-backed reviewer agent that uses the same redaction and gate contract;
+- route-specific fix policies beyond the current pytest, ESLint, TypeScript, build, Playwright,
+  and runner labels;
 - deeper action audit coverage for normal build/review/generation phases outside the verification-fix loop;
 - dependency-aware source-mode builds for agent-authored `package.json` changes, with package
   allowlists and clear install/audit evidence;
-- a real dogfood scenario that intentionally fails verification, runs automatic fix, and proves the final verification passes.
+- a real provider/browser dogfood scenario that intentionally fails verification, runs automatic fix,
+  and proves the final verification passes outside mocked API tests.
 
 ## Acceptance Evidence
 
 The current M1-M5 closeout is verified by:
 
 - backend targeted tests for run API, memory, review, coordinator, verification runner, and verification fix;
+- an API-level dogfood test that fails verification, runs automatic fix, records change summary,
+  accepts the low/medium-risk fix gate, and proves final verification passes without leaking raw
+  prompt, engine, failure, or command-output details;
+- Run Inspector Playwright coverage for streamed run state, grouped verification failure routes,
+  fix-verification requests, deterministic gate review, and admin gate approval refresh;
+- an opt-in real-provider smoke that creates a durable chat run and executes run verification,
+  while intentionally avoiding automatic fix attempts against the live worktree;
+- a second, doubly gated real-provider dogfood path can invoke automatic verification fix when
+  the real verification run fails, requiring explicit acknowledgement that the live worktree may
+  be edited;
 - web lint;
 - web production build.
 

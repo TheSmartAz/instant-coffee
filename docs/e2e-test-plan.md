@@ -52,6 +52,24 @@ cd packages/backend
 RUN_REAL_CHAT_ADAPTER_SMOKE=true CHAT_USE_RUN_ADAPTER=true PYTHONPATH=.:../agent/src python -m pytest tests/e2e/test_real_chat_run_adapter_smoke.py -q
 ```
 
+The real-provider smoke creates a chat run through the durable adapter, then calls the admin
+verification endpoint for that run and asserts command-level verification evidence plus redacted
+action audit events are present. It intentionally does not trigger automatic fix attempts, because
+those can edit the live repository worktree.
+
+Run the real automatic-fix dogfood only when credentials and live worktree edits are explicitly
+intended:
+
+```bash
+cd packages/backend
+RUN_REAL_VERIFICATION_FIX_DOGFOOD=true ALLOW_REAL_FIX_WORKTREE_EDIT=true CHAT_USE_RUN_ADAPTER=true PYTHONPATH=.:../agent/src python -m pytest tests/e2e/test_real_chat_run_adapter_smoke.py::test_real_chat_run_adapter_verification_fix_dogfood -q
+```
+
+This dogfood first creates a real chat run and executes run verification. It calls
+`/api/runs/{run_id}/fix-verification` only when the real verification result fails; if verification
+already passes, the test skips the automatic-fix portion because there is no failed verification
+evidence to repair.
+
 ## Agent Tests
 
 Agent tests live in `packages/agent/tests`.
@@ -123,11 +141,15 @@ Backend evidence:
 - `test_run_coordinator.py`
 - `test_run_service.py`
 - `test_runs_api.py`
-- optional `test_real_chat_run_adapter_smoke.py`
+- optional `test_real_chat_run_adapter_smoke.py`, including real-provider run verification when
+  `RUN_REAL_CHAT_ADAPTER_SMOKE=true` and destructive automatic-fix dogfood when both
+  `RUN_REAL_VERIFICATION_FIX_DOGFOOD=true` and `ALLOW_REAL_FIX_WORKTREE_EDIT=true`
 
 Web evidence:
 
-- `RunStatusInspector.spec.ts`
+- `RunStatusInspector.spec.ts`, including run SSE status, shell approvals, verification failure
+  route grouping, automatic verification-fix requests, deterministic fix-gate review, and admin
+  approval refresh.
 
 ### 2) Product Doc And Page Persistence
 

@@ -1,6 +1,6 @@
 # Instant Coffee Current Project Summary
 
-Last updated: 2026-05-13
+Last updated: 2026-05-16
 
 ## Status
 
@@ -9,7 +9,7 @@ Instant Coffee is a monorepo for chat-driven mobile-first HTML/static-site gener
 - FastAPI backend services in `packages/backend/app`
 - embedded Python `ic` agent engine from `packages/agent`
 - Vite React web UI in `packages/web`
-- legacy Node CLI in `packages/cli`; export/stats have TypeScript source and tests
+- legacy Node CLI in `packages/cli`; export/stats and shared compatibility utilities have TypeScript source and tests
 
 Older docs describe a LangGraph/Planner/Task/Agent directory architecture. Those files are historical. The current backend does not contain `packages/backend/app/agents`, `planner`, `executor`, `graph`, or `generators`.
 
@@ -42,7 +42,7 @@ packages/web
   src/e2e              Playwright specs
 
 packages/cli
-  src                  TypeScript source for export/stats compatibility paths
+  src                  TypeScript source for export/stats/history-list compatibility paths and shared utilities
   tests                Node test coverage for export/stats compatibility paths
   dist                 compiled legacy Node CLI output
 ```
@@ -50,6 +50,7 @@ packages/cli
 ## Backend Runtime
 
 `packages/backend/app/main.py` registers the application, initializes the DB, optionally runs migration helpers, initializes the app data store, and mounts `/assets`.
+It also configures CORS and rate limiting. `/health` is lightweight by default; `/health?deep=true` checks database and disk access.
 
 Mounted route areas:
 
@@ -99,6 +100,8 @@ Chat supports sessions, threads, image/style references, page mentions, target p
 
 The modern backend path uses `EngineOrchestrator`, which embeds `ic.soul.engine.Engine`. The orchestrator injects Product Doc, page summaries, project memory, mentioned files, and visual references into the agent context. It exposes DB-backed write/edit/multiedit tools so generated files are persisted into the project model.
 
+When `CHAT_USE_RUN_ADAPTER=true` (the default), chat is coordinated through the durable run adapter. The older direct chat path still exists behind that flag.
+
 ## Run Coordinator
 
 Durable run orchestration lives in `packages/backend/app/engine/run_coordinator.py`.
@@ -114,11 +117,28 @@ Run phase vocabulary includes planning and verification event labels, but the cu
 The chat run adapter composes:
 
 - `EngineOrchestrator` for implementation
-- `BuildRunner` for React SSG/static build
-- `ReviewService` for deterministic review gate
+- `BuildRunner` for React SSG/static build when the session has pages
+- `ReviewService` for deterministic review gate when the session has pages
 - one fix attempt when review/build fails
 
+Sessions without generated pages still use placeholder build/review results so the run can complete after non-page interactions.
+
 Run state is stored through `RunService` and exposed via `/api/runs`. Runs can be listed, retrieved, resumed, cancelled, and queried for events.
+The run API also supports approvals, verification audit submission, verification-fix attempts, and fix gate resolution.
+
+Verification/fix maturity currently includes:
+
+- allowlisted backend verification commands with structured command results;
+- mobile visual smoke checks when a build artifact has a `dist_path`;
+- stale automatic-fix recovery and per-run fix locking;
+- structured verification failure routing with safe `route`, `kind`, and `fix_hint` fields for
+  repair prompts, action audit flags, and Run Inspector grouping;
+- redacted public run responses for prompts, engine payloads, command output, metrics, and memory content;
+- automatic-fix change summaries scoped to files changed during the fix attempt;
+- redacted action audit events for verification commands, visual checks, fix prompt preparation, agent execution, edit summaries, and gate decisions;
+- deterministic reviewer recommendations for blocked fix gates, generated without exposing prompt text, command output, raw diffs, or engine payloads;
+- an automatic fix acceptance gate: verification-passing low/medium-risk fixes are auto-accepted, while high-risk or non-passing fixes remain blocked until the admin gate endpoint approves or rejects them.
+- duplicate admin resolution of an already accepted, rejected, or manually resolved fix gate is rejected with a conflict response.
 
 ## Database
 
@@ -172,7 +192,10 @@ Routes:
 
 `ProjectPage` is the main application surface:
 
-- `ChatPanel` for chat, interview, mentions, uploads, run status, and run inspector.
+- `ChatPanel` for chat, interview, mentions, uploads, run status, and the Run Inspector.
+- The Run Inspector shows phase state, artifacts, verification evidence, grouped failure routes,
+  route-specific fix hints, automatic-fix attempts, deterministic gate review, and admin gate
+  approval/rejection actions.
 - `WorkbenchPanel` with `preview`, `code`, `product-doc`, and `data` tabs.
 - `VersionPanel` for legacy and page version history.
 
@@ -212,7 +235,8 @@ Commands in `packages/cli/dist`:
 Known mismatches:
 
 - Node CLI `export` and `stats` are backed by compatibility routes and covered by targeted tests.
-- Node CLI `chat`, `history`, `rollback`, `clean`, and `migrate-v04` still lack checked-in TypeScript source.
+- Node CLI shared config/API/logger/stat-formatting utilities and `history/list` now have checked-in TypeScript source.
+- Node CLI `chat`, most `history`, `rollback`, `clean`, and `migrate-v04` still lack checked-in TypeScript source.
 - Web task retry/skip is compatibility-only and records events; it does not reschedule old executor tasks.
 - `chat` uses a query-string SSE mode that can become brittle for large payloads.
 
@@ -239,6 +263,13 @@ cd packages/web
 npm run lint
 npm run build
 npx playwright test
+```
+
+CLI:
+
+```bash
+cd packages/cli
+npm test
 ```
 
 Opt-in real provider smoke:
