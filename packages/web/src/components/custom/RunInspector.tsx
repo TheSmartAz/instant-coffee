@@ -22,6 +22,7 @@ interface RunInspectorProps {
   sessionId?: string
   runStatus?: ChatRunStatus | null
   onOpenBuildPreview?: () => void
+  presentation?: 'panel' | 'drawer'
 }
 
 const PHASE_LABELS: Record<string, string> = {
@@ -246,8 +247,14 @@ const getPendingApproval = (
   return null
 }
 
-export function RunInspector({ sessionId, runStatus, onOpenBuildPreview }: RunInspectorProps) {
-  const [expanded, setExpanded] = React.useState(false)
+export function RunInspector({
+  sessionId,
+  runStatus,
+  onOpenBuildPreview,
+  presentation = 'panel',
+}: RunInspectorProps) {
+  const isDrawer = presentation === 'drawer'
+  const [expanded, setExpanded] = React.useState(isDrawer)
   const [run, setRun] = React.useState<SessionRunDetail | null>(null)
   const [runEvents, setRunEvents] = React.useState<RunEventResponse[]>([])
   const [loading, setLoading] = React.useState(false)
@@ -268,8 +275,8 @@ export function RunInspector({ sessionId, runStatus, onOpenBuildPreview }: RunIn
     setRunEvents([])
     setError(null)
     setLoading(false)
-    setExpanded(false)
-  }, [sessionId])
+    setExpanded(isDrawer)
+  }, [sessionId, isDrawer])
 
   const refreshRunEvents = React.useCallback(async (runId: string) => {
     try {
@@ -466,19 +473,29 @@ export function RunInspector({ sessionId, runStatus, onOpenBuildPreview }: RunIn
   if (!run && !runStatus && !error && !loading) return null
 
   return (
-    <div className="border-t border-border bg-background px-4 py-3 text-xs" data-testid="run-inspector">
+    <div
+      className={cn(
+        'bg-background px-4 py-3 text-xs',
+        !isDrawer && 'border-t border-border',
+      )}
+      data-testid="run-inspector"
+    >
       <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={() => setExpanded((value) => !value)}
-          data-testid="run-inspector-toggle"
-        >
-          {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          Run
-        </Button>
+        {isDrawer ? (
+          <span className="text-xs font-medium text-muted-foreground">Run</span>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => setExpanded((value) => !value)}
+            data-testid="run-inspector-toggle"
+          >
+            {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            Run
+          </Button>
+        )}
         {phaseLabel ? <Badge variant="secondary">{phaseLabel}</Badge> : null}
         {statusLabel ? <Badge variant={tone === 'failed' ? 'destructive' : 'outline'}>{statusLabel}</Badge> : null}
         {executionModeLabel ? <Badge variant="outline">{executionModeLabel}</Badge> : null}

@@ -300,6 +300,16 @@ async function setupProjectMocks(
   )
 }
 
+async function openRunDetails(page: Page) {
+  const trigger = page.getByRole('button', { name: /^(Details|Resolve run|Run details)$/ })
+  await expect(trigger).toBeVisible()
+  await trigger.click()
+  if (!(await page.getByRole('dialog', { name: 'Run details' }).isVisible().catch(() => false))) {
+    await trigger.click()
+  }
+  await expect(page.getByRole('dialog', { name: 'Run details' })).toBeVisible()
+}
+
 test.describe('Run status and inspector', () => {
   const shellApprovalEvent: RunEventResponse = {
     id: 1,
@@ -461,6 +471,8 @@ test.describe('Run status and inspector', () => {
     )
 
     await expect(page.getByTestId('run-status-strip')).toContainText('waiting input')
+    await expect(page.getByTestId('run-status-strip')).toContainText('Resolve run')
+    await openRunDetails(page)
     await expect(page.getByTestId('shell-approval-card')).toBeVisible()
     await expect(page.getByTestId('shell-approval-card')).toContainText('Recursive force delete on sensitive path')
     await expect(page.getByTestId('shell-approval-card')).toContainText('rm -rf ./dist --force')
@@ -490,6 +502,7 @@ test.describe('Run status and inspector', () => {
 
     await page.goto(`/project/${sessionId}`)
 
+    await openRunDetails(page)
     await expect(page.getByTestId('shell-approval-card')).toBeVisible()
     await expect(page.getByTestId('shell-approval-card')).toContainText('Recursive force delete on sensitive path')
     await expect(page.getByTestId('shell-approval-card')).toContainText('rm -rf ./dist --force')
@@ -514,6 +527,7 @@ test.describe('Run status and inspector', () => {
 
     await page.goto(`/project/${sessionId}`)
 
+    await openRunDetails(page)
     await expect(page.getByTestId('run-inspector')).toBeVisible()
     await expect(page.getByTestId('shell-approval-card')).toHaveCount(0)
   })
@@ -538,7 +552,7 @@ test.describe('Run status and inspector', () => {
     await expect(page.getByTestId('run-status-strip')).toContainText('1 errors')
     await expect(page.getByTestId('run-status-strip')).toContainText(runId.slice(0, 10))
 
-    await page.getByTestId('run-inspector-toggle').click()
+    await openRunDetails(page)
     await expect(page.getByTestId('run-inspector')).toContainText('Review')
     await expect(page.getByTestId('run-inspector')).toContainText('failed')
     await expect(page.getByTestId('run-inspector-artifacts')).toContainText('1 generated')
@@ -681,7 +695,7 @@ test.describe('Run status and inspector', () => {
     })
 
     await page.goto(`/project/${sessionId}`)
-    await page.getByTestId('run-inspector-toggle').click()
+    await openRunDetails(page)
 
     await page.getByTestId('run-inspector-fix-verification').click()
     await expect.poll(() => fixRequests).toBe(1)
@@ -818,7 +832,7 @@ test.describe('Run status and inspector', () => {
     await page.getByRole('button', { name: 'Send message' }).click()
 
     await expect(page.getByTestId('run-status-strip')).toContainText('Waiting for input')
-    await page.getByTestId('run-inspector-toggle').click()
+    await openRunDetails(page)
     await expect(page.getByTestId('run-inspector')).toContainText('waiting input')
 
     await page.getByTestId('run-inspector-cancel').click()
@@ -854,7 +868,7 @@ test.describe('Run status and inspector', () => {
     await page.getByRole('button', { name: 'Send message' }).click()
 
     await expect(page.getByTestId('run-status-strip')).toContainText('Waiting for input')
-    await page.getByTestId('run-inspector-toggle').click()
+    await openRunDetails(page)
     await expect(page.getByTestId('run-inspector')).toContainText('waiting input')
 
     detail = runDetail({

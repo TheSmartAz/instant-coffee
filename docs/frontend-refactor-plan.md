@@ -25,7 +25,7 @@
 - Phase 1 设计系统基础: 已新增字体、圆角、阴影、动画、z-index 和 success/warning/info/danger 语义色 token，并接入 Tailwind theme。
 - Phase 2 HomePage: 已重做首页信息架构，保留 pinned/search/sort/manage/delete 项目管理能力，并接入 `AppLayout` / `ContentArea`。
 - Phase 3 ProjectPage 布局壳: 已迁移为共享 `AppLayout` / `PageHeader` / `ContentArea`，主工作区接入 `ResizableSplitPane`，并保留 Chat、Preview、Build、Page selection、AppMode、Data tab、Version history、RunInspector 可达路径。
-- Phase 4 Drawer 功能迁移: 已新增 Radix Dialog 驱动的 `Drawer` 基础组件，并接入 `CodeDrawer`、`DocDrawer`、`DataDrawer`、`VersionDrawer` header 入口。`VersionPanel` 行为暂时复用在 drawer 内，避免重写 pin/preview/rollback/diff 边缘交互。
+- Phase 4 Drawer 功能迁移: 已新增 Radix Dialog 驱动的 `Drawer` 基础组件，并接入 `CodeDrawer`、`DocDrawer`、`DataDrawer`、`VersionDrawer`、`RunDetailsDrawer` 入口。`VersionPanel` / `RunInspector` 行为暂时复用在 drawer 内，避免重写 pin/preview/rollback/diff、shell approval、verification fix gate 等边缘交互。
 - Phase 5 布局架构抽象: 已新增 `AppLayout`、`PageHeader`、`ContentArea`，并迁移 HomePage、ProjectPage、SettingsPage、ExecutionPage。
 - Phase 6 视觉统一: 已完成高可见状态组件的语义色 token 收敛，简化 PhoneFrame，并统一多处状态、diff、token、文件树、任务和运行观测颜色。
 - 性能收敛: `ProjectPage` 已对 Workbench、VersionPanel、Code/Doc/Data drawer 做 `React.lazy` 分包，生产 chunk 从约 554 kB 降至约 398 kB，Vite 大 chunk 警告消失。
@@ -35,7 +35,7 @@
 
 - 做一次人工视觉验收，重点检查桌面/移动端 ProjectPage header、split pane 比例、Version drawer 内容高度、Drawer 内容滚动和焦点恢复。
 - 评估是否继续把 `VersionPanel` 行为拆成独立 hook/service；当前 `VersionDrawer` 复用原面板行为，降低交互回归风险。
-- 评估是否把 RunStatusStrip / RunInspector 从 ChatPanel 常驻区进一步降级到高级运行详情入口；当前保留以避免运行观测能力回退。
+- 继续观察 `RunDetailsDrawer` 的实际使用体验；当前已移除常驻 `RunInspector`，只保留轻量 `RunStatusStrip` 和历史运行详情入口。
 - 可选处理 shadcn `toast.tsx` destructive group 默认红色类；这属于组件库默认样式，不影响当前业务语义色收敛。
 - 后续如继续瘦身，可拆 `client` 公共 chunk 或对 CodePanel/editor 相关依赖做更细粒度懒加载。
 
@@ -681,7 +681,7 @@ Phase 4 (Drawer 功能迁移)
 ├── 4.5 VersionsDrawer 行为 hook 提取
 ├── 4.6 VersionsDrawer UI 迁移
 └── 4.7 RunStatusStrip / RunInspector 降级到高级运行详情入口
-状态: 部分完成；Code/Doc/Data/Version 已迁移为 Drawer，RunInspector 保留原可达路径
+状态: 基本完成；Code/Doc/Data/Version/Run details 已迁移为 Drawer，RunInspector 通过高级运行详情入口保留完整能力
 
 Phase 5 (布局架构抽象)
 ├── 5.1 AppLayout / PageHeader / ContentArea 抽象
@@ -711,7 +711,7 @@ Phase 6 (视觉统一)
 | VersionPanel 808 行代码迁移 | 先提取行为 hook/service，再迁移 UI，避免一次性重写 |
 | DataTab 已有 e2e 覆盖 | 不直接删除，迁移为 DataDrawer 或 More/Advanced 入口 |
 | AppMode 影响 iframe runtime/state | 不删除 runtime，只把入口降级到 Preview 高级设置 |
-| RunInspector 已有运行观测和 e2e | 先移动到高级运行详情或 Execution Flow，确认覆盖后再清理 |
+| RunInspector 已有运行观测和 e2e | 已移动到高级运行详情 Drawer；后续只在确认 Execution Flow 覆盖全部能力后再考虑进一步清理 |
 | PhoneFrame 简化可能丢失用户喜好 | 保留原版 PhoneFrame 代码，可通过配置切换 |
 | 品牌色变更影响范围大 | 先更新 CSS 变量，全局搜索替换硬编码色值 |
 | 可拖拽面板复杂度 | 先实现基础拖拽，后续再增加持久化等高级功能 |
@@ -731,7 +731,7 @@ Phase 6 (视觉统一)
 - [x] Code/Doc/Data/Versions 通过 Header 入口以 Drawer 打开
 - [x] DataTab 能力保留，相关 e2e 不回退
 - [x] AppMode/StaticMode runtime 能力保留
-- [ ] RunStatusStrip 和 RunInspector 不再挤占 ChatPanel 常驻空间，仍有可达运行详情入口
+- [x] RunInspector 不再挤占 ChatPanel 常驻空间，RunStatusStrip 降级为轻量状态入口，仍有可达运行详情入口
 - [x] Drawer 系统正常工作 (slide-in/out, overlay, ESC 关闭、focus trap、焦点恢复、body scroll lock)
 - [x] CSS 变量和语义色 token 已定义，业务状态色已大范围收敛
 - [x] 品牌色在主要页面一致应用
