@@ -1,8 +1,6 @@
 import * as React from 'react'
 import { ChatInput, type ChatInputProps } from './ChatInput'
 import { ChatMessage } from './ChatMessage'
-import { RunInspector } from './RunInspector'
-import { RunStatusStrip } from './RunStatusStrip'
 import { TokenDisplay } from '@/components/TokenDisplay'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -20,15 +18,7 @@ export interface ChatPanelProps {
   messages: Message[]
   sessionId?: string
   threadId?: string
-  onSendMessage: (
-    content: string,
-    options?: {
-      triggerInterview?: boolean
-      generateNow?: boolean
-      targetPages?: string[]
-      mentionedFiles?: string[]
-    }
-  ) => void
+  onSendMessage: ChatInputProps['onSend']
   onAssetUpload?: ChatInputProps['onAssetUpload']
   onInterviewAction?: (payload: InterviewActionPayload) => void
   onTabChange?: (tab: 'preview' | 'code' | 'product-doc' | 'data') => void
@@ -43,16 +33,12 @@ export interface ChatPanelProps {
 
 export function ChatPanel({
   messages,
-  sessionId,
-  threadId,
   onSendMessage,
   onAssetUpload,
   onInterviewAction,
   onTabChange,
-  onOpenBuildPreview,
   isLoading = false,
   errorMessage,
-  runStatus,
   className,
   pages,
   tokenUsage,
@@ -228,13 +214,6 @@ export function ChatPanel({
           <TokenDisplay usage={tokenUsage} showDetails={false} />
         </div>
       ) : null}
-      <RunStatusStrip status={runStatus} />
-      <RunInspector
-        sessionId={sessionId}
-        threadId={threadId}
-        runStatus={runStatus}
-        onOpenBuildPreview={onOpenBuildPreview}
-      />
       <div className="p-4">
         <ChatInput
           onSend={onSendMessage}

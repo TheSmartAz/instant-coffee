@@ -34,6 +34,7 @@ _EXTENSION_BY_MIME = {
 _MIME_BY_EXTENSION = {v: k for k, v in _EXTENSION_BY_MIME.items()}
 
 _SVG_NUMBER = re.compile(r"([0-9]+(?:\.[0-9]+)?)")
+_ASSET_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_:-]*$")
 
 
 @dataclass
@@ -98,7 +99,7 @@ class AssetRegistryService:
 
         return AssetRef(
             id=f"asset:{asset_id}",
-            url=f"/assets/{self.session_id}/{file_path.name}",
+            url=f"/assets/{self.session_id}/assets/{file_path.name}",
             type=content_type,
             width=width,
             height=height,
@@ -134,7 +135,7 @@ class AssetRegistryService:
 
             asset_ref = AssetRef(
                 id=f"asset:{asset_id}",
-                url=f"/assets/{self.session_id}/{path.name}",
+                url=f"/assets/{self.session_id}/assets/{path.name}",
                 type=content_type,
                 width=width,
                 height=height,
@@ -202,13 +203,28 @@ class AssetRegistryService:
         normalized = asset_id
         if normalized.startswith("asset:"):
             normalized = normalized.split("asset:", 1)[1]
+        if (
+            not _ASSET_ID_RE.fullmatch(normalized)
+            or "/" in normalized
+            or "\\" in normalized
+            or ".." in normalized
+        ):
+            raise FileNotFoundError(f"asset not found: {asset_id}")
         asset_path = self.base_path / normalized
         if asset_path.exists():
-            return asset_path
+            return self._contained_asset_path(asset_path, asset_id)
         for path in self.base_path.glob(f"{normalized}.*"):
             if path.is_file():
-                return path
+                return self._contained_asset_path(path, asset_id)
         raise FileNotFoundError(f"asset not found: {asset_id}")
+
+    def _contained_asset_path(self, path: Path, asset_id: str) -> Path:
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(self.base_path)
+        except (OSError, ValueError) as exc:
+            raise FileNotFoundError(f"asset not found: {asset_id}") from exc
+        return resolved
 
     def _normalize_asset_type(self, asset_type: AssetType | str) -> str:
         if isinstance(asset_type, AssetType):

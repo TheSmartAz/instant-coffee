@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from ..events.emitter import EventEmitter
@@ -20,6 +22,7 @@ from ..events.models import (
     FilesChangedEvent,
     PlanUpdateEvent,
     ShellApprovalEvent,
+    ShellApprovalResolvedEvent,
     TextDeltaEvent,
     ToolCallEvent,
     ToolProgressEvent,
@@ -31,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 _AGENT_ID = "engine"
 _AGENT_TYPE = "engine"
+
+
+@dataclass(frozen=True)
+class _PendingShellApproval:
+    loop: asyncio.AbstractEventLoop
+    future: asyncio.Future[bool]
 
 
 class _ThinkTagStripper:
@@ -114,12 +123,16 @@ class EventBridge:
         )
     """
 
-    def __init__(self, emitter: EventEmitter, session_id: str) -> None:
+    def __init__(self, emitter: EventEmitter, session_id: str, *, execution_mode: str = "agent") -> None:
         self._emitter = emitter
         self._session_id = session_id
+        self._execution_mode = "auto" if execution_mode == "yolo" else execution_mode
+        if self._execution_mode not in {"plan", "agent", "auto"}:
+            self._execution_mode = "agent"
         self._text_buffer: list[str] = []
         self._think_stripper = _ThinkTagStripper()
-        self._pending_approvals: dict[str, asyncio.Future] = {}
+        self._pending_approvals: dict[str, _PendingShellApproval] = {}
+        self._pending_approvals_lock = threading.Lock()
         self._active_sub_agents: dict[str, str] = {}  # agent_id → task description
 
     async def on_text_delta(self, delta: str) -> None:
@@ -246,12 +259,26 @@ class EventBridge:
         from ic.tools.shell import check_command_safety
 
         is_safe, reason = check_command_safety(command)
+        if self._execution_mode == "plan":
+            self._emitter.emit(
+                ToolResultEvent(
+                    session_id=self._session_id,
+                    agent_id=_AGENT_ID,
+                    agent_type=_AGENT_TYPE,
+                    tool_name="shell",
+                    success=False,
+                    error="Shell command blocked in Plan only mode.",
+                )
+            )
+            return False
         if is_safe:
             return True
 
         approval_id = uuid.uuid4().hex[:12]
-        future: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
-        self._pending_approvals[approval_id] = future
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+        with self._pending_approvals_lock:
+            self._pending_approvals[approval_id] = _PendingShellApproval(loop=loop, future=future)
 
         self._emitter.emit(
             ShellApprovalEvent(
@@ -259,27 +286,69 @@ class EventBridge:
                 command=command,
                 reason=reason,
                 approval_id=approval_id,
+                execution_mode=self._execution_mode,
             )
         )
 
         try:
             # Wait up to 60 seconds for user response
-            return await asyncio.wait_for(future, timeout=60.0)
+            approved = await asyncio.wait_for(future, timeout=60.0)
+            return approved
         except asyncio.TimeoutError:
+            self._emit_shell_approval_resolved(
+                approval_id,
+                approved=False,
+                status="timeout",
+                reason="Approval timed out.",
+            )
             return False
         finally:
-            self._pending_approvals.pop(approval_id, None)
+            with self._pending_approvals_lock:
+                self._pending_approvals.pop(approval_id, None)
 
     def resolve_shell_approval(self, approval_id: str, approved: bool) -> bool:
         """Resolve a pending shell approval request (called from API endpoint).
 
         Returns True if the approval was found and resolved.
         """
-        future = self._pending_approvals.get(approval_id)
-        if future and not future.done():
-            future.set_result(approved)
+        with self._pending_approvals_lock:
+            pending = self._pending_approvals.get(approval_id)
+        if not pending or pending.future.done():
+            return False
+
+        def complete() -> None:
+            if not pending.future.done():
+                pending.future.set_result(approved)
+
+        try:
+            pending.loop.call_soon_threadsafe(complete)
+            self._emit_shell_approval_resolved(
+                approval_id,
+                approved=approved,
+                status="approved" if approved else "rejected",
+            )
             return True
+        except RuntimeError:
+            logger.warning("Failed to resolve shell approval %s: event loop is closed", approval_id)
         return False
+
+    def _emit_shell_approval_resolved(
+        self,
+        approval_id: str,
+        *,
+        approved: bool,
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        self._emitter.emit(
+            ShellApprovalResolvedEvent(
+                session_id=self._session_id,
+                approval_id=approval_id,
+                approved=approved,
+                status=status,
+                reason=reason,
+            )
+        )
 
     def emit_token_usage(self, usage: dict[str, int], cost_usd: float = 0.0) -> None:
         """Emit a TokenUsageEvent from the engine's accumulated usage."""

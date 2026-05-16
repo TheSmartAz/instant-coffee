@@ -12,6 +12,7 @@ class EventType(str, Enum):
     TOKEN_USAGE = "token_usage"
     COST_UPDATE = "cost_update"
     SHELL_APPROVAL = "shell_approval"
+    SHELL_APPROVAL_RESOLVED = "shell_approval_resolved"
     DELTA = "delta"
     ERROR = "error"
     DONE = "done"
@@ -123,6 +124,8 @@ RUN_SCOPED_EVENT_TYPES = {
     EventType.VERIFY_FAIL.value,
     EventType.TOOL_POLICY_BLOCKED.value,
     EventType.TOOL_POLICY_WARN.value,
+    EventType.SHELL_APPROVAL.value,
+    EventType.SHELL_APPROVAL_RESOLVED.value,
 }
 
 

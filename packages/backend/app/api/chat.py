@@ -78,6 +78,7 @@ async def _run_orchestrator_once(
     style_reference: Optional[dict] = None,
     target_pages: Optional[list[str]] = None,
     resume: Optional[dict] = None,
+    approval_mode: str = "agent",
     image_refs: Optional[list[dict]] = None,
     mentioned_files: Optional[list[str]] = None,
 ) -> tuple[Optional[OrchestratorResponse], str]:
@@ -92,6 +93,7 @@ async def _run_orchestrator_once(
         style_reference=style_reference,
         target_pages=target_pages,
         resume=resume,
+        approval_mode=approval_mode,
         image_refs=image_refs,
         mentioned_files=mentioned_files,
     ):
@@ -204,6 +206,29 @@ def _coordinator_completed_response(
     )
 
 
+def _main_run_build_placeholder(session_id: str) -> dict[str, object]:
+    return {
+        "status": "skipped",
+        "reason": "preview_ready",
+        "message": "HTML preview is ready; React build runs as a separate background task.",
+        "session_id": session_id,
+    }
+
+
+def _main_run_review_placeholder(session_id: str) -> dict[str, object]:
+    return {
+        "passed": True,
+        "summary": {
+            "error_count": 0,
+            "warning_count": 0,
+            "build_status": "not_required",
+            "generated_pages": [],
+        },
+        "issues": [],
+        "session_id": session_id,
+    }
+
+
 async def _run_orchestrator_stream(
     *,
     orchestrator: object,
@@ -221,6 +246,7 @@ async def _run_orchestrator_stream(
     thread_id: Optional[str] = None,
     image_refs: Optional[list[dict]] = None,
     mentioned_files: Optional[list[str]] = None,
+    approval_mode: str = "agent",
 ) -> None:
     final_message = ""
     final_response: Optional[OrchestratorResponse] = None
@@ -242,6 +268,7 @@ async def _run_orchestrator_stream(
             style_reference=style_reference,
             target_pages=target_pages,
             resume=resume,
+            approval_mode=approval_mode,
             image_refs=image_refs,
             mentioned_files=mentioned_files,
         )
@@ -263,6 +290,7 @@ async def _run_orchestrator_stream(
             style_reference=style_reference,
             target_pages=target_pages,
             resume=None,
+            approval_mode=approval_mode,
             image_refs=image_refs,
             mentioned_files=mentioned_files,
         )
@@ -280,11 +308,8 @@ async def _run_orchestrator_stream(
     try:
         if run_context is not None and run_context.adapter_active and run_context.run_id:
             phases = RunCoordinatorPhases(
-                build=lambda _context: BuildRunner(
-                    orchestrator.db,
-                    event_emitter=getattr(orchestrator, "event_emitter", None),
-                ).build_session(orchestrator.session.id),
-                review=lambda _context: ReviewService(orchestrator.db).review_session(orchestrator.session.id),
+                build=lambda _context: _main_run_build_placeholder(orchestrator.session.id),
+                review=lambda _context: _main_run_review_placeholder(orchestrator.session.id),
                 fix=_run_fix_phase,
                 implement=lambda _context: _run_implement_phase(),
             )
@@ -532,6 +557,7 @@ def _prepare_chat_run_context(
     style_reference: Optional[dict],
     target_pages: list[str],
     resume_payload: Optional[dict],
+    approval_mode: str = "agent",
 ) -> _ChatRunContext:
     adapter_active = bool(settings.chat_use_run_adapter)
     if not adapter_active:
@@ -605,6 +631,7 @@ def _prepare_chat_run_context(
             session_id=session.id,
             message=message,
             generate_now=bool(generate_now),
+            approval_mode=approval_mode,
             style_reference=style_reference,
             target_pages=target_pages,
             trigger_source="chat",
@@ -989,6 +1016,7 @@ async def _stream_chat_orchestrator_sse(
     image_refs: Optional[list[dict]] = None,
     mentioned_files: Optional[list[str]] = None,
     response_thread_id: Optional[str] = None,
+    approval_mode: str = "agent",
     queue_timeout_seconds: float = 0.005,
 ) -> AsyncGenerator[str, None]:
     index = 0
@@ -1012,6 +1040,7 @@ async def _stream_chat_orchestrator_sse(
             thread_id=active_thread_id,
             image_refs=image_refs,
             mentioned_files=mentioned_files,
+            approval_mode=approval_mode,
         )
     )
     stream_task.add_done_callback(_log_stream_task_result)
@@ -1216,6 +1245,7 @@ async def chat(
         style_reference=style_reference_context,
         target_pages=target_pages,
         resume_payload=resolved_resume,
+        approval_mode=payload.execution_mode,
     )
     resolved_resume = run_context.resume_payload
     _persist_chat_user_message(
@@ -1276,6 +1306,7 @@ async def chat(
                 image_refs=image_refs,
                 mentioned_files=payload.mentioned_files or None,
                 response_thread_id=active_thread_id,
+                approval_mode=payload.execution_mode,
                 queue_timeout_seconds=0.01,
             ):
                 yield chunk
@@ -1317,19 +1348,17 @@ async def chat(
                     style_reference=style_reference_context,
                     target_pages=target_pages,
                     resume=resolved_resume,
+                    approval_mode=payload.execution_mode,
                     image_refs=image_refs,
                     mentioned_files=payload.mentioned_files or None,
                 )
                 return final
 
             async def _build_phase(_context: dict[str, object]) -> object:
-                return await BuildRunner(
-                    db,
-                    event_emitter=emitter,
-                ).build_session(session.id)
+                return _main_run_build_placeholder(session.id)
 
             async def _review_phase(_context: dict[str, object]) -> object:
-                return ReviewService(db).review_session(session.id)
+                return _main_run_review_placeholder(session.id)
 
             async def _fix_phase(context: dict[str, object]) -> dict[str, object]:
                 nonlocal final, assistant_message

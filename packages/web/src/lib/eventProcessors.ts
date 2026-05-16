@@ -267,6 +267,8 @@ export const buildStepsFromEvents = (
 const WIDGET_EVENT_TYPES = new Set([
   'plan_update',
   'plan_created',
+  'page_preview_ready',
+  'done',
   'files_changed',
   'agent_spawned',
   'agent_end',
@@ -285,6 +287,35 @@ interface WidgetData {
   productDocChangeSummary?: string
   productDocSectionName?: string
   productDocSectionContent?: string
+}
+
+const completePreviewReadyPlanSteps = (plan: PlanStep[] | undefined) => {
+  if (!plan?.length) return plan
+  let changed = false
+  const next = plan.map((step) => {
+    if (step.status === 'completed') return step
+    const label = step.step.toLowerCase()
+    const isGenerationStep =
+      label.includes('generate') ||
+      label.includes('index.html') ||
+      label.includes('html') ||
+      label.includes('output')
+    if (!isGenerationStep) return step
+    changed = true
+    return { ...step, status: 'completed' as const }
+  })
+  return changed ? next : plan
+}
+
+const completeInProgressPlanSteps = (plan: PlanStep[] | undefined) => {
+  if (!plan?.length) return plan
+  let changed = false
+  const next = plan.map((step) => {
+    if (step.status !== 'in_progress') return step
+    changed = true
+    return { ...step, status: 'completed' as const }
+  })
+  return changed ? next : plan
 }
 
 export const buildWidgetDataFromEvents = (events: SessionEvent[]): WidgetData => {
@@ -309,6 +340,12 @@ export const buildWidgetDataFromEvents = (events: SessionEvent[]): WidgetData =>
         }
         break
       }
+      case 'page_preview_ready':
+        data.plan = completePreviewReadyPlanSteps(data.plan)
+        break
+      case 'done':
+        data.plan = completeInProgressPlanSteps(data.plan)
+        break
       case 'plan_created': {
         const plan = isRecord(payload.plan) ? payload.plan : payload
         const tasks = Array.isArray(plan.tasks) ? plan.tasks : []

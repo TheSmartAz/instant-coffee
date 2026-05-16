@@ -5,6 +5,7 @@ import type { ModelOption, Settings } from '@/types'
 
 type ApiSettings = {
   api_key?: string
+  has_api_key?: boolean
   model?: string
   temperature?: number
   max_tokens?: number
@@ -22,6 +23,7 @@ const defaultSettings: Settings = {
 
 const normalizeSettings = (data?: ApiSettings): Settings => ({
   apiKey: data?.api_key,
+  hasApiKey: data?.has_api_key,
   model: data?.model ?? defaultSettings.model,
   temperature: data?.temperature ?? defaultSettings.temperature,
   maxTokens: data?.max_tokens ?? defaultSettings.maxTokens,

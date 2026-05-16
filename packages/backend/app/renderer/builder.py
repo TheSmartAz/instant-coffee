@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 import subprocess
@@ -124,6 +125,82 @@ class ReactSSGBuilder:
         self._emit_done(result)
         return result
 
+    async def build_from_workspace_source(
+        self,
+        source_dir: Path,
+        *,
+        pages: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Build from user/agent-authored React source files in the session workspace."""
+        self._emit_start()
+        try:
+            result = await asyncio.to_thread(
+                self._build_from_workspace_source_sync,
+                Path(source_dir),
+                pages or [],
+            )
+        except Exception as exc:
+            self._emit_failed(exc)
+            raise
+        self._emit_done(result)
+        return result
+
+    def _build_from_workspace_source_sync(
+        self,
+        source_dir: Path,
+        pages: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        if not self.TEMPLATE_PATH.exists():
+            raise BuildError("React SSG template not found", stage="template")
+        if not source_dir.exists():
+            raise BuildError("Workspace source directory not found", stage="workspace_source")
+
+        self._reset_log()
+        self._log(f"Build started (workspace source path): {source_dir}")
+        self._check_cancelled("init")
+
+        self._emit_progress("Copying template", 10)
+        self._copy_template()
+
+        self._emit_progress("Copying workspace source", 25)
+        self._copy_workspace_source(source_dir)
+        page_list = self._resolve_workspace_pages(pages)
+        self._write_workspace_manifest(page_list)
+
+        self._emit_progress("Installing dependencies", 45)
+        install_cmd = ["npm", "ci"] if (self.work_dir / "package-lock.json").exists() else ["npm", "install"]
+        self._run_command(install_cmd, stage="npm_install")
+
+        self._emit_progress("Building project", 70)
+        self._run_command(["npm", "run", "build"], stage="npm_build")
+
+        build_dist = self.work_dir / "dist"
+        if not build_dist.exists():
+            raise BuildError("Build output not found", stage="npm_build")
+
+        self._emit_progress("Publishing build artifacts", 85)
+        self._publish_dist(build_dist)
+
+        self._emit_progress("Applying mobile shell", 92)
+        self._check_cancelled("mobile_shell")
+        self._apply_mobile_shell()
+
+        html_pages = sorted(
+            str(path.relative_to(self.dist_dir))
+            for path in self.dist_dir.rglob("*.html")
+            if path.is_file()
+        )
+        self._emit_progress("Build complete", 100)
+
+        return {
+            **BuildResult(
+                status="success",
+                dist_path=str(self.dist_dir),
+                pages=html_pages,
+            ).__dict__,
+            "source_mode": "workspace",
+        }
+
     async def _build_from_html_async(
         self,
         pages: list[PageHtml],
@@ -207,6 +284,83 @@ class ReactSSGBuilder:
         if self.work_dir.exists():
             shutil.rmtree(self.work_dir)
         shutil.copytree(self.TEMPLATE_PATH, self.work_dir)
+
+    def _copy_workspace_source(self, source_dir: Path) -> None:
+        allowed_roots = {"src", "public"}
+        allowed_root_files = {
+            "index.html",
+            "tailwind.config.js",
+            "postcss.config.js",
+            "vite.config.ts",
+            "vite.config.js",
+            "tsconfig.json",
+        }
+        for item in source_dir.iterdir():
+            if item.name in allowed_roots and item.is_dir():
+                target = self.work_dir / item.name
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.copytree(item, target, ignore=self._workspace_ignore)
+            elif item.name in allowed_root_files and item.is_file():
+                shutil.copy2(item, self.work_dir / item.name)
+        if not (self.work_dir / "src" / "App.tsx").exists():
+            raise BuildError("Workspace source must include src/App.tsx", stage="workspace_source")
+
+    @staticmethod
+    def _workspace_ignore(_directory: str, names: list[str]) -> set[str]:
+        ignored = {
+            "node_modules",
+            "dist",
+            "build",
+            ".git",
+            "__pycache__",
+            ".pytest_cache",
+            ".visual-check",
+            "visual-check",
+        }
+        return {name for name in names if name in ignored or name.endswith((".db", ".sqlite"))}
+
+    def _resolve_workspace_pages(self, pages: list[dict[str, str]]) -> list[dict[str, str]]:
+        normalized = [
+            {
+                "slug": str(page.get("slug") or "index"),
+                "title": str(page.get("title") or page.get("slug") or "Index").replace("-", " ").title(),
+            }
+            for page in pages
+            if isinstance(page, dict)
+        ]
+        if normalized:
+            return normalized
+
+        pages_dir = self.work_dir / "src" / "pages"
+        if pages_dir.exists():
+            discovered = []
+            for path in sorted(pages_dir.glob("*.tsx")):
+                if path.name.startswith("_"):
+                    continue
+                slug = path.stem
+                discovered.append({"slug": slug, "title": slug.replace("-", " ").title()})
+            if discovered:
+                return discovered
+        return [{"slug": "index", "title": "Index"}]
+
+    def _write_workspace_manifest(self, pages: list[dict[str, str]]) -> None:
+        data_dir = self.work_dir / "src" / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = data_dir / "prerender-manifest.json"
+        if manifest_path.exists():
+            return
+        manifest = {
+            "pages": [
+                {
+                    "slug": page["slug"],
+                    "title": page["title"],
+                    "entry": f"src/pages/{page['slug']}.tsx",
+                }
+                for page in pages
+            ]
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     def _write_converted_files(
         self,

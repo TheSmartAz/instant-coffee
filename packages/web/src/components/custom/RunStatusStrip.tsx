@@ -68,6 +68,12 @@ const formatRunId = (runId?: string) => {
   return runId.length > 10 ? runId.slice(0, 10) : runId
 }
 
+const EXECUTION_MODE_LABELS = {
+  plan: 'Plan only',
+  agent: 'Agent',
+  auto: 'Auto',
+} as const
+
 const formatSummary = (summary?: Record<string, unknown>) => {
   if (!summary) return undefined
   const parts: string[] = []
@@ -143,6 +149,7 @@ export function RunStatusStrip({ status }: RunStatusStripProps) {
   const percent = clampPercent(status.percent)
   const detail = status.error ?? status.message ?? formatSummary(status.summary)
   const runId = formatRunId(status.runId)
+  const executionMode = status.executionMode ? EXECUTION_MODE_LABELS[status.executionMode] : undefined
 
   return (
     <div
@@ -179,6 +186,11 @@ export function RunStatusStrip({ status }: RunStatusStripProps) {
         {runId ? (
           <span className="hidden shrink-0 font-mono text-[11px] text-current/60 sm:inline">
             {runId}
+          </span>
+        ) : null}
+        {executionMode ? (
+          <span className="shrink-0 rounded-full border border-current/20 px-2 py-0.5 text-[11px] font-medium text-current/75">
+            {executionMode}
           </span>
         ) : null}
       </div>

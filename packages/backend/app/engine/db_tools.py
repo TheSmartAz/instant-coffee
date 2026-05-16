@@ -25,7 +25,9 @@ from ..events.models import (
     PageVersionCreatedEvent,
     ProductDocGeneratedEvent,
     ProductDocUpdatedEvent,
+    WorkflowEvent,
 )
+from ..events.types import EventType
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,32 @@ def _slug_from_filename(file_path: str) -> str:
 
 def _title_from_slug(slug: str) -> str:
     return slug.replace("-", " ").title()
+
+
+def _normalize_execution_mode(mode: str | None) -> str:
+    if mode == "yolo":
+        return "auto"
+    return mode if mode in {"plan", "agent", "auto"} else "agent"
+
+
+def _plan_blocked_result(tool_name: str, file_path: str, emitter: Optional[EventEmitter]) -> ToolResult:
+    message = (
+        f"{tool_name} blocked in Plan only mode for {file_path or 'unknown path'}. "
+        "Switch to Agent or Auto to write files."
+    )
+    if emitter is not None:
+        emitter.emit(
+            WorkflowEvent(
+                type=EventType.TOOL_POLICY_BLOCKED,
+                payload={
+                    "tool_name": tool_name,
+                    "file_path": file_path,
+                    "execution_mode": "plan",
+                    "reason": "Plan only mode is read-only.",
+                },
+            )
+        )
+    return ToolResult(error=message, is_error=True)
 
 
 def persist_html_page(
@@ -105,16 +133,20 @@ class DBWriteFile(WriteFile):
         emitter: Optional[EventEmitter] = None,
         engine: Any = None,
         deferred_buffer: Any = None,
+        execution_mode: str = "agent",
     ):
         super().__init__(workspace, engine=engine)
         self._db = db_session
         self._session_id = session_id
         self._emitter = emitter
         self._deferred_buffer = deferred_buffer
+        self._execution_mode = _normalize_execution_mode(execution_mode)
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         file_path = kwargs.get("file_path", "")
         content = kwargs.get("content", "")
+        if self._execution_mode == "plan":
+            return _plan_blocked_result("write_file", file_path, self._emitter)
 
         # Always write to filesystem first
         result = await super().execute(**kwargs)
@@ -180,15 +212,19 @@ class DBEditFile(EditFile):
         emitter: Optional[EventEmitter] = None,
         engine: Any = None,
         deferred_buffer: Any = None,
+        execution_mode: str = "agent",
     ):
         super().__init__(workspace, engine=engine)
         self._db = db_session
         self._session_id = session_id
         self._emitter = emitter
         self._deferred_buffer = deferred_buffer
+        self._execution_mode = _normalize_execution_mode(execution_mode)
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         file_path = kwargs.get("file_path", "")
+        if self._execution_mode == "plan":
+            return _plan_blocked_result("edit_file", file_path, self._emitter)
 
         # Execute the edit on filesystem
         result = await super().execute(**kwargs)
@@ -256,15 +292,19 @@ class DBMultiEditFile(MultiEditFile):
         session_id: str = "",
         emitter: Optional[EventEmitter] = None,
         deferred_buffer: Any = None,
+        execution_mode: str = "agent",
     ):
         super().__init__(workspace)
         self._db = db_session
         self._session_id = session_id
         self._emitter = emitter
         self._deferred_buffer = deferred_buffer
+        self._execution_mode = _normalize_execution_mode(execution_mode)
 
     async def execute(self, **kwargs: Any) -> ToolResult:
         file_path = kwargs.get("file_path", "")
+        if self._execution_mode == "plan":
+            return _plan_blocked_result("multi_edit_file", file_path, self._emitter)
 
         result = await super().execute(**kwargs)
         if result.is_error:

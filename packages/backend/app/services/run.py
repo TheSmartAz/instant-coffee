@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from ..utils.datetime import utcnow
 from ..db.models import Session as SessionModel
 from ..db.models import SessionRun
-from ..schemas.run import RunPhase, RunStatus
+from ..schemas.run import RunPhase, RunStatus, normalize_execution_mode
 
 
 class RunNotFoundError(ValueError):
@@ -49,6 +49,8 @@ class RunService:
         session_id: str,
         message: str,
         generate_now: bool = False,
+        execution_mode: Optional[str] = None,
+        approval_mode: str = "agent",
         style_reference: Optional[dict[str, Any]] = None,
         target_pages: Optional[list[str]] = None,
         trigger_source: str = "chat",
@@ -62,8 +64,13 @@ class RunService:
 
         run_id = uuid.uuid4().hex
         resolved_checkpoint_thread = checkpoint_thread or f"{session_id}:{run_id}"
+        normalized_execution_mode = normalize_execution_mode(
+            execution_mode if execution_mode is not None else approval_mode
+        )
         request_context = {
             "generate_now": bool(generate_now),
+            "execution_mode": normalized_execution_mode,
+            "approval_mode": normalized_execution_mode,
             "target_pages": list(target_pages or []),
         }
         if style_reference is not None:

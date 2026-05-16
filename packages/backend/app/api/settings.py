@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session as DbSession
 from ..config import get_model_catalog, get_settings, update_runtime_overrides
 from ..llm.model_catalog import get_model_entry
 from ..db.utils import get_db
+from .auth import require_admin_token
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -37,7 +38,8 @@ def _resolve_settings() -> dict:
     if settings.model and all(entry["id"] != settings.model for entry in available_models):
         available_models.append({"id": settings.model, "label": settings.model})
     return {
-        "api_key": settings.default_key or "",
+        "api_key": "",
+        "has_api_key": bool(settings.default_key or settings.openai_api_key),
         "model": settings.model,
         "temperature": settings.temperature,
         "max_tokens": settings.max_tokens,
@@ -53,7 +55,11 @@ def get_settings_endpoint(db: DbSession = Depends(_get_db_session)) -> dict:
 
 
 @router.put("")
-def update_settings(payload: SettingsPayload, db: DbSession = Depends(_get_db_session)) -> dict:
+def update_settings(
+    payload: SettingsPayload,
+    db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
+) -> dict:
     if hasattr(payload, "model_dump"):
         data = payload.model_dump(exclude_unset=True)
     else:  # pragma: no cover - pydantic v1 compatibility
@@ -69,9 +75,10 @@ def update_settings(payload: SettingsPayload, db: DbSession = Depends(_get_db_se
             overrides["default_base_url"] = model_option["base_url"]
             overrides["openai_base_url"] = model_option["base_url"]
 
-    if has_api_key:
-        overrides["default_key"] = api_key_value
-        overrides["openai_api_key"] = api_key_value
+    if "api_key" in data:
+        normalized_api_key = str(api_key_value or "").strip()
+        overrides["default_key"] = normalized_api_key if has_api_key else ""
+        overrides["openai_api_key"] = normalized_api_key if has_api_key else ""
 
     if "temperature" in data:
         overrides["temperature"] = data["temperature"]
@@ -97,6 +104,7 @@ class CleanupRequest(BaseModel):
 def run_cleanup(
     payload: CleanupRequest,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     from ..services.cleanup import CleanupPolicy, CleanupService
 

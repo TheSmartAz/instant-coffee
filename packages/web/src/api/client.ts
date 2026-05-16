@@ -10,6 +10,7 @@ import {
   request,
   validatedRequest,
   API_BASE,
+  ADMIN_TOKEN_STORAGE_KEY,
   classifyError,
   userFriendlyMessage,
 } from '@/api/client-core'
@@ -21,7 +22,7 @@ import {
 } from '@/api/domains/productDoc'
 
 export type { RequestError } from '@/api/client-core'
-export { API_BASE, buildUrl, classifyError, userFriendlyMessage }
+export { API_BASE, ADMIN_TOKEN_STORAGE_KEY, buildUrl, classifyError, userFriendlyMessage }
 
 const sessionsApi = createSessionsApi()
 const pagesApi = createPagesApi()
@@ -93,7 +94,12 @@ export const api = {
     streamUrl: (
       sessionId: string | undefined,
       message?: string,
-      options?: { interview?: boolean; generateNow?: boolean; threadId?: string }
+      options?: {
+        interview?: boolean
+        generateNow?: boolean
+        threadId?: string
+        executionMode?: import('../types').ExecutionMode
+      }
     ) => {
       const params = new URLSearchParams()
       if (sessionId) {
@@ -105,6 +111,10 @@ export const api = {
       }
       if (options?.generateNow !== undefined) {
         params.set('generate_now', options.generateNow ? 'true' : 'false')
+      }
+      if (options?.executionMode) {
+        params.set('execution_mode', options.executionMode)
+        params.set('approval_mode', options.executionMode)
       }
       if (options?.threadId) {
         params.set('thread_id', options.threadId)
@@ -254,9 +264,34 @@ export const api = {
       request<import('../types').SessionRunDetail>(
         `/api/runs/${encodeURIComponent(runId)}`
       ),
+    events: (runId: string, options?: { sinceSeq?: number; limit?: number }) =>
+      request<import('../types').RunEventsResponse>(
+        `/api/runs/${encodeURIComponent(runId)}/events${buildQuery({
+          since_seq: options?.sinceSeq,
+          limit: options?.limit,
+        })}`
+      ),
+    resolveApproval: (runId: string, approvalId: string, approved: boolean) =>
+      request<import('../types').SessionRunDetail>(
+        `/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ approved }),
+        }
+      ),
     cancel: (runId: string) =>
       request<import('../types').SessionRunDetail>(
         `/api/runs/${encodeURIComponent(runId)}/cancel`,
+        { method: 'POST' }
+      ),
+    verify: (runId: string) =>
+      request<import('../types').SessionRunDetail>(
+        `/api/runs/${encodeURIComponent(runId)}/verification`,
+        { method: 'POST' }
+      ),
+    fixVerification: (runId: string) =>
+      request<import('../types').SessionRunDetail>(
+        `/api/runs/${encodeURIComponent(runId)}/fix-verification`,
         { method: 'POST' }
       ),
   },

@@ -45,7 +45,7 @@ export interface StreamHandlerDeps {
   onPreview?: (payload: { html?: string; previewUrl?: string | null }) => void
 }
 
-const RUN_STATUS_EVENT_PREFIXES = ['run_', 'build_', 'verify_', 'tool_policy_']
+const RUN_STATUS_EVENT_PREFIXES = ['run_', 'build_', 'verify_', 'tool_policy_', 'shell_approval']
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -63,6 +63,11 @@ const getEventValue = (event: Record<string, unknown>, key: string) => {
 const getStringValue = (event: Record<string, unknown>, key: string) => {
   const value = getEventValue(event, key)
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+const getExecutionMode = (event: Record<string, unknown>) => {
+  const value = getEventValue(event, 'execution_mode') ?? getEventValue(event, 'executionMode') ?? getEventValue(event, 'approval_mode')
+  return value === 'plan' || value === 'agent' || value === 'auto' ? value : undefined
 }
 
 const getNumberValue = (event: Record<string, unknown>, key: string) => {
@@ -107,6 +112,7 @@ const getStatusStage = (eventType: string): ChatRunStatusStage | undefined => {
   if (eventType.startsWith('build_')) return 'build'
   if (eventType.startsWith('verify_')) return 'review'
   if (eventType.startsWith('tool_policy_')) return 'policy'
+  if (eventType.startsWith('shell_approval')) return 'policy'
   if (eventType.startsWith('run_')) return 'run'
   return undefined
 }
@@ -128,6 +134,8 @@ const inferStatus = (eventType: string) => {
     return 'completed'
   }
   if (eventType.endsWith('_waiting_input')) return 'waiting_input'
+  if (eventType === 'shell_approval') return 'waiting_input'
+  if (eventType === 'shell_approval_resolved') return 'completed'
   if (eventType.endsWith('_warn')) return 'warning'
   return 'running'
 }
@@ -176,10 +184,14 @@ const toRunStatus = (event: Record<string, unknown>): ChatRunStatus | null => {
     eventType,
     stage,
     runId: getStringValue(event, 'run_id'),
+    executionMode: getExecutionMode(event),
     phase: getStringValue(event, 'phase') ?? inferPhase(eventType),
     status: getStringValue(event, 'status') ?? inferStatus(eventType),
     message,
     error: getStringValue(event, 'error'),
+    approvalId: getStringValue(event, 'approval_id'),
+    command: getStringValue(event, 'command'),
+    reason: getStringValue(event, 'reason'),
     percent: getNumberValue(event, 'percent'),
     summary,
     updatedAt: getStringValue(event, 'timestamp'),
@@ -398,6 +410,28 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
             ...message,
             plan: normalized as Message['plan'],
           }))
+        }
+      }
+      if (payload.type === 'page_preview_ready') {
+        const messageId = deps.streamMessageIdRef.current
+        if (messageId) {
+          deps.updateMessageById(messageId, (message) => {
+            if (!message.plan?.length) return message
+            let changed = false
+            const plan = message.plan.map((step) => {
+              if (step.status === 'completed') return step
+              const label = step.step.toLowerCase()
+              const isGenerationStep =
+                label.includes('generate') ||
+                label.includes('index.html') ||
+                label.includes('html') ||
+                label.includes('output')
+              if (!isGenerationStep) return step
+              changed = true
+              return { ...step, status: 'completed' as const }
+            })
+            return changed ? { ...message, plan } : message
+          })
         }
       }
       // Handle plan_created events — attach tasks to current message
@@ -672,6 +706,19 @@ export function createStreamDataHandler(deps: StreamHandlerDeps) {
     }
 
     if (done) {
+      const messageId = deps.streamMessageIdRef.current
+      if (messageId) {
+        deps.updateMessageById(messageId, (message) => {
+          if (!message.plan?.length) return message
+          let changed = false
+          const plan = message.plan.map((step) => {
+            if (step.status !== 'in_progress') return step
+            changed = true
+            return { ...step, status: 'completed' as const }
+          })
+          return changed ? { ...message, plan } : message
+        })
+      }
       // Flush any remaining buffered deltas before signaling done
       deltaBuffer.destroy()
       if (action) {

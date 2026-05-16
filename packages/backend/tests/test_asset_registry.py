@@ -29,7 +29,7 @@ def test_register_asset_png_and_registry(tmp_path: Path) -> None:
     asset = asyncio.run(service.register_asset(file, AssetType.logo))
 
     assert asset.id.startswith("asset:logo_")
-    assert asset.url.startswith("/assets/session-123/")
+    assert asset.url.startswith("/assets/session-123/assets/")
     assert asset.width == 12
     assert asset.height == 8
 
@@ -39,6 +39,17 @@ def test_register_asset_png_and_registry(tmp_path: Path) -> None:
 
     asset_path = service.get_asset_path(asset.id)
     assert asset_path.exists()
+
+
+def test_asset_path_rejects_traversal(tmp_path: Path) -> None:
+    service = AssetRegistryService("session-123", base_dir=tmp_path)
+
+    try:
+        service.get_asset_path("../secret")
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("path traversal should be rejected")
 
 
 def test_register_asset_svg_dimensions(tmp_path: Path) -> None:

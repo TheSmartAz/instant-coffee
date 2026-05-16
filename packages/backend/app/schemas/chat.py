@@ -5,6 +5,13 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+def _normalize_execution_mode(value: Any = None) -> str:
+    mode = str(value or "agent")
+    if mode == "yolo":
+        return "auto"
+    return mode if mode in {"plan", "agent", "auto"} else "agent"
+
+
 class StyleReferenceInput(BaseModel):
     mode: Literal["full_mimic", "style_only"] = "full_mimic"
     images: List[str] = Field(default_factory=list)
@@ -25,8 +32,22 @@ class ChatRequest(BaseModel):
     target_pages: List[str] = Field(default_factory=list)
     style_reference: Optional[StyleReferenceInput] = None
     style_reference_mode: Optional[Literal["full_mimic", "style_only"]] = None
+    execution_mode: str = Field(default="agent", pattern="^(plan|agent|auto)$")
+    approval_mode: str = Field(default="agent", pattern="^(plan|agent|auto)$")
     resume: Optional[dict] = None
     mentioned_files: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_approval_mode(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        raw_mode = payload.get("execution_mode", payload.get("approval_mode", "agent"))
+        mode = _normalize_execution_mode(raw_mode)
+        payload["execution_mode"] = mode
+        payload["approval_mode"] = mode
+        return payload
 
     @model_validator(mode="after")
     def validate_image_count(self) -> "ChatRequest":
@@ -35,6 +56,8 @@ class ChatRequest(BaseModel):
             combined.extend(self.style_reference.images)
         if len(combined) > 3:
             raise ValueError("images must contain at most 3 items")
+        self.execution_mode = _normalize_execution_mode(self.execution_mode)
+        self.approval_mode = self.execution_mode
         return self
 
     model_config = ConfigDict(

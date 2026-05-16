@@ -1,5 +1,5 @@
 import { api, API_BASE, classifyError, userFriendlyMessage } from '@/api/client'
-import type { ChatRequestPayload, ChatAttachment, ChatStyleReference, ImageIntent } from '@/types'
+import type { ChatRequestPayload, ChatAttachment, ChatStyleReference, ExecutionMode, ImageIntent } from '@/types'
 
 type ConnectionState = 'idle' | 'connecting' | 'open' | 'error' | 'closed'
 
@@ -8,6 +8,9 @@ export interface SendMessageOptions {
   generateNow?: boolean
   attachments?: ChatAttachment[]
   imageIntent?: ImageIntent
+  executionMode?: ExecutionMode
+  /** @deprecated use executionMode. */
+  approvalMode?: ExecutionMode
   targetPages?: string[]
   mentionedFiles?: string[]
   styleReference?: ChatStyleReference
@@ -72,6 +75,9 @@ function buildPayload(
     message: content.trim(),
     interview: options?.triggerInterview,
     generate_now: options?.generateNow,
+    execution_mode: options?.executionMode ?? options?.approvalMode,
+    executionMode: options?.executionMode ?? options?.approvalMode,
+    approval_mode: options?.approvalMode ?? options?.executionMode,
   }
   if (options?.attachments?.length) {
     payload.images = options.attachments
@@ -106,6 +112,7 @@ export function createStreamConnection(deps: StreamConnectionDeps) {
         interview: options?.triggerInterview,
         generateNow: options?.generateNow,
         threadId: deps.threadIdRef.current ?? undefined,
+        executionMode: options?.executionMode ?? options?.approvalMode,
       })
     )
     deps.eventSourceRef.current = eventSource

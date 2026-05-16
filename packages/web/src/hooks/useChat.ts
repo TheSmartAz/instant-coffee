@@ -241,6 +241,7 @@ export function useChat({
         imageIntent: options?.imageIntent,
         targetPages: options?.targetPages,
         mentionedFiles: options?.mentionedFiles,
+        executionMode: options?.executionMode ?? options?.approvalMode,
         styleReference: options?.styleReference,
         resume: resumePayload,
       })

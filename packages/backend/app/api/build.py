@@ -27,6 +27,7 @@ from ..services.component_registry import ComponentRegistryService
 from ..services.page import PageService
 from ..services.product_doc import ProductDocService
 from ..services.state_store import StateStoreService
+from .auth import require_admin_token
 
 router = APIRouter(prefix="/api/sessions", tags=["build"])
 logger = logging.getLogger(__name__)
@@ -339,6 +340,7 @@ async def get_build_logs(
 async def trigger_build(
     session_id: str,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> BuildInfo:
     if db.get(SessionModel, session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -417,6 +419,7 @@ async def trigger_build(
 async def cancel_build(
     session_id: str,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> BuildInfo:
     if db.get(SessionModel, session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")

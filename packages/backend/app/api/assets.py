@@ -11,6 +11,7 @@ from ..db.models import Session as SessionModel
 from ..db.utils import get_db
 from ..schemas.asset import AssetRef, AssetRegistry, AssetType
 from ..services.asset_registry import AssetRegistryService
+from .auth import require_admin_token
 
 router = APIRouter(prefix="/api/sessions", tags=["assets"])
 
@@ -55,6 +56,7 @@ class AssetDetail(BaseModel):
 async def upload_asset(
     session_id: str,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
     asset_type: AssetType = Query(..., description="logo/style_ref/background/product_image"),
     file: UploadFile | None = File(None),
     files: list[UploadFile] | None = File(None),
@@ -128,7 +130,7 @@ async def get_asset_detail(
     )
     asset_ref = AssetRef(
         id=f"asset:{asset_stem}",
-        url=f"/assets/{session_id}/{asset_path.name}",
+        url=f"/assets/{session_id}/assets/{asset_path.name}",
         type=content_type or "application/octet-stream",
         width=meta.width if meta else None,
         height=meta.height if meta else None,
@@ -151,6 +153,7 @@ async def delete_asset(
     session_id: str,
     asset_id: str,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     if db.get(SessionModel, session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")

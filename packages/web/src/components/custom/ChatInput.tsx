@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Loader2, Mic, MicOff, Send, Upload } from 'lucide-react'
+import { ClipboardList, Loader2, Mic, MicOff, Send, ShieldCheck, Upload, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import type { AssetType, ChatAttachment, ChatStyleReference, ImageIntent, Page } from '@/types'
+import type { AssetType, ChatAttachment, ChatStyleReference, ExecutionMode, ImageIntent, Page } from '@/types'
 import { toast } from '@/hooks/use-toast'
 import { useSettings } from '@/hooks/useSettings'
 import { useMentionState } from '@/hooks/useMentionState'
@@ -42,6 +42,7 @@ export interface ChatInputProps {
       triggerInterview?: boolean
       attachments?: ChatAttachment[]
       imageIntent?: ImageIntent
+      executionMode?: ExecutionMode
       targetPages?: string[]
       mentionedFiles?: string[]
       styleReference?: ChatStyleReference
@@ -160,6 +161,7 @@ export function ChatInput({
   const [message, setMessage] = React.useState('')
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([])
   const [imageIntent, setImageIntent] = React.useState<ImageIntent>('asset')
+  const [executionMode, setExecutionMode] = React.useState<ExecutionMode>('agent')
   const [isProcessing, setIsProcessing] = React.useState(false)
   const [assetPickerOpen, setAssetPickerOpen] = React.useState(false)
   const [selectedAssetType, setSelectedAssetType] = React.useState<AssetType | null>(
@@ -273,6 +275,7 @@ export function ChatInput({
     onSend(trimmed, {
       attachments,
       imageIntent: attachments.length > 0 ? imageIntent : undefined,
+      executionMode,
       targetPages: targetPages.length > 0 ? targetPages : undefined,
       mentionedFiles: fileMentions.length > 0 ? fileMentions : undefined,
     })
@@ -286,6 +289,7 @@ export function ChatInput({
   }, [
     attachments,
     imageIntent,
+    executionMode,
     closeMention,
     disabled,
     message,
@@ -693,41 +697,74 @@ export function ChatInput({
         />
       </div>
       <div className="flex w-full items-center justify-between gap-2 text-xs text-muted-foreground">
-        <Select
-          value={settings.model ?? modelItems[0]?.id ?? ''}
-          onValueChange={handleModelChange}
-          disabled={disabled || isSettingsLoading || isSavingModel}
-        >
-          <SelectTrigger className="h-8 w-[180px] rounded-full text-xs">
-            <SelectValue placeholder="Select model" />
-          </SelectTrigger>
-          <SelectContent>
-            {modelItems.length > 0 ? (
-              modelItems.map((option) => (
-                <SelectItem
-                  key={option.id}
-                  value={option.id}
-                  textValue={option.label ?? option.id}
-                >
-                  <div className="flex items-center gap-2">
-                    {option.logo ? (
-                      <img
-                        src={option.logo}
-                        alt={`${option.label ?? option.id} logo`}
-                        className="h-4 w-4 shrink-0 rounded-sm object-contain"
-                      />
-                    ) : null}
-                    <span className="text-xs">{option.label ?? option.id}</span>
-                  </div>
+        <div className="flex min-w-0 items-center gap-2">
+          <Select
+            value={settings.model ?? modelItems[0]?.id ?? ''}
+            onValueChange={handleModelChange}
+            disabled={disabled || isSettingsLoading || isSavingModel}
+          >
+            <SelectTrigger className="h-8 w-[180px] rounded-full text-xs">
+              <SelectValue placeholder="Select model" />
+            </SelectTrigger>
+            <SelectContent>
+              {modelItems.length > 0 ? (
+                modelItems.map((option) => (
+                  <SelectItem
+                    key={option.id}
+                    value={option.id}
+                    textValue={option.label ?? option.id}
+                  >
+                    <div className="flex items-center gap-2">
+                      {option.logo ? (
+                        <img
+                          src={option.logo}
+                          alt={`${option.label ?? option.id} logo`}
+                          className="h-4 w-4 shrink-0 rounded-sm object-contain"
+                        />
+                      ) : null}
+                      <span className="text-xs">{option.label ?? option.id}</span>
+                    </div>
+                  </SelectItem>
+                ))
+              ) : (
+                <SelectItem value="default" disabled>
+                  No models configured
                 </SelectItem>
-              ))
-            ) : (
-              <SelectItem value="default" disabled>
-                No models configured
-              </SelectItem>
-            )}
-          </SelectContent>
-        </Select>
+              )}
+            </SelectContent>
+          </Select>
+          <div
+            className="flex h-8 shrink-0 items-center rounded-full border border-border bg-muted/30 p-0.5"
+            aria-label="Execution mode"
+          >
+            {[
+              { value: 'plan' as const, label: 'Plan only', icon: ClipboardList },
+              { value: 'agent' as const, label: 'Agent', icon: ShieldCheck },
+              { value: 'auto' as const, label: 'Auto', icon: Zap },
+            ].map((item) => {
+              const Icon = item.icon
+              const active = executionMode === item.value
+              return (
+                <button
+                  key={item.value}
+                  type="button"
+                  className={`inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] transition-colors ${
+                    active
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => setExecutionMode(item.value)}
+                  disabled={disabled}
+                  aria-pressed={active}
+                  title={`${item.label} execution mode`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {item.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
         <div className="flex items-center gap-1">
           <Button
             type="button"

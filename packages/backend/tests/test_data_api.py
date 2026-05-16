@@ -145,6 +145,7 @@ def _create_app(tmp_path, monkeypatch, store: FakeAppDataStore):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("DEFAULT_BASE_URL", "http://localhost")
     monkeypatch.setenv("DEFAULT_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
     refresh_settings()
     reset_database()
     init_db()
@@ -208,6 +209,7 @@ def test_data_api_tables_query_insert_delete_stats(tmp_path, monkeypatch):
         insert_resp = client.post(
             f"/api/sessions/{session_id}/data/Product",
             json={"name": "C", "price": 30},
+            headers={"X-Admin-Token": "admin-secret"},
         )
         assert insert_resp.status_code == 200
         assert insert_resp.json()["record"]["id"] == 3
@@ -218,11 +220,17 @@ def test_data_api_tables_query_insert_delete_stats(tmp_path, monkeypatch):
         assert stats_payload["count"] == 3
         assert stats_payload["numeric"]["price"]["sum"] == 60
 
-        delete_resp = client.delete(f"/api/sessions/{session_id}/data/Product/2")
+        delete_resp = client.delete(
+            f"/api/sessions/{session_id}/data/Product/2",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
         assert delete_resp.status_code == 200
         assert delete_resp.json()["deleted"] is True
 
-        delete_missing = client.delete(f"/api/sessions/{session_id}/data/Product/999")
+        delete_missing = client.delete(
+            f"/api/sessions/{session_id}/data/Product/999",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
         assert delete_missing.status_code == 404
 
 
@@ -249,6 +257,7 @@ def test_data_api_validation_and_errors(tmp_path, monkeypatch):
         bad_body = client.post(
             f"/api/sessions/{session_id}/data/Product",
             json=[{"name": "x"}],
+            headers={"X-Admin-Token": "admin-secret"},
         )
         assert bad_body.status_code == 422
 
@@ -264,7 +273,10 @@ def test_session_delete_triggers_app_data_schema_cleanup(tmp_path, monkeypatch):
     _seed_store(store, session_id)
 
     with TestClient(app) as client:
-        response = client.delete(f"/api/sessions/{session_id}")
+        response = client.delete(
+            f"/api/sessions/{session_id}",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
         assert response.status_code == 200
         assert response.json()["deleted"] is True
 

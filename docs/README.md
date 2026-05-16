@@ -14,6 +14,7 @@ Use these documents for the current implementation:
 - `e2e-test-plan.md`: current backend/agent/web test plan.
 - `frontend_design/project_page.md`: current ProjectPage layout and data flow.
 - `run-agent-delivery-split.md`: current review lanes for run-agent delivery changes.
+- `coding-agent-capabilities.md`: run-agent capability snapshot, workflow/execution mode model, YOLO compatibility, and safety boundaries.
 
 ## Package Guides
 

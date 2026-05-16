@@ -1,6 +1,7 @@
 import type { z } from 'zod'
 
 export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+export const ADMIN_TOKEN_STORAGE_KEY = 'instant-coffee:admin-token'
 
 export type RequestError = Error & {
   status?: number
@@ -99,6 +100,14 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   const headers = new Headers(options.headers)
   if (options.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
+  }
+  if (!headers.has('X-Admin-Token')) {
+    try {
+      const adminToken = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)?.trim()
+      if (adminToken) headers.set('X-Admin-Token', adminToken)
+    } catch {
+      // localStorage may be unavailable in restricted browser contexts.
+    }
   }
 
   let lastError: RequestError | null = null

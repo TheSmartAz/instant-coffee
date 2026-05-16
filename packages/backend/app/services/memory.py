@@ -23,7 +23,22 @@ MEMORY_KEYS = [
     "component_inventory",
     "design_decisions",
     "user_preferences",
+    "architecture_notes",
+    "interface_contracts",
+    "testing_notes",
 ]
+
+
+def _append_unique(existing: str, heading: str, values: set[str]) -> str:
+    if not values:
+        return existing
+    current = existing or ""
+    lines = [line.strip() for line in current.splitlines()]
+    additions = [item for item in sorted(values) if item and item not in current]
+    if not additions:
+        return current.strip()
+    section = [f"{heading}: {', '.join(additions)}"]
+    return "\n".join([*lines, *section]).strip() if lines else "\n".join(section)
 
 
 class ProjectMemoryService:
@@ -80,6 +95,15 @@ class ProjectMemoryService:
         parts.append("</project_memory>")
         return "\n".join(parts)
 
+    def build_memory_summary(self, session_id: str) -> dict[str, str]:
+        """Return known memory entries limited to standard agent context keys."""
+        memory = self.get_memory(session_id)
+        return {
+            key: value
+            for key, value in memory.items()
+            if key in MEMORY_KEYS and value.strip()
+        }
+
     def extract_and_save_decisions(
         self, session_id: str, tool_calls: list[dict]
     ) -> None:
@@ -94,12 +118,17 @@ class ProjectMemoryService:
         font_pattern = re.compile(
             r"font-family:\s*['\"]?([^;'\"]+)['\"]?", re.IGNORECASE
         )
+        file_path_pattern = re.compile(r'"file_path"\s*:\s*"([^"]+)"')
 
         colors = set()
         fonts = set()
+        architecture_notes: set[str] = set()
+        interface_contracts: set[str] = set()
+        testing_notes: set[str] = set()
 
         for tc in tool_calls:
             args_str = str(tc.get("arguments", ""))
+            tool_name = str(tc.get("name", ""))
             # Extract colors
             for match in color_pattern.findall(args_str):
                 colors.add(match)
@@ -108,17 +137,64 @@ class ProjectMemoryService:
                 font = match.strip().split(",")[0].strip(" '\"")
                 if font and len(font) < 50:
                     fonts.add(font)
+            for path in file_path_pattern.findall(args_str):
+                normalized = path.replace("\\", "/")
+                if normalized.endswith((".tsx", ".ts", ".jsx", ".js", ".py")):
+                    architecture_notes.add(f"Modified code path `{normalized}`")
+                if "/api/" in normalized or "/schemas/" in normalized or "/types/" in normalized:
+                    interface_contracts.add(f"Contract-bearing file `{normalized}`")
+                if "test" in normalized.lower() or normalized.endswith((".spec.ts", ".test.ts", ".test.mjs")):
+                    testing_notes.add(f"Test file `{normalized}`")
+            if tool_name in {"shell", "grep_files"}:
+                lower_args = args_str.lower()
+                if "pytest" in lower_args:
+                    testing_notes.add("Uses pytest for backend verification")
+                if "npm run lint" in lower_args:
+                    testing_notes.add("Uses npm run lint for web verification")
+                if "npm run build" in lower_args:
+                    testing_notes.add("Uses npm run build for web build verification")
 
         if colors:
-            existing = self.get_value(session_id, "style_preferences") or ""
-            color_str = ", ".join(sorted(colors))
-            if color_str not in existing:
-                new_val = f"{existing}\nColors: {color_str}" if existing else f"Colors: {color_str}"
-                self.save_memory(session_id, "style_preferences", new_val.strip())
+            updated = _append_unique(
+                self.get_value(session_id, "style_preferences") or "",
+                "Colors",
+                colors,
+            )
+            if updated:
+                self.save_memory(session_id, "style_preferences", updated)
 
         if fonts:
-            existing = self.get_value(session_id, "style_preferences") or ""
-            font_str = ", ".join(sorted(fonts))
-            if font_str not in existing:
-                new_val = f"{existing}\nFonts: {font_str}" if existing else f"Fonts: {font_str}"
-                self.save_memory(session_id, "style_preferences", new_val.strip())
+            updated = _append_unique(
+                self.get_value(session_id, "style_preferences") or "",
+                "Fonts",
+                fonts,
+            )
+            if updated:
+                self.save_memory(session_id, "style_preferences", updated)
+
+        if architecture_notes:
+            updated = _append_unique(
+                self.get_value(session_id, "architecture_notes") or "",
+                "Code paths",
+                architecture_notes,
+            )
+            if updated:
+                self.save_memory(session_id, "architecture_notes", updated)
+
+        if interface_contracts:
+            updated = _append_unique(
+                self.get_value(session_id, "interface_contracts") or "",
+                "Contracts",
+                interface_contracts,
+            )
+            if updated:
+                self.save_memory(session_id, "interface_contracts", updated)
+
+        if testing_notes:
+            updated = _append_unique(
+                self.get_value(session_id, "testing_notes") or "",
+                "Verification",
+                testing_notes,
+            )
+            if updated:
+                self.save_memory(session_id, "testing_notes", updated)

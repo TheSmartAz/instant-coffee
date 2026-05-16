@@ -1,6 +1,7 @@
 import uuid
 
 from app.db.database import Database
+from app.config import refresh_settings
 from app.db.migrations import init_db
 from app.db.models import Session as SessionModel
 from app.db.utils import get_db, transaction_scope
@@ -86,6 +87,40 @@ def test_file_tree_service_minimal_tree(tmp_path) -> None:
         paths = [node.path for node in tree]
         assert "index.html" in paths
         assert "assets" in paths
+
+
+def test_file_tree_service_exposes_non_html_workspace_files(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "files_workspace.db"
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("OUTPUT_DIR", str(output_dir))
+    refresh_settings()
+    database = Database(f"sqlite:///{db_path}")
+    init_db(database)
+
+    session_id = uuid.uuid4().hex
+    _create_session(database, session_id)
+    workspace = output_dir / session_id / "src"
+    workspace.mkdir(parents=True)
+    (workspace / "App.tsx").write_text("export function App() { return null }\n", encoding="utf-8")
+    (output_dir / session_id / "index.html").write_text("<html>generated</html>", encoding="utf-8")
+
+    with get_db(database) as session:
+        service = FileTreeService(session)
+        tree = service.get_tree(session_id)
+        workspace_node = next(node for node in tree if node.path == "workspace")
+        assert workspace_node.children is not None
+        src_node = next(node for node in workspace_node.children if node.path == "workspace/src")
+        assert src_node.children is not None
+        assert src_node.children[0].path == "workspace/src/App.tsx"
+
+        content = service.get_file_content(session_id, "workspace/src/App.tsx")
+        assert content is not None
+        assert content.language == "tsx"
+        assert "export function App" in content.content
+        assert service.get_file_content(session_id, "workspace/index.html") is None
+
+    monkeypatch.delenv("OUTPUT_DIR", raising=False)
+    refresh_settings()
 
 
 def test_file_tree_service_reads_dist_html_when_page_versions_empty(tmp_path) -> None:

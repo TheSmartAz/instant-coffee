@@ -6,8 +6,10 @@ from app.config import refresh_settings
 from app.db.database import reset_database
 from app.db.migrations import init_db
 from app.db.models import Session as SessionModel
+from app.db.models import SessionRun
 from app.db.models import SessionEvent, SessionEventSource
 from app.db.utils import get_db
+from app.services.memory import ProjectMemoryService
 
 
 def _create_app(tmp_path, monkeypatch, *, run_api_enabled: bool = True):
@@ -92,6 +94,8 @@ def test_runs_api_create_get_resume_cancel_and_idempotency(tmp_path, monkeypatch
         run_id = created["run_id"]
         assert created["session_id"] == session_id
         assert created["status"] == "queued"
+        assert created["execution_mode"] == "agent"
+        assert created["approval_mode"] == "agent"
 
         create_again = client.post(
             "/api/runs",
@@ -107,6 +111,8 @@ def test_runs_api_create_get_resume_cancel_and_idempotency(tmp_path, monkeypatch
         assert get_payload["run_id"] == run_id
         assert get_payload["created_at"]
         assert get_payload["updated_at"]
+        assert get_payload["execution_mode"] == "agent"
+        assert get_payload["approval_mode"] == "agent"
         assert get_payload["phase_history"] == []
 
         list_resp = client.get("/api/runs", params={"session_id": session_id})
@@ -166,6 +172,119 @@ def test_runs_api_create_conflicts_with_active_run(tmp_path, monkeypatch) -> Non
     assert "already running" in second.json()["detail"]
 
 
+def test_runs_api_normalizes_legacy_yolo_approval_mode(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "session_id": session_id,
+                "message": "build automatically",
+                "approval_mode": "yolo",
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["execution_mode"] == "auto"
+    assert payload["approval_mode"] == "auto"
+
+    with get_db() as session:
+        run = session.get(SessionRun, payload["run_id"])
+        assert run is not None
+        assert run.metrics["execution_mode"] == "auto"
+        assert run.metrics["approval_mode"] == "auto"
+
+
+def test_runs_api_create_response_includes_execution_mode(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "session_id": session_id,
+                "message": "plan the app before building",
+                "execution_mode": "plan",
+            },
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["execution_mode"] == "plan"
+    assert payload["approval_mode"] == "plan"
+
+
+def test_runs_api_resolves_live_shell_approval(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+    calls: list[tuple[str, str, bool]] = []
+
+    def fake_resolve(session: str, approval_id: str, approved: bool) -> bool:
+        calls.append((session, approval_id, approved))
+        return approval_id == "approval-1"
+
+    monkeypatch.setattr("app.api.runs.engine_registry.resolve_shell_approval", fake_resolve)
+
+    with get_db() as session:
+        session.add(
+            SessionRun(
+                id=run_id,
+                session_id=session_id,
+                trigger_source="chat",
+                status="running",
+                input_message="build",
+                metrics={"execution_mode": "agent", "approval_mode": "agent"},
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run_id}/approvals/approval-1",
+            json={"approved": True},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == run_id
+    assert calls == [(session_id, "approval-1", True)]
+
+
+def test_runs_api_rejects_missing_shell_approval(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+    monkeypatch.setattr(
+        "app.api.runs.engine_registry.resolve_shell_approval",
+        lambda _session_id, _approval_id, _approved: False,
+    )
+
+    with get_db() as session:
+        session.add(
+            SessionRun(
+                id=run_id,
+                session_id=session_id,
+                trigger_source="chat",
+                status="running",
+                input_message="build",
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run_id}/approvals/missing",
+            json={"approved": False},
+        )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
 def test_runs_api_list_total_counts_runs_beyond_limit(tmp_path, monkeypatch) -> None:
     app = _create_app(tmp_path, monkeypatch)
     session_id = _seed_session()
@@ -186,6 +305,532 @@ def test_runs_api_list_total_counts_runs_beyond_limit(tmp_path, monkeypatch) -> 
     list_payload = list_resp.json()
     assert list_payload["total"] == 2
     assert len(list_payload["runs"]) == 1
+
+
+def test_runs_api_exposes_structured_verification_evidence(tmp_path, monkeypatch) -> None:
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    with get_db() as session:
+        ProjectMemoryService(session).save_memory(
+            session_id,
+            "architecture_notes",
+            "Code paths: Modified code path `packages/backend/app/api/runs.py`",
+        )
+        ProjectMemoryService(session).save_memory(
+            session_id,
+            "testing_notes",
+            "Verification: Uses pytest for backend verification",
+        )
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build a landing page",
+            metrics={
+                "coordinator": {
+                    "current_phase": "done",
+                    "fix_attempts": 1,
+                    "phase_history": [
+                        {"phase": "build", "status": "completed"},
+                        {"phase": "review", "status": "completed"},
+                    ],
+                    "artifacts": {
+                        "build": {
+                            "status": "success",
+                            "pages": ["index.html"],
+                            "dist_path": "dist/test-session",
+                        },
+                        "review": {
+                            "verdict": "pass",
+                            "issues": [],
+                            "summary": {
+                                "error_count": 0,
+                                "warning_count": 0,
+                                "generated_pages": ["index"],
+                                "build_status": "success",
+                            },
+                        },
+                    },
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/runs/{run_id}")
+
+    assert response.status_code == 200
+    verification = response.json()["verification"]
+    assert verification["status"] == "passed"
+    assert verification["passed"] is True
+    assert [check["name"] for check in verification["checks"]] == ["build", "review"]
+    assert verification["checks"][0]["details"]["page_count"] == 1
+    assert verification["checks"][1]["details"]["issue_count"] == 0
+    assert "Build produced 1 page artifact(s)." in verification["evidence"]
+    payload = response.json()
+    assert payload["context"]["memory_keys"] == ["architecture_notes", "testing_notes"]
+    assert payload["context"]["memory"] == {}
+    assert payload["metrics"] is None
+    assert payload["latest_error"] is None
+    assert payload["artifacts"] == {
+        "build": {"status": "success", "pages": ["index.html"], "dist_path": "dist/test-session"}
+    }
+    commands = verification["profile"]["recommended_commands"]
+    assert commands[0]["command"] == "PYTHONPATH=.:../agent/src python -m pytest -q"
+    assert "test_memory_missing" not in verification["profile"]["risk_flags"]
+
+
+def test_runs_api_runs_verification_and_persists_result(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    class FakeVerificationRunner:
+        async def run_profile(self, profile):
+            from app.schemas.run import VerificationRunResult
+
+            assert profile["recommended_commands"]
+            return VerificationRunResult(
+                status="failed",
+                passed=False,
+                risk_flags=["verification_failed"],
+                commands=[
+                    {
+                        "name": "backend targeted tests",
+                        "command": "PYTHONPATH=.:../agent/src python -m pytest -q",
+                        "scope": "backend",
+                        "status": "failed",
+                        "exit_code": 1,
+                        "duration_ms": 12,
+                        "output_summary": "app/api/runs.py:42: AssertionError",
+                        "failures": [
+                            {
+                                "file": "app/api/runs.py",
+                                "line": 42,
+                                "message": "AssertionError",
+                                "source": "pytest",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+    monkeypatch.setattr("app.api.runs.VerificationRunner", lambda: FakeVerificationRunner())
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build",
+            metrics={"coordinator": {"artifacts": {"build": {"status": "success", "pages": ["index.html"]}}}},
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        blocked = client.post(f"/api/runs/{run_id}/verification")
+        response = client.post(
+            f"/api/runs/{run_id}/verification",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        detail = client.get(f"/api/runs/{run_id}")
+
+    assert blocked.status_code == 401
+    assert response.status_code == 200
+    last_run = response.json()["verification"]["last_run"]
+    assert last_run["status"] == "failed"
+    assert response.json()["verification"]["status"] == "failed"
+    assert response.json()["verification"]["passed"] is False
+    assert last_run["commands"][0]["output_summary"] == ""
+    assert last_run["commands"][0]["failures"][0]["file"] == "app/api/runs.py"
+    assert "message" not in last_run["commands"][0]["failures"][0]
+    audit = response.json()["verification"]["audit_trail"]
+    audit_types = [event["type"] for event in audit]
+    assert "verification_started" in audit_types
+    assert "verification_completed" in audit_types
+    assert audit_types.index("verification_started") < audit_types.index("verification_completed")
+    completed_event = audit[audit_types.index("verification_completed")]
+    assert completed_event["failure_count"] == 1
+    actions = response.json()["verification"]["action_audit_trail"]
+    assert [event["type"] for event in actions] == [
+        "verification_run_started",
+        "verification_command",
+    ]
+    assert actions[-1]["category"] == "shell"
+    assert actions[-1]["command"] == "PYTHONPATH=.:../agent/src python -m pytest -q"
+    assert "AssertionError" not in str(actions)
+    assert detail.json()["verification"]["last_run"]["risk_flags"] == ["verification_failed"]
+
+
+def test_runs_api_runs_visual_verification_when_build_dist_exists(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+    dist_path = str(tmp_path / "dist" / session_id)
+
+    class FakeVerificationRunner:
+        async def run_profile(self, profile):
+            from app.schemas.run import VerificationRunResult
+
+            return VerificationRunResult(status="passed", passed=True, commands=[])
+
+    class FakeVisualVerificationService:
+        async def verify_dist(self, *, session_id, dist_path, page="index.html"):
+            return {
+                "status": "passed",
+                "passed": True,
+                "quality_score": 95,
+                "page": page,
+                "screenshot_path": f"{dist_path}/visual-check/mobile.png",
+                "checks": [{"name": "page_loads", "passed": True}],
+                "errors": [],
+                "warnings": [],
+            }
+
+    monkeypatch.setattr("app.api.runs.VerificationRunner", lambda: FakeVerificationRunner())
+    monkeypatch.setattr("app.api.runs.VisualVerificationService", lambda: FakeVisualVerificationService())
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build",
+            metrics={
+                "coordinator": {
+                    "artifacts": {
+                        "build": {
+                            "status": "success",
+                            "pages": ["index.html"],
+                            "dist_path": dist_path,
+                        }
+                    }
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run_id}/verification",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    visual_check = next(check for check in payload["verification"]["checks"] if check["name"] == "visual")
+    assert visual_check["passed"] is True
+    assert visual_check["details"]["quality_score"] == 95
+    assert "Visual quality score: 95/100." in payload["verification"]["evidence"]
+    assert payload["artifacts"]["visual_verification"]["quality_score"] == 95
+    assert payload["verification"]["audit_trail"][-1]["type"] == "visual_verification_completed"
+
+
+def test_runs_api_fix_verification_records_attempt_and_reruns(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    first_verification = {
+        "status": "failed",
+        "passed": False,
+        "risk_flags": ["verification_failed"],
+        "commands": [
+            {
+                "name": "backend targeted tests",
+                "command": "PYTHONPATH=.:../agent/src python -m pytest -q",
+                "scope": "backend",
+                "status": "failed",
+                "exit_code": 1,
+                "duration_ms": 12,
+                "output_summary": "app/api/runs.py:42: AssertionError",
+                "failures": [
+                    {
+                        "file": "app/api/runs.py",
+                        "line": 42,
+                        "message": "AssertionError",
+                        "source": "pytest",
+                    }
+                ],
+            }
+        ],
+    }
+
+    class FakeVerificationRunner:
+        async def run_profile(self, profile):
+            from app.schemas.run import VerificationRunResult
+
+            assert profile["recommended_commands"]
+            return VerificationRunResult(
+                status="passed",
+                passed=True,
+                risk_flags=[],
+                commands=[
+                    {
+                        "name": "backend targeted tests",
+                        "command": "PYTHONPATH=.:../agent/src python -m pytest -q",
+                        "scope": "backend",
+                        "status": "passed",
+                        "exit_code": 0,
+                        "duration_ms": 10,
+                        "output_summary": "1 passed",
+                        "failures": [],
+                    }
+                ],
+            )
+
+    async def fake_execute_verification_fix(*, db, run, prompt):
+        assert "app/api/runs.py:42" in prompt
+        return {"message": "fixed verification failure"}
+
+    worktree_snapshots = [
+        {"packages/backend/app/api/runs.py"},
+        {
+            "packages/backend/app/api/runs.py",
+            "packages/backend/app/services/change_summary.py",
+        },
+    ]
+
+    monkeypatch.setattr("app.api.runs.VerificationRunner", lambda: FakeVerificationRunner())
+    monkeypatch.setattr("app.api.runs._execute_verification_fix", fake_execute_verification_fix)
+    monkeypatch.setattr("app.api.runs.capture_worktree_files", lambda: worktree_snapshots.pop(0))
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build",
+            metrics={
+                "coordinator": {
+                    "artifacts": {
+                        "build": {"status": "success", "pages": ["index.html"]},
+                        "verification_run": first_verification,
+                    }
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        blocked = client.post(f"/api/runs/{run_id}/fix-verification")
+        response = client.post(
+            f"/api/runs/{run_id}/fix-verification",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+        detail = client.get(f"/api/runs/{run_id}")
+
+    assert blocked.status_code == 401
+    assert response.status_code == 200
+    verification = response.json()["verification"]
+    assert verification["last_run"]["status"] == "passed"
+    assert verification["fix_attempts"][0]["status"] == "passed"
+    assert verification["fix_attempts"][0]["prompt"] == ""
+    assert verification["fix_attempts"][0]["engine"] is None
+    assert verification["fix_attempts"][0]["change_summary"]["changed_files"] == [
+        "packages/backend/app/services/change_summary.py"
+    ]
+    assert verification["fix_attempts"][0]["change_summary"]["risk_level"] == "medium"
+    assert verification["fix_attempts"][0]["change_summary"]["verification_status"] == "passed"
+    assert "diff" not in verification["fix_attempts"][0]["change_summary"]
+    actions = verification["action_audit_trail"]
+    assert [event["type"] for event in actions] == [
+        "verification_fix_prompt",
+        "verification_fix_started",
+        "verification_command",
+        "verification_fix_change_summary",
+        "verification_fix_completed",
+    ]
+    assert actions[0]["category"] == "agent_prompt"
+    assert actions[0]["summary"] == "Prepared automatic fix prompt with 1 failure item(s)."
+    assert actions[-2]["category"] == "edit"
+    assert actions[-2]["file_count"] == 1
+    assert "app/api/runs.py:42" not in str(actions)
+    assert "fixed verification failure" not in str(actions)
+    assert [event["type"] for event in verification["audit_trail"]] == [
+        "verification_fix_started",
+        "verification_fix_completed",
+    ]
+    assert detail.json()["fix_attempts"] == 1
+
+
+def test_runs_api_fix_verification_persists_error_attempt(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    async def failing_execute_verification_fix(*, db, run, prompt):
+        raise RuntimeError("agent crashed")
+
+    monkeypatch.setattr("app.api.runs._execute_verification_fix", failing_execute_verification_fix)
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build",
+            metrics={
+                "coordinator": {
+                    "artifacts": {
+                        "build": {"status": "success", "pages": ["index.html"]},
+                        "verification_run": {
+                            "status": "failed",
+                            "passed": False,
+                            "commands": [
+                                {
+                                    "name": "backend targeted tests",
+                                    "command": "PYTHONPATH=.:../agent/src python -m pytest -q",
+                                    "scope": "backend",
+                                    "status": "failed",
+                                    "output_summary": "failure",
+                                    "failures": [{"message": "failure", "source": "pytest"}],
+                                }
+                            ],
+                        },
+                    }
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run_id}/fix-verification",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    attempt = response.json()["verification"]["fix_attempts"][0]
+    assert attempt["status"] == "error"
+    assert "agent crashed" in attempt["error"]
+    assert attempt["prompt"] == ""
+    assert attempt["started_at"]
+    assert attempt["completed_at"]
+    assert response.json()["verification"]["audit_trail"][-1]["status"] == "error"
+
+
+def test_runs_api_fix_verification_rejects_concurrent_attempt(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    from app.api import runs as runs_api
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build",
+            metrics={
+                "coordinator": {
+                    "artifacts": {
+                        "verification_run": {
+                            "status": "failed",
+                            "passed": False,
+                            "commands": [],
+                        }
+                    }
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    assert runs_api._try_acquire_verification_fix(run_id) is True
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/runs/{run_id}/fix-verification",
+                headers={"X-Admin-Token": "admin-secret"},
+            )
+    finally:
+        runs_api._release_verification_fix(run_id)
+
+    assert response.status_code == 409
+    assert "already running" in response.json()["detail"]
+
+
+def test_runs_api_fix_verification_recovers_stale_running_attempt(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    app = _create_app(tmp_path, monkeypatch)
+    session_id = _seed_session()
+    run_id = uuid.uuid4().hex
+
+    class FakeVerificationRunner:
+        async def run_profile(self, profile):
+            from app.schemas.run import VerificationRunResult
+
+            return VerificationRunResult(status="passed", passed=True, commands=[])
+
+    async def fake_execute_verification_fix(*, db, run, prompt):
+        return {"message": "fixed after stale recovery"}
+
+    monkeypatch.setattr("app.api.runs.VerificationRunner", lambda: FakeVerificationRunner())
+    monkeypatch.setattr("app.api.runs._execute_verification_fix", fake_execute_verification_fix)
+
+    with get_db() as session:
+        run = SessionRun(
+            id=run_id,
+            session_id=session_id,
+            trigger_source="chat",
+            status="completed",
+            input_message="build",
+            metrics={
+                "coordinator": {
+                    "artifacts": {
+                        "verification_run": {
+                            "status": "failed",
+                            "passed": False,
+                            "commands": [],
+                        },
+                        "verification_fix_attempts": [
+                            {
+                                "attempt": 1,
+                                "status": "running",
+                                "prompt": "old prompt",
+                                "failures": [],
+                                "started_at": "2020-01-01T00:00:00Z",
+                            }
+                        ],
+                    }
+                }
+            },
+        )
+        session.add(run)
+        session.commit()
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run_id}/fix-verification",
+            headers={"X-Admin-Token": "admin-secret"},
+        )
+
+    assert response.status_code == 200
+    attempts = response.json()["verification"]["fix_attempts"]
+    assert attempts[0]["status"] == "stale_error"
+    assert attempts[1]["status"] == "passed"
+    event_types = [event["type"] for event in response.json()["verification"]["audit_trail"]]
+    assert "verification_fix_recovered" in event_types
 
 
 def test_runs_api_resume_idempotency(tmp_path, monkeypatch) -> None:

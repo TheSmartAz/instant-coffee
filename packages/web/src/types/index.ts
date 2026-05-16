@@ -25,10 +25,14 @@ export interface ChatRunStatus {
   eventType: string
   stage: ChatRunStatusStage
   runId?: string
+  executionMode?: ExecutionMode
   phase?: string
   status?: string
   message?: string
   error?: string
+  approvalId?: string
+  command?: string
+  reason?: string
   percent?: number
   summary?: Record<string, unknown>
   updatedAt?: string
@@ -50,10 +54,101 @@ export interface RunReviewIssue {
   details?: Record<string, unknown>
 }
 
+export interface RunVerificationCheck {
+  name: string
+  status: string
+  passed?: boolean | null
+  details?: Record<string, unknown>
+}
+
+export interface RunVerification {
+  status: string
+  passed?: boolean | null
+  checks: RunVerificationCheck[]
+  evidence: string[]
+  summary: Record<string, unknown>
+  profile?: {
+    recommended_commands?: Array<Record<string, unknown>>
+    risk_flags?: string[]
+    memory_keys?: string[]
+  }
+  last_run?: {
+    status: string
+    passed: boolean
+    commands: Array<{
+      name: string
+      command: string
+      scope: string
+      status: string
+      exit_code?: number | null
+      duration_ms: number
+      output_summary: string
+      failures: Array<Record<string, unknown>>
+    }>
+    risk_flags: string[]
+    started_at?: string | null
+    completed_at?: string | null
+  } | null
+  fix_attempts?: Array<{
+    attempt: number
+    status: string
+    prompt: string
+    failures: Array<Record<string, unknown>>
+    engine?: Record<string, unknown> | null
+    verification?: RunVerification['last_run']
+    change_summary?: {
+      status: string
+      changed_files: string[]
+      file_count: number
+      risk_level: 'low' | 'medium' | 'high' | string
+      risk_flags?: string[]
+      verification_status?: string | null
+      captured_at?: string | null
+    } | null
+    error?: string | null
+    started_at?: string | null
+    completed_at?: string | null
+  }>
+  audit_trail?: Array<{
+    type: string
+    status: string
+    message?: string
+    attempt?: number | null
+    command_count?: number | null
+    failure_count?: number | null
+    risk_flags?: string[]
+    at?: string | null
+  }>
+  action_audit_trail?: Array<{
+    type: string
+    category: string
+    status: string
+    summary?: string
+    attempt?: number | null
+    command?: string | null
+    scope?: string | null
+    exit_code?: number | null
+    duration_ms?: number | null
+    file_count?: number | null
+    risk_level?: string | null
+    risk_flags?: string[]
+    at?: string | null
+  }>
+}
+
+export interface RunContextEvidence {
+  memory_keys: string[]
+  memory: Record<string, string>
+}
+
 export interface SessionRunDetail {
   run_id: string
   session_id: string
   status: RunStatusValue
+  execution_mode?: ExecutionMode | null
+  executionMode?: ExecutionMode | null
+  /** @deprecated use execution_mode or executionMode. */
+  approval_mode?: ApprovalMode | null
   created_at?: string | null
   updated_at?: string | null
   started_at?: string | null
@@ -72,12 +167,32 @@ export interface SessionRunDetail {
   last_review?: Record<string, unknown> | null
   review_summary?: Record<string, unknown> | null
   review_issues?: RunReviewIssue[]
+  verification?: RunVerification
+  context?: RunContextEvidence
   heartbeat_at?: string | null
 }
 
 export interface SessionRunListResponse {
   runs: SessionRunDetail[]
   total: number
+}
+
+export interface RunEventResponse {
+  id: number
+  session_id: string
+  run_id?: string | null
+  event_id?: string | null
+  seq: number
+  type: string
+  payload: Record<string, unknown>
+  source: string
+  created_at: string
+}
+
+export interface RunEventsResponse {
+  events: RunEventResponse[]
+  last_seq: number
+  has_more: boolean
 }
 
 export type MessageSegment =
@@ -229,6 +344,7 @@ export interface Thread {
 
 export interface Settings {
   apiKey?: string
+  hasApiKey?: boolean
   model?: string
   temperature?: number
   maxTokens?: number
@@ -315,6 +431,8 @@ export interface ChatStyleReference {
 }
 
 export type ImageIntent = 'asset' | 'style_reference' | 'layout_reference' | 'screenshot'
+export type ExecutionMode = 'plan' | 'agent' | 'auto'
+export type ApprovalMode = ExecutionMode
 
 export interface ChatRequestPayload {
   session_id?: string
@@ -324,6 +442,10 @@ export interface ChatRequestPayload {
   generate_now?: boolean
   images?: string[]
   image_intent?: ImageIntent
+  execution_mode?: ExecutionMode
+  executionMode?: ExecutionMode
+  /** @deprecated use execution_mode for API payloads and executionMode in UI code. */
+  approval_mode?: ApprovalMode
   target_pages?: string[]
   mentioned_files?: string[]
   style_reference?: ChatStyleReference
@@ -559,6 +681,7 @@ export interface SessionRevertResponse {
 
 export interface SettingsResponse {
   api_key: string
+  has_api_key?: boolean
   model: string | null
   temperature: number | null
   max_tokens: number | null

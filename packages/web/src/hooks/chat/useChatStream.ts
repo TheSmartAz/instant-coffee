@@ -287,6 +287,9 @@ export function useChatStream({
             message: content.trim(),
             interview: options?.triggerInterview,
             generate_now: options?.generateNow,
+            execution_mode: options?.executionMode ?? options?.approvalMode,
+            executionMode: options?.executionMode ?? options?.approvalMode,
+            approval_mode: options?.approvalMode ?? options?.executionMode,
           }
           if (options?.attachments?.length) {
             payload.images = options.attachments

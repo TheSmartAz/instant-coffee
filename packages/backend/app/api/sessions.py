@@ -25,6 +25,7 @@ from ..schemas.session_metadata import SessionMetadata, SessionMetadataUpdate
 from ..services.version import VersionService
 from ..utils.html import EMPTY_PREVIEW_HTML, inject_hide_scrollbar_style, strip_prompt_artifacts
 from ..utils.style import build_global_style_css
+from .auth import require_admin_token
 from .utils import build_preview_url
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -277,6 +278,7 @@ def clear_messages(
     session_id: str,
     thread_id: Optional[str] = Query(None),
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     session = db.get(SessionModel, session_id)
     if session is None:
@@ -291,6 +293,7 @@ def clear_messages(
 def delete_session(
     session_id: str,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     service = SessionService(db)
     deleted = service.delete_session(session_id)
@@ -326,6 +329,7 @@ def update_session_metadata(
     session_id: str,
     payload: SessionMetadataUpdate,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> SessionMetadata:
     service = StateStoreService(db)
     metadata = service.update_metadata(session_id, payload)
@@ -339,6 +343,7 @@ def update_session_metadata(
 def clear_session_metadata(
     session_id: str,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     service = StateStoreService(db)
     cleared = service.clear_metadata(session_id)
@@ -432,6 +437,7 @@ def rollback_session(
     payload: VersionRollbackRequest,
     request: Request,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     index_page = _get_index_page(db, session_id)
     if index_page is not None:
@@ -462,6 +468,7 @@ def revert_session_version(
     version_id: int,
     request: Request,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     index_page = _get_index_page(db, session_id)
     if index_page is not None:
@@ -528,6 +535,7 @@ def create_thread(
     session_id: str,
     payload: CreateThreadRequest,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     session = db.get(SessionModel, session_id)
     if session is None:
@@ -550,6 +558,7 @@ def delete_thread(
     session_id: str,
     thread_id: str,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     session = db.get(SessionModel, session_id)
     if session is None:
@@ -576,6 +585,7 @@ def update_thread(
     thread_id: str,
     payload: UpdateThreadRequest,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict:
     session = db.get(SessionModel, session_id)
     if session is None:

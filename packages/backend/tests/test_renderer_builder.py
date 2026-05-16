@@ -73,3 +73,40 @@ def test_react_ssg_builder_builds_with_mocked_npm(tmp_path: Path, monkeypatch) -
     assert builder.dist_dir.exists()
     assert (builder.dist_dir / "index.html").exists()
     assert "index.html" in result["pages"]
+
+
+def test_react_ssg_builder_builds_from_workspace_source(tmp_path: Path, monkeypatch) -> None:
+    session_id = "workspace-source-session"
+    base_dir = tmp_path / "sessions"
+    source_dir = tmp_path / "workspace"
+    (source_dir / "src").mkdir(parents=True)
+    (source_dir / "src" / "App.tsx").write_text(
+        "export default function App() { return <main>Workspace source</main> }\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_command(self, command, stage):
+        if stage == "npm_build":
+            assert (self.work_dir / "src" / "App.tsx").read_text(encoding="utf-8").find(
+                "Workspace source"
+            ) >= 0
+            manifest = self.work_dir / "src" / "data" / "prerender-manifest.json"
+            assert manifest.exists()
+            dist_dir = self.work_dir / "dist"
+            dist_dir.mkdir(parents=True, exist_ok=True)
+            (dist_dir / "index.html").write_text("<html>workspace</html>", encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(ReactSSGBuilder, "_run_command", fake_run_command)
+
+    builder = ReactSSGBuilder(session_id, base_dir=base_dir)
+    result = asyncio.run(
+        builder.build_from_workspace_source(
+            source_dir,
+            pages=[{"slug": "index", "title": "Workspace"}],
+        )
+    )
+
+    assert result["status"] == "success"
+    assert result["source_mode"] == "workspace"
+    assert (builder.dist_dir / "index.html").exists()

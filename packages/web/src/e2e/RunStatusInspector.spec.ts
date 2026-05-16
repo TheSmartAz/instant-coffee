@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import { test, expect, type Page } from 'playwright/test'
-import type { SessionRunDetail } from '../types'
+import type { RunEventResponse, SessionRunDetail } from '../types'
 
 const now = '2026-05-13T10:00:00.000Z'
 const sessionId = 'run-ui-session'
@@ -124,6 +124,8 @@ async function setupProjectMocks(
   options: {
     getRun: () => SessionRunDetail
     onCancel?: () => SessionRunDetail
+    onResolveApproval?: (approved: boolean) => SessionRunDetail
+    runEvents?: RunEventResponse[]
     chatEvents?: unknown[]
     build?: unknown
   }
@@ -192,6 +194,14 @@ async function setupProjectMocks(
   await page.route(/\/api\/runs\?/, (route) =>
     route.fulfill(json({ runs: [options.getRun()], total: 1 }))
   )
+  await page.route(`**/api/runs/${runId}/events**`, (route) =>
+    route.fulfill(json({ events: options.runEvents ?? [], last_seq: options.runEvents?.length ?? 0, has_more: false }))
+  )
+  await page.route(`**/api/runs/${runId}/approvals/*`, async (route) => {
+    const body = route.request().postDataJSON() as { approved?: boolean }
+    const detail = options.onResolveApproval?.(Boolean(body.approved)) ?? options.getRun()
+    return route.fulfill(json(detail))
+  })
   await page.route(`**/api/runs/${runId}`, (route) =>
     route.fulfill(json(options.getRun()))
   )
@@ -205,6 +215,36 @@ async function setupProjectMocks(
 }
 
 test.describe('Run status and inspector', () => {
+  const shellApprovalEvent: RunEventResponse = {
+    id: 1,
+    session_id: sessionId,
+    seq: 1,
+    type: 'shell_approval',
+    run_id: runId,
+    source: 'engine',
+    created_at: now,
+    payload: {
+      approval_id: 'approval-1',
+      command: 'rm -rf ./dist --force',
+      reason: 'Recursive force delete on sensitive path',
+      execution_mode: 'agent',
+    },
+  }
+
+  const shellApprovalResolvedEvent: RunEventResponse = {
+    id: 2,
+    session_id: sessionId,
+    seq: 2,
+    type: 'shell_approval_resolved',
+    run_id: runId,
+    source: 'engine',
+    created_at: now,
+    payload: {
+      approval_id: 'approval-1',
+      approved: true,
+    },
+  }
+
   test('updates run status as SSE events arrive incrementally', async ({ page }) => {
     await installEventSourceMock(page)
     await setupProjectMocks(page, {
@@ -286,6 +326,110 @@ test.describe('Run status and inspector', () => {
     await page.evaluate(() =>
       (window as unknown as { __runSse: { emit: (data: unknown) => void } }).__runSse.emit('[DONE]'),
     )
+  })
+
+  test('shows streamed shell approval and posts approval decision', async ({ page }) => {
+    let approvedPayload: boolean | null = null
+    await installEventSourceMock(page)
+    await setupProjectMocks(page, {
+      getRun: () =>
+        runDetail({
+          status: 'waiting_input',
+          finished_at: null,
+          latest_error: null,
+          waiting_reason: 'Shell command approval required',
+          current_phase: 'implement',
+          phase_status: 'waiting_input',
+          execution_mode: 'agent',
+          review_summary: null,
+          review_issues: [],
+        }),
+      onResolveApproval: (approved) => {
+        approvedPayload = approved
+        return runDetail({
+          status: 'running',
+          finished_at: null,
+          latest_error: null,
+          current_phase: 'implement',
+          phase_status: 'running',
+          execution_mode: 'agent',
+          review_summary: null,
+          review_issues: [],
+        })
+      },
+      chatEvents: [],
+    })
+
+    await page.goto(`/project/${sessionId}`)
+    await page.getByTestId('chat-textarea').fill('Build a run lifecycle test page')
+    await page.getByRole('button', { name: 'Send message' }).click()
+
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __runSse: { count: () => number } }).__runSse.count()))
+      .toBe(1)
+
+    await page.evaluate(
+      (event) =>
+        (window as unknown as { __runSse: { emit: (data: unknown) => void } }).__runSse.emit(event),
+      shellApprovalEvent,
+    )
+
+    await expect(page.getByTestId('run-status-strip')).toContainText('waiting input')
+    await expect(page.getByTestId('shell-approval-card')).toBeVisible()
+    await expect(page.getByTestId('shell-approval-card')).toContainText('Recursive force delete on sensitive path')
+    await expect(page.getByTestId('shell-approval-card')).toContainText('rm -rf ./dist --force')
+
+    await page.getByTestId('shell-approval-approve').click()
+
+    await expect.poll(() => approvedPayload).toBe(true)
+    await expect(page.getByTestId('run-inspector')).toContainText('running')
+  })
+
+  test('replays unresolved shell approval from run events', async ({ page }) => {
+    await setupProjectMocks(page, {
+      getRun: () =>
+        runDetail({
+          status: 'waiting_input',
+          finished_at: null,
+          latest_error: null,
+          waiting_reason: 'Shell command approval required',
+          current_phase: 'implement',
+          phase_status: 'waiting_input',
+          execution_mode: 'agent',
+          review_summary: null,
+          review_issues: [],
+        }),
+      runEvents: [shellApprovalEvent],
+    })
+
+    await page.goto(`/project/${sessionId}`)
+
+    await expect(page.getByTestId('shell-approval-card')).toBeVisible()
+    await expect(page.getByTestId('shell-approval-card')).toContainText('Recursive force delete on sensitive path')
+    await expect(page.getByTestId('shell-approval-card')).toContainText('rm -rf ./dist --force')
+  })
+
+  test('does not replay resolved shell approval from run events', async ({ page }) => {
+    await setupProjectMocks(page, {
+      getRun: () =>
+        runDetail({
+          status: 'waiting_input',
+          finished_at: null,
+          latest_error: null,
+          waiting_reason: 'Shell command approval required',
+          current_phase: 'implement',
+          phase_status: 'waiting_input',
+          execution_mode: 'agent',
+          review_summary: null,
+          review_issues: [],
+        }),
+      runEvents: [shellApprovalEvent, shellApprovalResolvedEvent],
+    })
+
+    await page.goto(`/project/${sessionId}`)
+
+    await expect(page.getByTestId('run-inspector')).toBeVisible()
+    await expect(page.getByTestId('shell-approval-card')).toHaveCount(0)
   })
 
   test('renders streamed run status and inspector details', async ({ page }) => {

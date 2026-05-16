@@ -22,7 +22,7 @@ from ..db.models import Session as SessionModel
 from ..events.emitter import EventEmitter
 from ..events.models import DoneEvent, ErrorEvent, run_lifecycle_event
 from ..events.types import EventType
-from ..schemas.run import RunPhase, RunStatus
+from ..schemas.run import RunPhase, RunStatus, normalize_execution_mode
 from ..services.message import MessageService
 from ..services.run import RunNotFoundError, RunService, RunStateConflictError
 
@@ -74,6 +74,8 @@ class EngineOrchestrator:
         )
         self._engine = None
         self.thread_id: str | None = None
+        self._execution_mode = "agent"
+        self._bridge: EventBridge | None = None
         self._sub_agent_sessions: list[DbSession] = []
         self._deferred_buffer = DeferredPersistenceBuffer()
 
@@ -84,6 +86,12 @@ class EngineOrchestrator:
     def resolve_answer(self, answer_payload: Any) -> bool:
         """Route a user answer to the pending ask_user call."""
         return self._web_user_io.resolve_answer(answer_payload)
+
+    def resolve_shell_approval(self, approval_id: str, approved: bool) -> bool:
+        """Route a shell approval response to the active event bridge."""
+        if self._bridge is None:
+            return False
+        return self._bridge.resolve_shell_approval(approval_id, approved)
 
     def _mark_run_waiting_input(self, batch_id: str, questions: list[dict[str, Any]]) -> None:
         run_id = self.event_emitter.run_id
@@ -272,6 +280,7 @@ class EngineOrchestrator:
                 emitter=self.event_emitter,
                 engine=sub_engine,
                 deferred_buffer=self._deferred_buffer,
+                execution_mode=self._execution_mode,
             ),
             DBEditFile(
                 workspace=ws,
@@ -280,6 +289,7 @@ class EngineOrchestrator:
                 emitter=self.event_emitter,
                 engine=sub_engine,
                 deferred_buffer=self._deferred_buffer,
+                execution_mode=self._execution_mode,
             ),
         ]
 
@@ -292,7 +302,7 @@ class EngineOrchestrator:
         from ic.tools.skill import ExecuteSkill
 
         config = backend_settings_to_agent_config(self.settings)
-        bridge = EventBridge(self.event_emitter, self.session.id)
+        bridge = EventBridge(self.event_emitter, self.session.id, execution_mode=self._execution_mode)
 
         # Load existing session state for the system prompt
         product_doc_content = self._load_product_doc_content()
@@ -304,6 +314,7 @@ class EngineOrchestrator:
             product_doc_content=product_doc_content,
             pages=pages,
             memory_context=memory_context,
+            execution_mode=self._execution_mode,
         )
 
         ws_path = Path(workspace)
@@ -317,13 +328,14 @@ class EngineOrchestrator:
             "ic.tools.file:ReadFile",
             "ic.tools.file:GlobFiles",
             "ic.tools.file:GrepFiles",
-            "ic.tools.shell:Shell",
             "ic.tools.think:Think",
             "ic.tools.todo:Todo",
             "ic.tools.ask:AskUser",
             "ic.tools.subagent:CreateSubAgent",
             "ic.tools.subagent:CreateParallelSubAgents",
         ]
+        if self._execution_mode != "plan":
+            tool_paths.insert(3, "ic.tools.shell:Shell")
 
         agent_cfg = AgentConfig(
             name="web-engine",
@@ -378,6 +390,7 @@ class EngineOrchestrator:
             session_id=self.session.id,
             emitter=self.event_emitter,
             deferred_buffer=self._deferred_buffer,
+            execution_mode=self._execution_mode,
         )
         engine.toolset.add(db_multi_edit)
 
@@ -389,6 +402,7 @@ class EngineOrchestrator:
             emitter=self.event_emitter,
             engine=engine,
             deferred_buffer=self._deferred_buffer,
+            execution_mode=self._execution_mode,
         )
         db_edit = DBEditFile(
             workspace=ws_path,
@@ -397,6 +411,7 @@ class EngineOrchestrator:
             emitter=self.event_emitter,
             engine=engine,
             deferred_buffer=self._deferred_buffer,
+            execution_mode=self._execution_mode,
         )
         engine.toolset.add(db_write)
         engine.toolset.add(db_edit)
@@ -502,9 +517,14 @@ class EngineOrchestrator:
         resume: Optional[dict] = None,
         image_refs: Optional[list[dict]] = None,
         mentioned_files: Optional[list[str]] = None,
+        execution_mode: Optional[str] = None,
+        approval_mode: str = "agent",
     ) -> AsyncGenerator[OrchestratorResponse, None]:
         """Run the engine and yield OrchestratorResponse objects."""
         workspace = self._resolve_workspace(output_dir)
+        self._execution_mode = normalize_execution_mode(
+            execution_mode if execution_mode is not None else approval_mode
+        )
 
         try:
             self._setup_engine(workspace)
@@ -583,7 +603,10 @@ class EngineOrchestrator:
             result = await self._engine.run_turn(user_message, images=images_for_engine)
 
             # Flush deferred writes — one version per file for this turn
-            self._deferred_buffer.flush(self.db, self.session.id, self.event_emitter)
+            if self._execution_mode == "plan":
+                self._deferred_buffer.clear()
+            else:
+                self._deferred_buffer.flush(self.db, self.session.id, self.event_emitter)
 
             # Emit file change events
             if self._engine.file_changes:
@@ -644,7 +667,10 @@ class EngineOrchestrator:
             logger.exception("Engine run failed")
             # Flush deferred writes to preserve partial work
             try:
-                self._deferred_buffer.flush(self.db, self.session.id, self.event_emitter)
+                if self._execution_mode == "plan":
+                    self._deferred_buffer.clear()
+                else:
+                    self._deferred_buffer.flush(self.db, self.session.id, self.event_emitter)
             except Exception:
                 logger.exception("Deferred buffer flush failed during error handling")
             # Try to sync any files written before the error
@@ -722,6 +748,9 @@ class EngineOrchestrator:
         from .db_tools import _slug_from_filename
 
         synced: list[str] = []
+        if self._execution_mode == "plan":
+            return synced
+
         html_files = glob.glob(os.path.join(workspace, "*.html"))
         if not html_files:
             return synced

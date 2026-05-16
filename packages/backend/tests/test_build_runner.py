@@ -39,3 +39,40 @@ def test_fallback_build_payload_wraps_generate_node_failures(tmp_path, monkeypat
 
     assert exc_info.value.stage == "fallback_generate_payload"
     assert "node exploded" in str(exc_info.value)
+
+
+def test_build_runner_prefers_workspace_source_mode(tmp_path, monkeypatch) -> None:
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("OUTPUT_DIR", str(output_dir))
+    from app.config import refresh_settings
+
+    refresh_settings()
+    database = _create_database(tmp_path, "build-runner-source.db")
+    session_id = uuid.uuid4().hex
+    with transaction_scope(database) as session:
+        session.add(SessionModel(id=session_id, title="Build Runner Source Test"))
+
+    workspace = output_dir / session_id / "src"
+    workspace.mkdir(parents=True)
+    (workspace / "App.tsx").write_text(
+        "export default function App() { return <main>Source mode</main> }\n",
+        encoding="utf-8",
+    )
+
+    async def fake_build_from_workspace_source(self, source_dir, *, pages=None):
+        assert source_dir == output_dir / session_id
+        return {"status": "success", "pages": ["index.html"], "dist_path": "/tmp/dist"}
+
+    monkeypatch.setattr(
+        "app.services.build_runner.ReactSSGBuilder.build_from_workspace_source",
+        fake_build_from_workspace_source,
+    )
+
+    with get_db(database) as session:
+        runner = BuildRunner(session)
+        result = asyncio.run(runner._build(session_id, {}))
+
+    assert result["source_mode"] == "workspace"
+
+    monkeypatch.delenv("OUTPUT_DIR", raising=False)
+    refresh_settings()

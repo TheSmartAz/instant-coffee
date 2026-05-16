@@ -127,6 +127,16 @@ class ShellApprovalEvent(BaseEvent):
     command: str
     reason: str  # Why the command was flagged
     approval_id: str  # Unique ID for the approval request
+    execution_mode: Optional[str] = None
+
+
+class ShellApprovalResolvedEvent(BaseEvent):
+    """Emitted when a shell approval is approved, rejected, or cannot be resolved."""
+    type: EventType = EventType.SHELL_APPROVAL_RESOLVED
+    approval_id: str
+    approved: bool
+    status: str
+    reason: Optional[str] = None
 
 
 class PageCreatedEvent(BaseEvent):

@@ -100,7 +100,7 @@ def _resolve_database_url() -> str:
 def _resolve_default_model_id() -> str:
     env_model = _get_env("MODEL") or _get_env("DEFAULT_MODEL")
     default_model = get_default_model_id()
-    return env_model if env_model == default_model else default_model
+    return env_model or default_model
 
 
 def _resolve_default_base_url() -> str:
@@ -184,6 +184,7 @@ class Settings:
 
     openai_api_key: str | None = field(
         default_factory=lambda: _get_env("DEEPSEEK_API_KEY")
+        or _get_env("DMXAPI_API_KEY")
         or _get_env("DEFAULT_KEY")
     )
     openai_base_url: str = field(default_factory=_resolve_default_base_url)
@@ -195,6 +196,7 @@ class Settings:
     default_base_url: str | None = field(default_factory=lambda: _get_env("DEFAULT_BASE_URL"))
     default_key: str | None = field(
         default_factory=lambda: _get_env("DEFAULT_KEY")
+        or _get_env("DMXAPI_API_KEY")
         or _get_env("DEEPSEEK_API_KEY")
     )
 
@@ -214,6 +216,13 @@ class Settings:
     temperature: float = field(default_factory=lambda: _get_float("TEMPERATURE", 0.7))
     max_tokens: int = field(default_factory=lambda: _get_int("MAX_TOKENS", 1_000_000))
     auto_save: bool = field(default_factory=lambda: _get_bool("AUTO_SAVE", True))
+    admin_token: str | None = field(
+        default_factory=lambda: _get_env("ADMIN_TOKEN")
+        or _get_env("SETTINGS_ADMIN_TOKEN")
+    )
+    allow_unsafe_dev_admin_bypass: bool = field(
+        default_factory=lambda: _get_bool("ALLOW_UNSAFE_DEV_ADMIN_BYPASS", False)
+    )
     skills_dir: str | None = field(default_factory=lambda: _get_env("SKILLS_DIR"))
     mcp_enabled: bool = field(default_factory=lambda: _get_bool("ENABLE_MCP", _get_bool("USE_MCP", False)))
     mcp_servers: dict[str, Any] = field(default_factory=lambda: _get_json("MCP_SERVERS", {}))

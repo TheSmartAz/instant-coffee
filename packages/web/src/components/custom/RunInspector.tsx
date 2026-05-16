@@ -2,6 +2,7 @@ import * as React from 'react'
 import {
   ChevronDown,
   ChevronUp,
+  Check,
   CircleAlert,
   ExternalLink,
   FileCode2,
@@ -9,12 +10,13 @@ import {
   RefreshCw,
   Square,
   Wrench,
+  X,
 } from 'lucide-react'
 import { api } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import type { ChatRunStatus, RunReviewIssue, SessionRunDetail } from '@/types'
+import type { ChatRunStatus, RunEventResponse, RunReviewIssue, SessionRunDetail } from '@/types'
 
 interface RunInspectorProps {
   sessionId?: string
@@ -33,6 +35,12 @@ const PHASE_LABELS: Record<string, string> = {
   done: 'Done',
 }
 
+const EXECUTION_MODE_LABELS = {
+  plan: 'Plan only',
+  agent: 'Agent',
+  auto: 'Auto',
+} as const
+
 const formatPhase = (phase?: string | null) => {
   if (!phase) return undefined
   return PHASE_LABELS[phase] ?? phase.replace(/_/g, ' ')
@@ -48,6 +56,15 @@ const formatDate = (value?: string | null) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return undefined
   return date.toLocaleString()
+}
+
+const runActionErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && 'status' in error) {
+    const status = Number((error as Error & { status?: number }).status)
+    if (status === 401 || status === 403) return `${fallback}: admin token required`
+    if (status === 409) return error.message || `${fallback}: run is not ready`
+  }
+  return error instanceof Error ? error.message : fallback
 }
 
 const REVIEW_SEVERITY_CLASS: Record<string, string> = {
@@ -67,6 +84,14 @@ const reviewSummaryText = (summary?: Record<string, unknown> | null) => {
     parts.push(`${summary.generated_pages.length} pages`)
   }
   return parts.length ? parts.join(', ') : undefined
+}
+
+const verificationTone = (status?: string | null) => {
+  const normalized = (status ?? '').toLowerCase()
+  if (normalized === 'passed') return 'success'
+  if (normalized === 'failed' || normalized === 'cancelled') return 'failed'
+  if (normalized === 'in_progress') return 'running'
+  return 'waiting'
 }
 
 const statusTone = (status?: string | null) => {
@@ -113,6 +138,20 @@ const getBuildArtifact = (artifacts?: Record<string, unknown>) => {
 const stringList = (value: unknown) =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 
+const numberValue = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
+
+const stringValue = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
+
+const MEMORY_LABELS: Record<string, string> = {
+  architecture_notes: 'Architecture',
+  interface_contracts: 'Contracts',
+  testing_notes: 'Testing',
+  style_preferences: 'Style',
+  component_inventory: 'Components',
+  design_decisions: 'Design',
+  user_preferences: 'User',
+}
+
 const timelineDotClass = (status?: string) => {
   const tone = statusTone(status)
   if (tone === 'success') return 'bg-emerald-500'
@@ -121,20 +160,88 @@ const timelineDotClass = (status?: string) => {
   return 'bg-blue-500'
 }
 
+const getExecutionMode = (run?: SessionRunDetail | null, status?: ChatRunStatus | null) => {
+  const value = run?.execution_mode ?? run?.executionMode ?? run?.approval_mode ?? status?.executionMode
+  return value ? EXECUTION_MODE_LABELS[value] : undefined
+}
+
+interface PendingShellApproval {
+  approvalId: string
+  runId: string
+  command: string
+  reason: string
+  executionMode?: string
+}
+
+const eventPayload = (event: RunEventResponse) => event.payload ?? {}
+
+const stringPayload = (event: RunEventResponse, key: string) => {
+  const payload = eventPayload(event)
+  const value = payload[key]
+  return typeof value === 'string' && value ? value : undefined
+}
+
+const getPendingApproval = (
+  events: RunEventResponse[],
+  runStatus?: ChatRunStatus | null,
+): PendingShellApproval | null => {
+  const resolved = new Set(
+    events
+      .filter((event) => event.type === 'shell_approval_resolved')
+      .map((event) => stringPayload(event, 'approval_id'))
+      .filter((value): value is string => Boolean(value)),
+  )
+  for (const event of [...events].reverse()) {
+    if (event.type !== 'shell_approval') continue
+    const approvalId = stringPayload(event, 'approval_id')
+    const runId = event.run_id ?? stringPayload(event, 'run_id')
+    if (!approvalId || !runId || resolved.has(approvalId)) continue
+    return {
+      approvalId,
+      runId,
+      command: stringPayload(event, 'command') ?? '',
+      reason: stringPayload(event, 'reason') ?? 'Approval required',
+      executionMode: stringPayload(event, 'execution_mode'),
+    }
+  }
+  if (runStatus?.eventType === 'shell_approval' && runStatus.approvalId && runStatus.runId) {
+    return {
+      approvalId: runStatus.approvalId,
+      runId: runStatus.runId,
+      command: runStatus.command ?? '',
+      reason: runStatus.reason ?? runStatus.message ?? 'Approval required',
+      executionMode: runStatus.executionMode,
+    }
+  }
+  return null
+}
+
 export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPreview }: RunInspectorProps) {
   const [expanded, setExpanded] = React.useState(false)
   const [run, setRun] = React.useState<SessionRunDetail | null>(null)
+  const [runEvents, setRunEvents] = React.useState<RunEventResponse[]>([])
   const [loading, setLoading] = React.useState(false)
+  const [approvalBusy, setApprovalBusy] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
   const statusRunId = runStatus?.runId
 
   React.useEffect(() => {
     setRun(null)
+    setRunEvents([])
     setError(null)
     setLoading(false)
     setExpanded(false)
   }, [sessionId, threadId])
+
+  const refreshRunEvents = React.useCallback(async (runId: string) => {
+    try {
+      const data = await api.runs.events(runId, { limit: 200 })
+      setRunEvents(data.events ?? [])
+    } catch {
+      setRunEvents([])
+    }
+  }, [])
 
   React.useEffect(() => {
     if (!sessionId) return
@@ -146,7 +253,10 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
         const data = statusRunId
           ? await api.runs.get(statusRunId)
           : (await api.runs.list(sessionId, { limit: 1 })).runs[0] ?? null
-        if (!cancelled) setRun(data ?? null)
+        if (!cancelled) {
+          setRun(data ?? null)
+          if (data?.run_id) void refreshRunEvents(data.run_id)
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Failed to load run state')
@@ -160,7 +270,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
     return () => {
       cancelled = true
     }
-  }, [sessionId, statusRunId])
+  }, [sessionId, statusRunId, refreshRunEvents])
 
   const effectiveRun = run ?? null
   const actionableRunId = statusRunId ?? effectiveRun?.run_id
@@ -170,12 +280,15 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
     const tone = statusTone(run?.status ?? runStatus?.status)
     if (tone === 'running' || tone === 'waiting') {
       const timer = window.setInterval(() => {
-        void api.runs.get(actionableRunId).then(setRun).catch(() => {})
+        void api.runs.get(actionableRunId).then((data) => {
+          setRun(data)
+          void refreshRunEvents(actionableRunId)
+        }).catch(() => {})
       }, 5000)
       return () => window.clearInterval(timer)
     }
     return undefined
-  }, [actionableRunId, run?.status, runStatus?.status])
+  }, [actionableRunId, run?.status, runStatus?.status, refreshRunEvents])
 
   const handleRefresh = React.useCallback(() => {
     if (!sessionId) return
@@ -187,6 +300,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
           ? await api.runs.get(statusRunId)
           : (await api.runs.list(sessionId, { limit: 1 })).runs[0] ?? null
         setRun(data ?? null)
+        if (data?.run_id) void refreshRunEvents(data.run_id)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load run state')
       } finally {
@@ -194,7 +308,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
       }
     }
     void fetchRun()
-  }, [statusRunId, sessionId])
+  }, [statusRunId, sessionId, refreshRunEvents])
 
   const handleCancel = React.useCallback(async () => {
     if (!actionableRunId) return
@@ -210,16 +324,75 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
     }
   }, [actionableRunId])
 
+  const handleVerify = React.useCallback(async () => {
+    if (!actionableRunId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await api.runs.verify(actionableRunId)
+      setRun(data)
+    } catch (err) {
+      setError(runActionErrorMessage(err, 'Failed to run verification'))
+    } finally {
+      setLoading(false)
+    }
+  }, [actionableRunId])
+
+  const handleFixVerification = React.useCallback(async () => {
+    if (!actionableRunId) return
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await api.runs.fixVerification(actionableRunId)
+      setRun(data)
+    } catch (err) {
+      setError(runActionErrorMessage(err, 'Failed to fix verification'))
+    } finally {
+      setLoading(false)
+    }
+  }, [actionableRunId])
+
+  const handleResolveApproval = React.useCallback(async (approval: PendingShellApproval, approved: boolean) => {
+    setApprovalBusy(approval.approvalId)
+    setError(null)
+    try {
+      const data = await api.runs.resolveApproval(approval.runId, approval.approvalId, approved)
+      setRun(data)
+      await refreshRunEvents(approval.runId)
+    } catch (err) {
+      setError(runActionErrorMessage(err, approved ? 'Failed to approve command' : 'Failed to reject command'))
+    } finally {
+      setApprovalBusy(null)
+    }
+  }, [refreshRunEvents])
+
   const phaseHistory = effectiveRun?.phase_history ?? []
   const reviewIssues = effectiveRun?.review_issues ?? []
   const reviewSummary = reviewSummaryText(effectiveRun?.review_summary ?? null)
   const phaseLabel = formatPhase(effectiveRun?.current_phase ?? runStatus?.phase)
   const statusLabel = formatStatus(effectiveRun?.phase_status ?? effectiveRun?.status ?? runStatus?.status)
+  const executionModeLabel = getExecutionMode(effectiveRun, runStatus)
   const tone = statusTone(effectiveRun?.status ?? runStatus?.status)
   const buildArtifact = getBuildArtifact(effectiveRun?.artifacts)
   const buildPages = stringList(buildArtifact?.pages ?? effectiveRun?.review_summary?.generated_pages)
   const distPath = typeof buildArtifact?.dist_path === 'string' ? buildArtifact.dist_path : undefined
   const buildStatus = typeof buildArtifact?.status === 'string' ? buildArtifact.status : undefined
+  const verification = effectiveRun?.verification
+  const verificationStatus = verification?.status
+  const visualCheck = verification?.checks.find((check) => check.name === 'visual')
+  const visualScore = numberValue(visualCheck?.details?.quality_score)
+  const visualScreenshot = stringValue(visualCheck?.details?.screenshot_path)
+  const verificationBadgeTone = verificationTone(verificationStatus)
+  const recommendedCommands =
+    verification?.profile?.recommended_commands?.filter((item) => typeof item.command === 'string') ?? []
+  const riskFlags = verification?.profile?.risk_flags ?? []
+  const lastVerificationRun = verification?.last_run
+  const verificationFixAttempts = verification?.fix_attempts ?? []
+  const verificationAuditTrail = verification?.audit_trail ?? []
+  const actionAuditTrail = verification?.action_audit_trail ?? []
+  const contextMemory = effectiveRun?.context?.memory ?? {}
+  const contextEntries = Object.entries(contextMemory).filter(([, value]) => value.trim())
+  const pendingApproval = getPendingApproval(runEvents, runStatus)
 
   if (!sessionId) return null
   if (!run && !runStatus && !error && !loading) return null
@@ -240,6 +413,7 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
         </Button>
         {phaseLabel ? <Badge variant="secondary">{phaseLabel}</Badge> : null}
         {statusLabel ? <Badge variant={tone === 'failed' ? 'destructive' : 'outline'}>{statusLabel}</Badge> : null}
+        {executionModeLabel ? <Badge variant="outline">{executionModeLabel}</Badge> : null}
         {effectiveRun?.run_id ? (
           <span className="font-mono text-[11px] text-muted-foreground">
             {effectiveRun.run_id.slice(0, 10)}
@@ -277,6 +451,50 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
           <span className="min-w-0 break-words">{error}</span>
         </div>
       ) : null}
+      {pendingApproval ? (
+        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-950 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-100" data-testid="shell-approval-card">
+          <div className="flex items-start gap-2">
+            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-medium">Shell approval required</div>
+              <div className="mt-0.5 text-[11px] text-amber-900/80 dark:text-amber-100/80">
+                {pendingApproval.reason}
+                {pendingApproval.executionMode ? ` · ${pendingApproval.executionMode}` : ''}
+              </div>
+              {pendingApproval.command ? (
+                <div className="mt-2 max-h-24 overflow-auto rounded-sm bg-background/80 px-2 py-1 font-mono text-[11px] text-foreground">
+                  <span className="break-all">{pendingApproval.command}</span>
+                </div>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={() => void handleResolveApproval(pendingApproval, false)}
+                disabled={approvalBusy === pendingApproval.approvalId}
+                data-testid="shell-approval-reject"
+              >
+                <X className="h-3.5 w-3.5" />
+                Reject
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={() => void handleResolveApproval(pendingApproval, true)}
+                disabled={approvalBusy === pendingApproval.approvalId}
+                data-testid="shell-approval-approve"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Approve
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {expanded ? (
         <div className="mt-3 max-h-[min(60vh,32rem)] space-y-3 overflow-y-auto pr-1">
           <div className="grid gap-2 sm:grid-cols-2">
@@ -285,6 +503,13 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
               <div className="mt-1 text-sm font-medium">{phaseLabel ?? 'Unknown'}</div>
               <div className="text-[11px] text-muted-foreground">{statusLabel ?? 'Unknown'}</div>
             </div>
+            {executionModeLabel ? (
+              <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Execution mode</div>
+                <div className="mt-1 text-sm font-medium">{executionModeLabel}</div>
+                <div className="text-[11px] text-muted-foreground">Run workflow</div>
+              </div>
+            ) : null}
             <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Updated</div>
               <div className="mt-1 text-sm font-medium">{formatDate(effectiveRun?.updated_at) ?? '-'}</div>
@@ -295,6 +520,211 @@ export function RunInspector({ sessionId, threadId, runStatus, onOpenBuildPrevie
             <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Review</div>
               <div className="mt-1 text-sm">{reviewSummary}</div>
+            </div>
+          ) : null}
+          {verification ? (
+            <div className="rounded-md border border-border bg-muted/20 px-3 py-2" data-testid="run-inspector-verification">
+              <div className="flex items-center gap-2">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Verification</div>
+                <Badge
+                  variant={verificationBadgeTone === 'failed' ? 'destructive' : 'outline'}
+                  className="ml-auto text-[10px]"
+                >
+                  {verificationStatus?.replace(/_/g, ' ') ?? 'unknown'}
+                </Badge>
+              </div>
+              {verification.checks.length ? (
+                <div className="mt-2 grid gap-1">
+                  {verification.checks.slice(0, 4).map((check) => (
+                    <div key={check.name} className="flex min-w-0 items-center justify-between gap-2 text-[11px]">
+                      <span className="truncate font-medium">{formatPhase(check.name) ?? check.name}</span>
+                      <span className="truncate text-muted-foreground">
+                        {check.status}
+                        {typeof check.passed === 'boolean' ? ` · ${check.passed ? 'passed' : 'failed'}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {verification.evidence.length ? (
+                <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+                  {verification.evidence.slice(0, 3).map((item, index) => (
+                    <div key={index} className="break-words">{item}</div>
+                  ))}
+                </div>
+              ) : null}
+              {visualCheck ? (
+                <div className="mt-2 rounded-sm bg-background/70 px-2 py-1 text-[11px]">
+                  <div className="flex min-w-0 items-center justify-between gap-2">
+                    <span className="font-medium">Visual check</span>
+                    <span className={cn('shrink-0', visualCheck.passed ? 'text-emerald-600' : visualCheck.passed === false ? 'text-destructive' : 'text-muted-foreground')}>
+                      {visualScore !== undefined ? `${visualScore}/100` : visualCheck.status}
+                    </span>
+                  </div>
+                  {visualScreenshot ? (
+                    <div className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
+                      {visualScreenshot}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {riskFlags.length ? (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {riskFlags.slice(0, 4).map((flag) => (
+                    <Badge key={flag} variant="outline" className="text-[10px]">
+                      {flag.replace(/_/g, ' ')}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+              {recommendedCommands.length ? (
+                <div className="mt-2 space-y-1">
+                  {recommendedCommands.slice(0, 3).map((item, index) => (
+                    <div key={index} className="min-w-0 rounded-sm bg-background/70 px-2 py-1 font-mono text-[10px] text-muted-foreground">
+                      <span className="break-all">{String(item.command)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {lastVerificationRun ? (
+                <div className="mt-2 space-y-1">
+                  <div className="text-[11px] font-medium">
+                    Last run · {lastVerificationRun.status}
+                  </div>
+                  {lastVerificationRun.commands.slice(0, 4).map((item) => (
+                    <div key={`${item.scope}-${item.command}`} className="rounded-sm bg-background/70 px-2 py-1 text-[11px]">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="truncate font-medium">{item.name}</span>
+                        <span className={cn('shrink-0', item.status === 'passed' ? 'text-emerald-600' : 'text-destructive')}>
+                          {item.status}
+                        </span>
+                      </div>
+                      {item.failures.length ? (
+                        <div className="mt-1 line-clamp-2 break-words text-muted-foreground">
+                          {String(item.failures[0].message ?? item.output_summary)}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {verificationFixAttempts.length ? (
+                <div className="mt-2 space-y-1">
+                  <div className="text-[11px] font-medium">Fix attempts</div>
+                  {verificationFixAttempts.slice(-2).map((attempt) => (
+                    <div key={attempt.attempt} className="rounded-sm bg-background/70 px-2 py-1 text-[11px]">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="font-medium">Attempt {attempt.attempt}</span>
+                        <span className={cn('shrink-0', attempt.status === 'passed' ? 'text-emerald-600' : 'text-destructive')}>
+                          {attempt.status}
+                        </span>
+                      </div>
+                      {attempt.change_summary ? (
+                        <div className="mt-1 space-y-1">
+                          <div className="text-[11px] text-muted-foreground">
+                            {attempt.change_summary.file_count} file(s) changed · {attempt.change_summary.risk_level} risk
+                            {attempt.change_summary.verification_status
+                              ? ` · verification ${attempt.change_summary.verification_status}`
+                              : ''}
+                          </div>
+                          {attempt.change_summary.changed_files.length ? (
+                            <div className="flex flex-wrap gap-1">
+                              {attempt.change_summary.changed_files.slice(0, 3).map((file) => (
+                                <Badge key={file} variant="outline" className="max-w-full text-[10px]">
+                                  <span className="truncate">{file}</span>
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {attempt.error ? (
+                        <div className="mt-1 line-clamp-2 break-words text-muted-foreground">{attempt.error}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {verificationAuditTrail.length ? (
+                <div className="mt-2 space-y-1">
+                  <div className="text-[11px] font-medium">Audit trail</div>
+                  {verificationAuditTrail.slice(-3).map((event, index) => (
+                    <div key={`${event.type}-${event.at ?? index}`} className="rounded-sm bg-background/70 px-2 py-1 text-[11px]">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="truncate font-medium">{event.type.replace(/_/g, ' ')}</span>
+                        <span className={cn('shrink-0', event.status === 'passed' ? 'text-emerald-600' : event.status.includes('error') || event.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
+                          {event.status}
+                        </span>
+                      </div>
+                      {event.message ? (
+                        <div className="mt-1 line-clamp-2 break-words text-muted-foreground">{event.message}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {actionAuditTrail.length ? (
+                <div className="mt-2 space-y-1">
+                  <div className="text-[11px] font-medium">Action trail</div>
+                  {actionAuditTrail.slice(-4).map((event, index) => (
+                    <div key={`${event.type}-${event.at ?? index}`} className="rounded-sm bg-background/70 px-2 py-1 text-[11px]">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="truncate font-medium">
+                          {event.category.replace(/_/g, ' ')} · {event.type.replace(/_/g, ' ')}
+                        </span>
+                        <span className={cn('shrink-0', event.status === 'passed' ? 'text-emerald-600' : event.status.includes('error') || event.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
+                          {event.status}
+                        </span>
+                      </div>
+                      {event.summary ? (
+                        <div className="mt-1 line-clamp-2 break-words text-muted-foreground">{event.summary}</div>
+                      ) : null}
+                      {event.command ? (
+                        <div className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
+                          {event.scope ? `[${event.scope}] ` : ''}{event.command}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-2 h-7 gap-1 px-2 text-xs"
+                onClick={handleVerify}
+                disabled={!actionableRunId || loading || !recommendedCommands.length}
+                data-testid="run-inspector-run-verification"
+              >
+                <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+                Run verification
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="ml-2 mt-2 h-7 gap-1 px-2 text-xs"
+                onClick={handleFixVerification}
+                disabled={!actionableRunId || loading || lastVerificationRun?.status !== 'failed'}
+                data-testid="run-inspector-fix-verification"
+              >
+                <Wrench className="h-3.5 w-3.5" />
+                Fix verification
+              </Button>
+            </div>
+          ) : null}
+          {contextEntries.length ? (
+            <div className="rounded-md border border-border bg-muted/20 px-3 py-2" data-testid="run-inspector-context">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Agent Context</div>
+              <div className="mt-2 space-y-2">
+                {contextEntries.slice(0, 4).map(([key, value]) => (
+                  <div key={key} className="min-w-0">
+                    <div className="text-[11px] font-medium">{MEMORY_LABELS[key] ?? key.replace(/_/g, ' ')}</div>
+                    <div className="mt-0.5 line-clamp-2 break-words text-[11px] text-muted-foreground">{value}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : null}
           <div className="rounded-md border border-border bg-muted/20 px-3 py-2" data-testid="run-inspector-artifacts">

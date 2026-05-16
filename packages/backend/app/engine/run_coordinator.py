@@ -85,6 +85,7 @@ class RunCoordinator:
         phase_history = list(state.get("phase_history") or [])
 
         context = self._context(run, state)
+        execution_mode = self._execution_mode(run)
 
         if current_phase == RunPhase.IMPLEMENT.value and self.phases.implement is not None:
             implement_result = await self._execute_phase(
@@ -99,6 +100,8 @@ class RunCoordinator:
             )
             if self._is_waiting(implement_result):
                 return self._finalize_waiting(run_id, run, state, phase_history, artifacts, fix_attempts, implement_result)
+            if execution_mode == "plan":
+                return self._finalize_plan_only(run_id, run, state, phase_history, artifacts, fix_attempts, implement_result)
             state["current_phase"] = RunPhase.BUILD.value
             state["artifacts"] = artifacts
             state["phase_history"] = phase_history
@@ -263,12 +266,20 @@ class RunCoordinator:
             "run_id": run.id,
             "session_id": run.session_id,
             "message": run.input_message,
+            "execution_mode": self._execution_mode(run),
             "resume_payload": run.resume_payload if isinstance(run.resume_payload, dict) else None,
             "state": state,
             "phase_history": list(state.get("phase_history") or []),
             "fix_attempts": int(state.get("fix_attempts") or 0),
             "artifacts": dict(state.get("artifacts") or {}),
         }
+
+    def _execution_mode(self, run: SessionRun) -> str:
+        metrics = run.metrics if isinstance(run.metrics, dict) else {}
+        mode = str(metrics.get("execution_mode") or metrics.get("approval_mode") or "agent")
+        if mode == "yolo":
+            return "auto"
+        return mode if mode in {"plan", "agent", "auto"} else "agent"
 
     async def _execute_phase(
         self,
@@ -520,6 +531,39 @@ class RunCoordinator:
             current_phase=RunPhase.IMPLEMENT.value,
             phase_history=phase_history,
             fix_attempts=fix_attempts,
+            final_response=result,
+        )
+
+    def _finalize_plan_only(
+        self,
+        run_id: str,
+        run: SessionRun,
+        state: dict[str, Any],
+        phase_history: list[dict[str, Any]],
+        artifacts: dict[str, Any],
+        fix_attempts: int,
+        result: Any,
+    ) -> RunCoordinatorResult:
+        state["current_phase"] = RunPhase.DONE.value
+        state["phase_history"] = phase_history
+        state["artifacts"] = artifacts
+        state["fix_attempts"] = fix_attempts
+        self._save_state(run_id, state)
+        self.run_service.persist_run_state(run_id, RunStatus.COMPLETED.value)
+        self._emit_lifecycle_event(
+            run,
+            EventType.RUN_COMPLETED,
+            phase=RunPhase.DONE.value,
+            status=RunStatus.COMPLETED.value,
+            execution_mode="plan",
+        )
+        return RunCoordinatorResult(
+            status=RunStatus.COMPLETED.value,
+            run_id=run_id,
+            current_phase=RunPhase.DONE.value,
+            phase_history=phase_history,
+            fix_attempts=fix_attempts,
+            implement=artifacts.get("implement"),
             final_response=result,
         )
 

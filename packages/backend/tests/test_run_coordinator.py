@@ -199,6 +199,83 @@ def test_run_coordinator_runs_fix_once_when_initial_review_fails(tmp_path) -> No
     assert event_types == ["verify_start", "verify_fail", "verify_start", "verify_pass"]
 
 
+def test_run_coordinator_plan_mode_stops_after_implement(tmp_path) -> None:
+    database = _create_database(tmp_path, "run-coordinator-plan-mode.db")
+    run_id = _seed_run(database, metrics={"approval_mode": "plan"})
+    fake_phases = _FakeImplementPhases(
+        implement_results=[{"is_complete": True, "action": "plan_created"}],
+        review_results=[{"passed": True}],
+    )
+
+    with get_db(database) as session:
+        coordinator = _make_coordinator(
+            session,
+            fake_phases,
+            implement=fake_phases.implement,
+        )
+        result = _run_coordinator(coordinator, run_id)
+        session.commit()
+
+    stored = _stored_run(database, run_id)
+    state = _coordinator_state(stored)
+    assert result.status == "completed"
+    assert stored.status == "completed"
+    assert fake_phases.calls == ["implement"]
+    assert [item["phase"] for item in state["phase_history"]] == ["implement"]
+    assert state["current_phase"] == "done"
+    assert state["artifacts"]["implement"]["action"] == "plan_created"
+    assert "build" not in state["artifacts"]
+    assert "review" not in state["artifacts"]
+
+
+def test_run_coordinator_execution_mode_plan_stops_after_implement(tmp_path) -> None:
+    database = _create_database(tmp_path, "run-coordinator-execution-mode-plan.db")
+    run_id = _seed_run(database, metrics={"execution_mode": "plan"})
+    fake_phases = _FakeImplementPhases(
+        implement_results=[{"is_complete": True, "action": "plan_created"}],
+        review_results=[{"passed": True}],
+    )
+
+    with get_db(database) as session:
+        coordinator = _make_coordinator(
+            session,
+            fake_phases,
+            implement=fake_phases.implement,
+        )
+        result = _run_coordinator(coordinator, run_id)
+        session.commit()
+
+    stored = _stored_run(database, run_id)
+    state = _coordinator_state(stored)
+    assert result.status == "completed"
+    assert stored.status == "completed"
+    assert fake_phases.calls == ["implement"]
+    assert [item["phase"] for item in state["phase_history"]] == ["implement"]
+    assert state["current_phase"] == "done"
+    assert "build" not in state["artifacts"]
+    assert "review" not in state["artifacts"]
+
+
+def test_run_coordinator_legacy_yolo_mode_runs_build_and_review(tmp_path) -> None:
+    database = _create_database(tmp_path, "run-coordinator-yolo-mode.db")
+    run_id = _seed_run(database, metrics={"execution_mode": "yolo"})
+    fake_phases = _FakeImplementPhases(
+        implement_results=[{"is_complete": True, "action": "pages_generated"}],
+        review_results=[{"passed": True}],
+    )
+
+    with get_db(database) as session:
+        coordinator = _make_coordinator(
+            session,
+            fake_phases,
+            implement=fake_phases.implement,
+        )
+        _run_coordinator(coordinator, run_id)
+        session.commit()
+
+    assert fake_phases.calls == ["implement", "build", "review"]
+
+
 def test_run_coordinator_passes_fresh_artifacts_to_each_phase(tmp_path) -> None:
     database = _create_database(tmp_path, "run-coordinator-fresh-context.db")
     run_id = _seed_run(database)

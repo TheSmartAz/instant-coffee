@@ -52,7 +52,12 @@ def test_create_run_defaults_and_checkpoint_thread(tmp_path) -> None:
     assert run_payload["started_at"] is None
     assert run_payload["finished_at"] is None
     assert run_payload["checkpoint_thread"] == f"{session_id}:{run_payload['id']}"
-    assert run_payload["metrics"] == {"generate_now": True, "target_pages": ["index"]}
+    assert run_payload["metrics"] == {
+        "generate_now": True,
+        "execution_mode": "agent",
+        "approval_mode": "agent",
+        "target_pages": ["index"],
+    }
 
 
 def test_run_state_transitions_and_conflicts(tmp_path) -> None:

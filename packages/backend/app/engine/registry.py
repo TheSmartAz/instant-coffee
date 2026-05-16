@@ -39,5 +39,11 @@ class _EngineRegistry:
             return False
         return orch.has_pending_question
 
+    def resolve_shell_approval(self, session_id: str, approval_id: str, approved: bool) -> bool:
+        orch = self._active.get(session_id)
+        if orch is None:
+            return False
+        return orch.resolve_shell_approval(approval_id, approved)
+
 
 engine_registry = _EngineRegistry()

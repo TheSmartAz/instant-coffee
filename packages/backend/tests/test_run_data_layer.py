@@ -8,7 +8,7 @@ from app.db.migrations import init_db
 from app.db.models import Session as SessionModel
 from app.db.models import SessionRun
 from app.db.utils import get_db, transaction_scope
-from app.schemas.run import RunCreate, RunResponse, RunResumeRequest, RunStatus
+from app.schemas.run import RunCreate, RunResponse, RunResumeRequest, RunStatus, normalize_execution_mode
 
 
 def test_session_run_model_crud(tmp_path) -> None:
@@ -71,6 +71,33 @@ def test_run_status_enum_validation() -> None:
         RunStatus("paused")
 
 
+def test_run_create_accepts_legacy_approval_mode_alias() -> None:
+    create_data = RunCreate.model_validate({
+        "session_id": "session-1",
+        "message": "Generate automatically",
+        "approval_mode": "auto",
+    })
+
+    assert create_data.execution_mode == "auto"
+    assert create_data.approval_mode == "auto"
+
+
+def test_run_create_prefers_execution_mode_over_legacy_alias() -> None:
+    create_data = RunCreate.model_validate({
+        "session_id": "session-1",
+        "message": "Plan first",
+        "execution_mode": "plan",
+        "approval_mode": "auto",
+    })
+
+    assert create_data.execution_mode == "plan"
+    assert create_data.approval_mode == "plan"
+
+
+def test_normalize_execution_mode_maps_legacy_yolo_to_auto() -> None:
+    assert normalize_execution_mode("yolo") == "auto"
+
+
 def test_run_schemas_serialize_deserialize() -> None:
     create_payload = {
         "session_id": "session-1",
@@ -86,7 +113,25 @@ def test_run_schemas_serialize_deserialize() -> None:
     create_data = RunCreate.model_validate(create_payload)
     assert create_data.session_id == "session-1"
     assert create_data.generate_now is True
+    assert create_data.execution_mode == "agent"
+    assert create_data.approval_mode == "agent"
     assert create_data.target_pages == ["index", "pricing"]
+
+    auto_create_data = RunCreate.model_validate({
+        "session_id": "session-1",
+        "message": "Generate automatically",
+        "approval_mode": "auto",
+    })
+    assert auto_create_data.execution_mode == "auto"
+    assert auto_create_data.approval_mode == "auto"
+
+    legacy_create_data = RunCreate.model_validate({
+        "session_id": "session-1",
+        "message": "Generate automatically",
+        "approval_mode": "yolo",
+    })
+    assert legacy_create_data.execution_mode == "auto"
+    assert legacy_create_data.approval_mode == "auto"
 
     response = RunResponse(
         run_id="run-1",

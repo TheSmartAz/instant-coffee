@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
-import App, { type AppProps } from '../src/App'
+import App from '../src/App'
 import type { PageSchema, HeadMeta } from '../src/lib/schema-renderer'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -16,6 +16,13 @@ const fallbackSchema: PageSchema = {
   title: 'Instant Coffee',
   layout: 'default',
   components: [],
+}
+
+interface AppProps {
+  pageSlug?: string
+  schemas?: PageSchema[]
+  tokens?: Record<string, any>
+  assets?: Record<string, any>
 }
 
 function readJson<T>(filePath: string, fallback: T): T {

@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
+import { ADMIN_TOKEN_STORAGE_KEY } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -28,6 +29,7 @@ export function SettingsPage() {
   const [activeSection, setActiveSection] = React.useState<SettingsSection>('account')
   const { settings, isLoading, error, updateSettings, modelOptions } = useSettings()
   const [draft, setDraft] = React.useState(settings)
+  const [adminToken, setAdminToken] = React.useState('')
   const [isSaving, setIsSaving] = React.useState(false)
 
   // Get the last visited project ID
@@ -36,6 +38,14 @@ export function SettingsPage() {
       return localStorage.getItem(LAST_PROJECT_KEY)
     } catch {
       return null
+    }
+  }, [])
+
+  React.useEffect(() => {
+    try {
+      setAdminToken(localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ?? '')
+    } catch {
+      setAdminToken('')
     }
   }, [])
 
@@ -52,6 +62,16 @@ export function SettingsPage() {
   const handleSave = async () => {
     setIsSaving(true)
     try {
+      try {
+        const trimmedToken = adminToken.trim()
+        if (trimmedToken) {
+          localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, trimmedToken)
+        } else {
+          localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+        }
+      } catch {
+        // Saving settings can still proceed when browser storage is unavailable.
+      }
       await updateSettings(draft)
       toast({ title: 'Settings saved' })
     } finally {
@@ -110,8 +130,19 @@ export function SettingsPage() {
                 </div>
               ) : (
                 <>
-                  <div className="space-y-2">
-                    <Label htmlFor="apiKey">API Key</Label>
+	                  <div className="space-y-2">
+	                    <Label htmlFor="adminToken">Admin Token</Label>
+	                    <Input
+	                      id="adminToken"
+	                      type="password"
+	                      placeholder="Required when configured"
+	                      value={adminToken}
+	                      onChange={(event) => setAdminToken(event.target.value)}
+	                      disabled={isLoading}
+	                    />
+	                  </div>
+	                  <div className="space-y-2">
+	                    <Label htmlFor="apiKey">API Key</Label>
                     <Input
                       id="apiKey"
                       type="password"

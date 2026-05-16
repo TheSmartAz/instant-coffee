@@ -63,6 +63,8 @@ export type EventType =
   | 'verify_start'
   | 'verify_pass'
   | 'verify_fail'
+  | 'shell_approval'
+  | 'shell_approval_resolved'
   | 'tool_policy_blocked'
   | 'tool_policy_warn'
   | 'interrupt'
@@ -248,6 +250,26 @@ export interface ToolPolicyEvent extends BaseEvent {
   tool_name?: string
   reason?: string
   message?: string
+  payload?: Record<string, unknown>
+}
+
+export interface ShellApprovalEvent extends BaseEvent {
+  type: 'shell_approval'
+  run_id: string
+  approval_id: string
+  command: string
+  reason: string
+  execution_mode?: 'plan' | 'agent' | 'auto'
+  payload?: Record<string, unknown>
+}
+
+export interface ShellApprovalResolvedEvent extends BaseEvent {
+  type: 'shell_approval_resolved'
+  run_id: string
+  approval_id: string
+  approved: boolean
+  status: string
+  reason?: string
   payload?: Record<string, unknown>
 }
 
@@ -680,6 +702,8 @@ export type ExecutionEvent =
   | RunLifecycleEvent
   | VerifyEvent
   | ToolPolicyEvent
+  | ShellApprovalEvent
+  | ShellApprovalResolvedEvent
   | WorkflowEvent
   | ContextCompactedEvent
   | FilesChangedEvent

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session as DbSession
 from ..db.models import Session as SessionModel
 from ..db.utils import get_db
 from ..services.app_data_store import get_app_data_store
+from .auth import require_admin_token
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,7 @@ async def insert_data_record(
     table: str,
     payload: Any = Body(...),
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict[str, Any]:
     _require_session(db, session_id)
     if not isinstance(payload, dict):
@@ -157,6 +159,7 @@ async def delete_data_record(
     table: str,
     row_id: int,
     db: DbSession = Depends(_get_db_session),
+    _: None = Depends(require_admin_token),
 ) -> dict[str, Any]:
     _require_session(db, session_id)
     store = _get_store_or_409()

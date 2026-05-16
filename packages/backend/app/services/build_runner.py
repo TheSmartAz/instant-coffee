@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from datetime import datetime, timezone
 from threading import Event
 from typing import Any
@@ -113,17 +114,28 @@ class BuildRunner:
         return info
 
     async def _build(self, session_id: str, state: dict[str, Any] | None) -> dict[str, Any]:
+        workspace_source = self._resolve_workspace_source(session_id)
         builder = ReactSSGBuilder(
             session_id,
             event_emitter=self.event_emitter,
             cancel_event=self.cancel_event,
         )
+        if workspace_source is not None:
+            result = await builder.build_from_workspace_source(
+                workspace_source,
+                pages=self._workspace_page_hints(session_id),
+            )
+            result["source_mode"] = "workspace"
+            return result
+
         pages_html = self._fetch_pages_html(session_id)
         if pages_html:
-            return await builder.build_from_html(
+            result = await builder.build_from_html(
                 pages=pages_html,
                 product_doc_content=self._fetch_product_doc(session_id),
             )
+            result["source_mode"] = "html"
+            return result
 
         payload = _extract_build_payload(state)
         if not payload.get("page_schemas"):
@@ -141,12 +153,29 @@ class BuildRunner:
             )
             StateStoreService(self.db).update_metadata(session_id, {"graph_state": merged_state})
 
-        return await builder.build(
+        result = await builder.build(
             page_schemas=payload.get("page_schemas") or [],
             component_registry=payload.get("component_registry") or {},
             style_tokens=payload.get("style_tokens") or {},
             assets=payload.get("assets"),
         )
+        result["source_mode"] = "schema"
+        return result
+
+    def _resolve_workspace_source(self, session_id: str) -> Path | None:
+        workspace = (Path(get_settings().output_dir).expanduser() / session_id).resolve()
+        src_dir = workspace / "src"
+        if not src_dir.is_dir():
+            return None
+        if (src_dir / "App.tsx").is_file() or any((src_dir / "pages").glob("*.tsx")):
+            return workspace
+        return None
+
+    def _workspace_page_hints(self, session_id: str) -> list[dict[str, str]]:
+        pages = PageService(self.db).list_by_session(session_id)
+        return [{"slug": page.slug, "title": page.title} for page in pages] or [
+            {"slug": "index", "title": "Index"}
+        ]
 
     def _fetch_pages_html(self, session_id: str) -> list[PageHtml]:
         pages = PageService(self.db).list_by_session(session_id)

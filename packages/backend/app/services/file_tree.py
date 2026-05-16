@@ -7,6 +7,7 @@ from urllib.parse import unquote
 
 from sqlalchemy.orm import Session as DbSession
 
+from ..config import get_settings
 from ..db.models import Page, Session as SessionModel
 from ..schemas.files import FileTreeNode
 from ..services.page import PageService
@@ -33,6 +34,10 @@ def _content_size(content: str) -> int:
 
 
 def _get_language(path: str) -> str:
+    if path.endswith(".tsx") or path.endswith(".jsx"):
+        return "tsx"
+    if path.endswith(".ts"):
+        return "typescript"
     if path.endswith(".html"):
         return "html"
     if path.endswith(".css"):
@@ -128,6 +133,17 @@ class FileTreeService:
                 )
             )
 
+        workspace_children = self._workspace_tree(session_id)
+        if workspace_children:
+            tree.append(
+                FileTreeNode(
+                    name="workspace",
+                    path="workspace",
+                    type="directory",
+                    children=workspace_children,
+                )
+            )
+
         return tree
 
     def get_file_content(self, session_id: str, path: str) -> Optional[FileContent]:
@@ -153,6 +169,10 @@ class FileTreeService:
             if page is None:
                 return None
             content = self._get_page_html(page)
+        elif resolved_path.startswith("workspace/"):
+            content = self._read_workspace_file(session_id, resolved_path[len("workspace/") :])
+            if content is None:
+                return None
         else:
             return None
 
@@ -163,6 +183,98 @@ class FileTreeService:
             language=_get_language(resolved_path),
             size=_content_size(content),
         )
+
+    def _workspace_root(self, session_id: str) -> Optional[Path]:
+        root = (Path(get_settings().output_dir).expanduser() / session_id).resolve()
+        if not root.is_dir():
+            return None
+        return root
+
+    def _workspace_tree(self, session_id: str) -> list[FileTreeNode]:
+        root = self._workspace_root(session_id)
+        if root is None:
+            return []
+        files: list[Path] = []
+        for candidate in root.rglob("*"):
+            if len(files) >= 200:
+                break
+            if not candidate.is_file() or self._skip_workspace_file(root, candidate):
+                continue
+            files.append(candidate)
+        return self._nodes_from_workspace_files(root, sorted(files))
+
+    def _skip_workspace_file(self, root: Path, path: Path) -> bool:
+        try:
+            rel = path.relative_to(root)
+        except ValueError:
+            return True
+        parts = set(rel.parts)
+        if parts & {"node_modules", "__pycache__", ".pytest_cache", ".visual-check", "visual-check", "dist"}:
+            return True
+        name = path.name.lower()
+        if name in {"product.md", "product-doc.md"}:
+            return True
+        if name.endswith((".html", ".db", ".sqlite", ".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            return True
+        try:
+            return path.stat().st_size > 1_000_000
+        except OSError:
+            return True
+
+    def _nodes_from_workspace_files(self, root: Path, files: list[Path]) -> list[FileTreeNode]:
+        tree: dict[str, dict] = {}
+        for file_path in files:
+            rel = file_path.relative_to(root)
+            cursor = tree
+            for part in rel.parts[:-1]:
+                cursor = cursor.setdefault(part, {})
+            cursor[rel.parts[-1]] = {"__file__": file_path}
+
+        def build_nodes(prefix: str, branch: dict[str, dict]) -> list[FileTreeNode]:
+            nodes: list[FileTreeNode] = []
+            for name, value in sorted(branch.items()):
+                path = f"{prefix}/{name}" if prefix else name
+                file_path = value.get("__file__") if isinstance(value, dict) else None
+                if isinstance(file_path, Path):
+                    nodes.append(
+                        FileTreeNode(
+                            name=name,
+                            path=f"workspace/{path}",
+                            type="file",
+                            size=file_path.stat().st_size,
+                        )
+                    )
+                else:
+                    nodes.append(
+                        FileTreeNode(
+                            name=name,
+                            path=f"workspace/{path}",
+                            type="directory",
+                            children=build_nodes(path, value),
+                        )
+                    )
+            return nodes
+
+        return build_nodes("", tree)
+
+    def _read_workspace_file(self, session_id: str, relative_path: str) -> Optional[str]:
+        root = self._workspace_root(session_id)
+        if root is None:
+            return None
+        try:
+            candidate = (root / _normalize_path(relative_path)).resolve()
+        except OSError:
+            return None
+        if candidate != root and root not in candidate.parents:
+            return None
+        if not candidate.is_file() or self._skip_workspace_file(root, candidate):
+            return None
+        try:
+            return candidate.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return None
+        except OSError:
+            return None
 
     def _resolve_index_html(self, session_id: str) -> str:
         page = self._page_service.get_by_slug(session_id, "index")

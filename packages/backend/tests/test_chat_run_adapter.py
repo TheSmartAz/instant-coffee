@@ -590,12 +590,10 @@ def test_chat_stream_recovers_ask_user_waiting_run_after_registry_loss(tmp_path,
     payloads = _sse_json_payloads(response_text)
     lifecycle_events = _filtered_events(
         [payload["type"] for payload in payloads if "type" in payload],
-        {"run_resumed", "build_start", "build_complete", "verify_start", "verify_pass", "run_completed"},
+        {"run_resumed", "verify_start", "verify_pass", "run_completed"},
     )
     assert lifecycle_events == [
         "run_resumed",
-        "build_start",
-        "build_complete",
         "verify_start",
         "verify_pass",
         "run_completed",
@@ -605,8 +603,6 @@ def test_chat_stream_recovers_ask_user_waiting_run_after_registry_loss(tmp_path,
         for payload in payloads
         if payload.get("type") in {
             "run_resumed",
-            "build_start",
-            "build_complete",
             "verify_start",
             "verify_pass",
             "run_completed",
@@ -662,7 +658,7 @@ def test_chat_rejected_active_run_does_not_persist_user_message(tmp_path, monkey
         assert len(runs) == 1
 
 
-def test_chat_run_adapter_executes_build_review_fix_and_persists_run_state(tmp_path, monkeypatch) -> None:
+def test_chat_run_adapter_completes_main_run_without_blocking_on_build(tmp_path, monkeypatch) -> None:
     database = _create_database(tmp_path, "chat-run-adapter.db")
     session_id, run_id = _seed_running_run(database)
 
@@ -710,8 +706,8 @@ def test_chat_run_adapter_executes_build_review_fix_and_persists_run_state(tmp_p
         )
     )
 
-    assert len(orchestrator.messages) == 2
-    assert _FakeBuildRunner.calls == 2
+    assert len(orchestrator.messages) == 1
+    assert _FakeBuildRunner.calls == 0
 
     with get_db(database) as session:
         run = session.get(SessionRun, run_id)
@@ -719,12 +715,10 @@ def test_chat_run_adapter_executes_build_review_fix_and_persists_run_state(tmp_p
         assert run.status == "completed"
         state = run.metrics["coordinator"]
         assert state["current_phase"] == "done"
-        assert state["fix_attempts"] == 1
+        assert state["fix_attempts"] == 0
         assert [item["phase"] for item in state["phase_history"]] == [
             "implement",
             "build",
-            "review",
-            "fix",
             "review",
         ]
         event_types = [
@@ -738,24 +732,15 @@ def test_chat_run_adapter_executes_build_review_fix_and_persists_run_state(tmp_p
             event_types,
             {"build_start", "build_complete", "verify_start", "verify_fail", "verify_pass"},
         )
-        assert build_verify_events == [
-            "build_start",
-            "build_complete",
-            "verify_start",
-            "verify_fail",
-            "build_start",
-            "build_complete",
-            "verify_start",
-            "verify_pass",
-        ]
+        assert build_verify_events == ["verify_start", "verify_pass"]
         verify_events = _filtered_events(event_types, {"verify_start", "verify_fail", "verify_pass"})
-        assert verify_events == ["verify_start", "verify_fail", "verify_start", "verify_pass"]
-        assert "verify_fail" in event_types
+        assert verify_events == ["verify_start", "verify_pass"]
+        assert "verify_fail" not in event_types
         assert "verify_pass" in event_types
         assert event_types.count("run_completed") == 1
 
 
-def test_chat_endpoint_run_adapter_smoke_executes_fix_loop(tmp_path, monkeypatch) -> None:
+def test_chat_endpoint_run_adapter_completes_after_generation(tmp_path, monkeypatch) -> None:
     app = _create_app(tmp_path, monkeypatch)
     _FakeBuildRunner.calls = 0
     _FakeReviewService.verdicts = [
@@ -793,13 +778,13 @@ def test_chat_endpoint_run_adapter_smoke_executes_fix_loop(tmp_path, monkeypatch
         run_detail = client.get(f"/api/runs/{run_id}")
 
     body = response.json()
-    assert body["message"] == "fixed"
+    assert body["message"] == "implemented"
     assert body["action"] == "pages_generated"
-    assert _FakeBuildRunner.calls == 2
+    assert _FakeBuildRunner.calls == 0
     assert run_detail.status_code == 200
     detail = run_detail.json()
     assert detail["current_phase"] == "done"
-    assert detail["fix_attempts"] == 1
+    assert detail["fix_attempts"] == 0
     assert detail["review_summary"]["error_count"] == 0
 
     with get_db() as session:
@@ -811,8 +796,6 @@ def test_chat_endpoint_run_adapter_smoke_executes_fix_loop(tmp_path, monkeypatch
         assert [item["phase"] for item in state["phase_history"]] == [
             "implement",
             "build",
-            "review",
-            "fix",
             "review",
         ]
 
@@ -854,32 +837,23 @@ def test_chat_stream_endpoint_run_adapter_emits_run_lifecycle(tmp_path, monkeypa
 
     payloads = _sse_json_payloads(response_text)
     event_types = [payload["type"] for payload in payloads if "type" in payload]
-    final_payloads = [payload for payload in payloads if payload.get("message") == "fixed"]
+    final_payloads = [payload for payload in payloads if payload.get("message") == "implemented"]
     assert "run_created" in event_types
     assert "run_started" in event_types
     build_verify_events = _filtered_events(
         event_types,
         {"build_start", "build_complete", "verify_start", "verify_fail", "verify_pass"},
     )
-    assert build_verify_events == [
-        "build_start",
-        "build_complete",
-        "verify_start",
-        "verify_fail",
-        "build_start",
-        "build_complete",
-        "verify_start",
-        "verify_pass",
-    ]
+    assert build_verify_events == ["verify_start", "verify_pass"]
     verify_events = _filtered_events(event_types, {"verify_start", "verify_fail", "verify_pass"})
-    assert verify_events == ["verify_start", "verify_fail", "verify_start", "verify_pass"]
-    assert "verify_fail" in event_types
+    assert verify_events == ["verify_start", "verify_pass"]
+    assert "verify_fail" not in event_types
     assert "verify_pass" in event_types
     assert "run_completed" in event_types
     assert final_payloads
     assert final_payloads[-1]["action"] == "pages_generated"
     assert final_payloads[-1]["thread_id"]
-    assert _FakeBuildRunner.calls == 2
+    assert _FakeBuildRunner.calls == 0
 
     with get_db() as session:
         runs = session.query(SessionRun).all()
@@ -889,8 +863,6 @@ def test_chat_stream_endpoint_run_adapter_emits_run_lifecycle(tmp_path, monkeypa
         assert [item["phase"] for item in state["phase_history"]] == [
             "implement",
             "build",
-            "review",
-            "fix",
             "review",
         ]
 
@@ -958,7 +930,7 @@ def test_chat_endpoint_run_adapter_auto_resumes_waiting_run(tmp_path, monkeypatc
 
     assert second.status_code == 200
     assert second.json()["message"] == "implemented"
-    assert _FakeBuildRunner.calls == 1
+    assert _FakeBuildRunner.calls == 0
     assert len(_SequencedOrchestrator.calls) == 2
     assert _SequencedOrchestrator.calls[1]["resume"]["run_id"] == waiting_run_id
     assert _SequencedOrchestrator.calls[1]["resume"]["auto_resumed"] is True
@@ -1045,12 +1017,10 @@ def test_chat_stream_endpoint_run_adapter_auto_resumes_waiting_run(tmp_path, mon
     event_types = [payload["type"] for payload in payloads if "type" in payload]
     lifecycle_events = _filtered_events(
         event_types,
-        {"run_resumed", "build_start", "build_complete", "verify_start", "verify_pass", "run_completed"},
+        {"run_resumed", "verify_start", "verify_pass", "run_completed"},
     )
     assert lifecycle_events == [
         "run_resumed",
-        "build_start",
-        "build_complete",
         "verify_start",
         "verify_pass",
         "run_completed",
@@ -1060,8 +1030,6 @@ def test_chat_stream_endpoint_run_adapter_auto_resumes_waiting_run(tmp_path, mon
         for payload in payloads
         if payload.get("type") in {
             "run_resumed",
-            "build_start",
-            "build_complete",
             "verify_start",
             "verify_pass",
             "run_completed",
@@ -1069,7 +1037,7 @@ def test_chat_stream_endpoint_run_adapter_auto_resumes_waiting_run(tmp_path, mon
     ]
     assert run_scoped_payloads
     assert {payload.get("run_id") for payload in run_scoped_payloads} == {waiting_run_id}
-    assert _FakeBuildRunner.calls == 1
+    assert _FakeBuildRunner.calls == 0
     assert len(_SequencedOrchestrator.calls) == 2
     assert _SequencedOrchestrator.calls[1]["resume"]["run_id"] == waiting_run_id
     assert _SequencedOrchestrator.calls[1]["resume"]["auto_resumed"] is True
