@@ -106,6 +106,7 @@ class ReviewService:
             .order_by(Page.order_index.asc(), Page.created_at.asc())
             .all()
         )
+        is_react = self._is_react_workspace(session_id)
         return self.review(
             ReviewInput(
                 product_doc_content=product_doc.content if product_doc else None,
@@ -121,10 +122,23 @@ class ReviewService:
                 ),
                 pages=[self._page_input(page) for page in pages],
                 build=self._build_input(session, build_log_summary),
-            )
+            ),
+            is_react=is_react,
         )
 
-    def review(self, review_input: ReviewInput | dict[str, Any]) -> ReviewVerdict:
+    def _is_react_workspace(self, session_id: str) -> bool:
+        from pathlib import Path
+        from ..config import get_settings
+
+        workspace = Path(get_settings().output_dir).expanduser() / session_id
+        return (workspace / "src" / "App.tsx").is_file()
+
+    def review(
+        self,
+        review_input: ReviewInput | dict[str, Any],
+        *,
+        is_react: bool = False,
+    ) -> ReviewVerdict:
         data = (
             review_input
             if isinstance(review_input, ReviewInput)
@@ -136,7 +150,9 @@ class ReviewService:
         generated_slugs = {page.slug for page in data.pages}
 
         self._review_product_doc(data, issues)
-        self._review_pages(data.pages, expected_slugs, generated_slugs, issues)
+        self._review_pages(
+            data.pages, expected_slugs, generated_slugs, issues, is_react=is_react
+        )
         self._review_build(data.build, generated_slugs, issues)
 
         error_count = sum(1 for issue in issues if issue.severity == "error")
@@ -184,6 +200,8 @@ class ReviewService:
         expected_slugs: set[str],
         generated_slugs: set[str],
         issues: list[ReviewIssue],
+        *,
+        is_react: bool = False,
     ) -> None:
         if not pages:
             issues.append(
@@ -208,6 +226,9 @@ class ReviewService:
         for page in pages:
             html = (page.html or "").strip()
             if not html:
+                # React workspaces use TSX source; empty HTML is OK until built
+                if is_react:
+                    continue
                 issues.append(
                     ReviewIssue(
                         code="page_html_missing",
@@ -219,6 +240,8 @@ class ReviewService:
                 )
                 continue
             if _HTML_SHELL_RE.search(html) is None:
+                if is_react:
+                    continue
                 issues.append(
                     ReviewIssue(
                         code="page_html_invalid",

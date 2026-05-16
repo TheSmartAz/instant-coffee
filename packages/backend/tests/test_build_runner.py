@@ -20,25 +20,28 @@ def _create_database(tmp_path, name: str) -> Database:
     return database
 
 
-def test_fallback_build_payload_wraps_generate_node_failures(tmp_path, monkeypatch) -> None:
+def test_build_runner_requires_react_workspace_source(tmp_path, monkeypatch) -> None:
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("OUTPUT_DIR", str(output_dir))
+    from app.config import refresh_settings
+
+    refresh_settings()
     database = _create_database(tmp_path, "build-runner.db")
     session_id = uuid.uuid4().hex
     with transaction_scope(database) as session:
         session.add(SessionModel(id=session_id, title="Build Runner Test"))
 
-    async def boom(_state):
-        raise RuntimeError("node exploded")
-
-    monkeypatch.setattr("app.services.build_runner.generate_node", boom)
-
     with get_db(database) as session:
         runner = BuildRunner(session)
 
         with pytest.raises(BuildError) as exc_info:
-            asyncio.run(runner._fallback_build_payload(session_id, {}))
+            asyncio.run(runner._build(session_id, {}))
 
-    assert exc_info.value.stage == "fallback_generate_payload"
-    assert "node exploded" in str(exc_info.value)
+    assert exc_info.value.stage == "workspace_source"
+    assert "src/App.tsx" in str(exc_info.value)
+
+    monkeypatch.delenv("OUTPUT_DIR", raising=False)
+    refresh_settings()
 
 
 def test_build_runner_prefers_workspace_source_mode(tmp_path, monkeypatch) -> None:

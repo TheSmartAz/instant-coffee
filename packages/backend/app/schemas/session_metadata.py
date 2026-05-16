@@ -37,6 +37,7 @@ class BuildInfo(BaseModel):
     pages: List[str] = Field(default_factory=list)
     dist_path: Optional[str] = None
     error: Optional[str] = None
+    source_mode: Optional[str] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 

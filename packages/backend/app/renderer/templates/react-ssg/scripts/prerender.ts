@@ -135,7 +135,7 @@ if (!fs.existsSync(distDir)) {
 
 const baseHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf-8')
 
-// Prefer manifest (HTML-to-React path) over schemas (legacy path)
+// Prefer workspace/source manifest over schema fallback.
 let pageList: Array<{ slug: string; title: string; head?: HeadMeta; layout?: string; components?: any[] }>
 if (manifest && Array.isArray(manifest.pages) && manifest.pages.length) {
   pageList = manifest.pages.map((p) => ({

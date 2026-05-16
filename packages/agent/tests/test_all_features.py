@@ -491,7 +491,7 @@ class TestPartialResponseRecovery:
 
 
 class TestGenerationArtifactRecovery:
-    def test_partial_generation_retries_until_index_exists(self):
+    def test_partial_generation_retries_until_app_exists(self):
         tmpdir = Path(tempfile.mkdtemp())
         (tmpdir / "PRODUCT.md").write_text("# Product")
         engine = _make_engine(workspace=str(tmpdir))
@@ -507,9 +507,11 @@ class TestGenerationArtifactRecovery:
                     "usage": {},
                     "finish_reason": "partial",
                 }
-            (tmpdir / "index.html").write_text("<!doctype html><html></html>")
+            src_dir = tmpdir / "src"
+            src_dir.mkdir()
+            (src_dir / "App.tsx").write_text("export default function App() { return <main /> }")
             return {
-                "text": "Created index.html",
+                "text": "Created src/App.tsx",
                 "tool_calls": [],
                 "tool_results": [],
                 "usage": {},
@@ -520,7 +522,7 @@ class TestGenerationArtifactRecovery:
         result = asyncio.run(engine.run_turn("Generate a webpage"))
 
         assert calls["count"] == 2
-        assert (tmpdir / "index.html").exists()
+        assert (tmpdir / "src" / "App.tsx").exists()
         assert result.finish_reason == "stop"
 
     def test_partial_generation_exhausted_marks_missing_artifact(self):
@@ -545,7 +547,7 @@ class TestGenerationArtifactRecovery:
         # Initial attempt + 2 automatic recovery attempts.
         assert calls["count"] == 3
         assert result.finish_reason == "missing_artifact"
-        assert "index.html" in result.text
+        assert "src/App.tsx" in result.text
 
 
 # ===================================================================

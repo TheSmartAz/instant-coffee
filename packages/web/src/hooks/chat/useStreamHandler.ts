@@ -113,6 +113,7 @@ const getStatusStage = (eventType: string): ChatRunStatusStage | undefined => {
   if (eventType.startsWith('verify_')) return 'review'
   if (eventType.startsWith('tool_policy_')) return 'policy'
   if (eventType.startsWith('shell_approval')) return 'policy'
+  if (eventType.startsWith('implement_')) return 'implement'
   if (eventType.startsWith('run_')) return 'run'
   return undefined
 }
@@ -143,6 +144,7 @@ const inferStatus = (eventType: string) => {
 const inferPhase = (eventType: string): string | undefined => {
   if (eventType.startsWith('build_')) return 'build'
   if (eventType.startsWith('verify_')) return 'review'
+  if (eventType.startsWith('implement_')) return 'implement'
   return undefined
 }
 

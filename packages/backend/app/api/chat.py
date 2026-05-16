@@ -211,8 +211,8 @@ def _coordinator_completed_response(
 def _main_run_build_placeholder(session_id: str) -> dict[str, object]:
     return {
         "status": "skipped",
-        "reason": "preview_ready",
-        "message": "HTML preview is ready; React build runs as a separate background task.",
+        "reason": "react_source_missing",
+        "message": "React app source was not generated yet.",
         "session_id": session_id,
     }
 
@@ -232,7 +232,7 @@ def _main_run_review_placeholder(session_id: str) -> dict[str, object]:
 
 
 async def _build_session_phase(db: DbSession, session: SessionModel, event_emitter: EventEmitter | None) -> dict[str, object]:
-    if not _session_has_pages(db, session.id):
+    if not _session_has_pages(db, session.id) and not _session_has_react_source(session.id):
         return _main_run_build_placeholder(session.id)
     build_info = await BuildRunner(
         db,
@@ -242,6 +242,8 @@ async def _build_session_phase(db: DbSession, session: SessionModel, event_emitt
 
 
 async def _review_session_phase(db: DbSession, session: SessionModel) -> dict[str, object]:
+    if not _session_has_pages(db, session.id) and _session_has_react_source(session.id):
+        return _main_run_review_placeholder(session.id)
     if not _session_has_pages(db, session.id):
         return _main_run_review_placeholder(session.id)
     return ReviewService(db).review_session(session.id)
@@ -249,6 +251,11 @@ async def _review_session_phase(db: DbSession, session: SessionModel) -> dict[st
 
 def _session_has_pages(db: DbSession, session_id: str) -> bool:
     return db.query(Page.id).filter(Page.session_id == session_id).first() is not None
+
+
+def _session_has_react_source(session_id: str) -> bool:
+    workspace = (Path(get_settings().output_dir).expanduser() / session_id).resolve()
+    return (workspace / "src" / "App.tsx").is_file()
 
 
 async def _run_orchestrator_stream(

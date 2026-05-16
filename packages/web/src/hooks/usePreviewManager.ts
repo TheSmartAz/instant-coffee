@@ -20,7 +20,6 @@ interface PreviewManagerState {
   previewUrl: string | null
   pagePreviewVersion: number | null
   appMode: boolean
-  setAppMode: (value: boolean) => void
   buildPreviewStamp: number
   setBuildPreviewStamp: (value: number) => void
   autoLoadedPreviewRef: React.MutableRefObject<Set<string>>
@@ -32,7 +31,6 @@ interface PreviewManagerState {
 }
 
 export function usePreviewManager({
-  sessionId,
   session,
   versions,
   pages,
@@ -45,7 +43,7 @@ export function usePreviewManager({
   const [previewHtml, setPreviewHtml] = React.useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
   const [pagePreviewVersion, setPagePreviewVersion] = React.useState<number | null>(null)
-  const [appMode, setAppMode] = React.useState(false)
+  const appMode = true
   const [buildPreviewStamp, setBuildPreviewStamp] = React.useState(0)
   const autoLoadedPreviewRef = React.useRef<Set<string>>(new Set())
   const previousBuildStatusRef = React.useRef(buildStatus)
@@ -56,11 +54,6 @@ export function usePreviewManager({
       try {
         const preview = await api.pages.getPreview(pageId)
         setPagePreviewVersion(preview.version ?? null)
-        if (appMode) {
-          setPreviewHtml(preview.html ?? null)
-          setPreviewUrl(null)
-          return
-        }
         const url = buildPagePreviewUrl(pageId, options)
         setPreviewUrl(url)
         setPreviewHtml(null)
@@ -78,7 +71,7 @@ export function usePreviewManager({
         })
       }
     },
-    [appMode, buildPagePreviewUrl]
+    [buildPagePreviewUrl]
   )
 
   const isHttpUrl = React.useCallback(
@@ -135,38 +128,6 @@ export function usePreviewManager({
     void loadPagePreview(selectedPageId)
   }, [selectedPageId, previewUrl, previewHtml, loadPagePreview])
 
-  // Reload page preview on appMode change
-  React.useEffect(() => {
-    if (!selectedPageId) return
-    void loadPagePreview(selectedPageId, { bustCache: true })
-  }, [appMode, loadPagePreview, selectedPageId])
-
-  // Load/persist appMode from localStorage
-  React.useEffect(() => {
-    if (!sessionId) {
-      setAppMode(false)
-      return
-    }
-    try {
-      const key = `instant-coffee:app-mode:${sessionId}`
-      const raw = window.localStorage.getItem(key)
-      setAppMode(raw === 'true')
-    } catch {
-      setAppMode(false)
-    }
-  }, [sessionId])
-
-  // Persist appMode to localStorage
-  React.useEffect(() => {
-    if (!sessionId) return
-    try {
-      const key = `instant-coffee:app-mode:${sessionId}`
-      window.localStorage.setItem(key, appMode ? 'true' : 'false')
-    } catch {
-      // ignore storage failures
-    }
-  }, [appMode, sessionId])
-
   // Refresh preview on build success
   React.useEffect(() => {
     const previous = previousBuildStatusRef.current
@@ -206,7 +167,6 @@ export function usePreviewManager({
     previewUrl,
     pagePreviewVersion,
     appMode,
-    setAppMode,
     buildPreviewStamp,
     setBuildPreviewStamp,
     autoLoadedPreviewRef,

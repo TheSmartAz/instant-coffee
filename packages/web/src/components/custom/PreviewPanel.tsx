@@ -115,7 +115,6 @@ export interface PageInfo {
 export interface PreviewPanelProps {
   sessionId?: string
   appMode?: boolean
-  onAppModeChange?: (next: boolean) => void
   previewMode?: 'live' | 'build'
   onPreviewModeChange?: (next: 'live' | 'build') => void
   htmlContent?: string
@@ -140,8 +139,7 @@ export interface PreviewPanelProps {
 
 export const PreviewPanel = React.memo(function PreviewPanel({
   sessionId,
-  appMode = false,
-  onAppModeChange,
+  appMode = true,
   previewMode = 'live',
   onPreviewModeChange,
   htmlContent,
@@ -391,20 +389,6 @@ export const PreviewPanel = React.memo(function PreviewPanel({
                 Build
               </button>
             </div>
-          ) : null}
-          {onAppModeChange ? (
-            <Button
-              type="button"
-              size="sm"
-              variant={appMode ? 'default' : 'outline'}
-              onClick={() => onAppModeChange(!appMode)}
-              aria-pressed={appMode}
-              disabled={isBuildPreview}
-              title={isBuildPreview ? 'App mode is available for live preview only' : undefined}
-              className="h-8 w-[96px] shrink-0 rounded-full text-[11px] font-semibold"
-            >
-              {appMode ? 'App Mode' : 'Static Mode'}
-            </Button>
           ) : null}
           <Button
             variant="ghost"

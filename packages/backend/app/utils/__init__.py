@@ -9,6 +9,7 @@ from .html import (
     normalize_internal_links,
     replace_nav_html,
     rewrite_internal_links_for_export,
+    strip_prompt_artifacts,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "normalize_internal_links",
     "replace_nav_html",
     "rewrite_internal_links_for_export",
+    "strip_prompt_artifacts",
 ]

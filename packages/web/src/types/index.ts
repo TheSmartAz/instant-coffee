@@ -19,7 +19,7 @@ export interface ChatStep {
   progressPercent?: number
 }
 
-export type ChatRunStatusStage = 'run' | 'build' | 'review' | 'policy'
+export type ChatRunStatusStage = 'run' | 'implement' | 'build' | 'review' | 'policy'
 
 export interface ChatRunStatus {
   eventType: string

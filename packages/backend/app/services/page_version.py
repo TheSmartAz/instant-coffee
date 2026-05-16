@@ -296,9 +296,34 @@ class PageVersionService:
             )
         if version is None:
             return None
-        html = inline_css(version.html or "", global_style_css, position="prepend")
+        html = version.html or ""
+        if not html.strip():
+            # Fallback to built dist HTML for React workspace builds
+            html = self._read_dist_html(page.session_id, page.slug) or ""
+        html = inline_css(html, global_style_css, position="prepend")
         html = strip_prompt_artifacts(html)
         return version, html
+
+    def _read_dist_html(self, session_id: str, slug: str) -> Optional[str]:
+        from pathlib import Path
+        from ..config import get_settings
+
+        dist_dir = Path(get_settings().output_dir).expanduser() / session_id / "dist"
+        if not dist_dir.is_dir():
+            return None
+        candidates: list[Path] = []
+        if slug == "index":
+            candidates.append(dist_dir / "index.html")
+        else:
+            candidates.append(dist_dir / "pages" / slug / "index.html")
+            candidates.append(dist_dir / "pages" / f"{slug}.html")
+        for candidate in candidates:
+            if candidate.is_file():
+                try:
+                    return candidate.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+        return None
 
     def fallback_stats_by_session(self, session_id: str, *, limit: int = 10) -> dict:
         total_versions = (

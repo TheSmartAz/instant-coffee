@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.config import refresh_settings
+from app.config import get_settings, refresh_settings
 from app.db.database import reset_database
 from app.db.migrations import init_db
 from app.db.models import SessionRun
@@ -13,8 +14,6 @@ from app.events.models import workflow_event
 from app.events.types import EventType
 from app.schemas.orchestrator_response import OrchestratorResponse
 from app.schemas.session_metadata import BuildInfo, BuildStatus
-from app.services.page import PageService
-from app.services.page_version import PageVersionService
 from app.services.product_doc import ProductDocService
 
 
@@ -30,16 +29,23 @@ class _SmokeOrchestrator:
             content="# Smoke Product\n\nA tiny product doc for the smoke path.",
             structured={"design_direction": {"tone": "concise"}},
         )
-        page = PageService(self.db).create(
-            session_id=self.session.id,
-            title="Smoke Home",
-            slug="index",
-            description="Smoke-test landing page",
+        workspace = Path(get_settings().output_dir).expanduser() / self.session.id
+        src_dir = workspace / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        (src_dir / "App.tsx").write_text(
+            "export default function App() { return <main>Smoke React app</main> }\n",
+            encoding="utf-8",
         )
-        PageVersionService(self.db).create(
-            page.id,
-            "<!doctype html><html><body><main>Smoke export page</main></body></html>",
-            description="smoke page",
+        (src_dir / "main.tsx").write_text(
+            "import React from 'react'\n"
+            "import { createRoot } from 'react-dom/client'\n"
+            "import App from './App'\n"
+            "createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)\n",
+            encoding="utf-8",
+        )
+        (src_dir / "index.css").write_text(
+            "html, body { margin: 0; } .hide-scrollbar { scrollbar-width: none; }\n",
+            encoding="utf-8",
         )
         self.db.flush()
         yield OrchestratorResponse(
@@ -48,7 +54,7 @@ class _SmokeOrchestrator:
             message="smoke implementation complete",
             is_complete=True,
             action="pages_generated",
-            affected_pages=["index"],
+            affected_pages=[],
             active_page_slug="index",
         )
 
@@ -57,7 +63,9 @@ class _SmokeBuildRunner:
     def __init__(self, _db, *, event_emitter=None, cancel_event=None) -> None:
         self.event_emitter = event_emitter
 
-    async def build_session(self, _session_id: str) -> BuildInfo:
+    async def build_session(self, session_id: str) -> BuildInfo:
+        workspace = Path(get_settings().output_dir).expanduser() / session_id
+        assert (workspace / "src" / "App.tsx").is_file()
         if self.event_emitter is not None:
             self.event_emitter.emit(workflow_event(EventType.BUILD_START))
             self.event_emitter.emit(
@@ -67,6 +75,7 @@ class _SmokeBuildRunner:
                         "status": "success",
                         "pages": ["index.html"],
                         "dist_path": "/tmp/instant-coffee/smoke-dist",
+                        "source_mode": "workspace",
                     },
                 )
             )
@@ -74,6 +83,7 @@ class _SmokeBuildRunner:
             status=BuildStatus.SUCCESS,
             pages=["index.html"],
             dist_path="/tmp/instant-coffee/smoke-dist",
+            source_mode="workspace",
         )
 
 
@@ -143,7 +153,6 @@ def test_chat_run_adapter_fake_e2e_smoke(tmp_path, monkeypatch) -> None:
             assert run.status == "completed"
 
         run_detail = client.get(f"/api/runs/{run_id}")
-        export_response = client.post(f"/api/sessions/{session_id}/export")
 
     payloads = _sse_payloads(response_text)
     event_types = [payload["type"] for payload in payloads if "type" in payload]
@@ -166,10 +175,6 @@ def test_chat_run_adapter_fake_e2e_smoke(tmp_path, monkeypatch) -> None:
     assert detail["status"] == "completed"
     assert detail["current_phase"] == "done"
     assert detail["artifacts"]["build"]["pages"] == ["index.html"]
+    assert detail["artifacts"]["build"]["source_mode"] == "workspace"
     assert detail["review_summary"]["error_count"] == 0
-    assert export_response.status_code == 200
-    export_payload = export_response.json()
-    assert export_payload["success"] is True
-    assert export_payload["manifest"]["pages"][0]["slug"] == "index"
-    assert (tmp_path / "output" / session_id / "export" / "index.html").exists()
-    assert (tmp_path / "output" / session_id / "export" / "product-doc.md").exists()
+    assert (tmp_path / "output" / session_id / "src" / "App.tsx").exists()

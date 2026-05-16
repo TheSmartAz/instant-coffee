@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
-from .html_to_react import ConvertedFile
-
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ConvertedFile:
+    path: str
+    content: str
 
 
 class TsxFileWriter:
@@ -118,9 +123,8 @@ export default function App({{ pageSlug = 'index' }}: AppProps) {{
         """Resolve the actual page module for a slug.
 
         The React SSG template includes placeholder pages that call back into
-        App via createPage(). Those placeholders are valid for schema builds,
-        but in the HTML-to-React path App imports pages directly. Importing a
-        placeholder there causes App -> Page -> App recursion during prerender.
+        App via createPage(). Importing those placeholders directly causes
+        App -> Page -> App recursion during prerender.
         """
         pages_dir = self.root / "src" / "pages"
         slug_path = pages_dir / f"{slug}.tsx"
@@ -163,4 +167,4 @@ export default function App({{ pageSlug = 'index' }}: AppProps) {{
         )
 
 
-__all__ = ["TsxFileWriter"]
+__all__ = ["ConvertedFile", "TsxFileWriter"]

@@ -558,4 +558,5 @@ __all__ = [
     "replace_nav_html",
     "extract_nav_slugs",
     "rewrite_internal_links_for_export",
+    "strip_prompt_artifacts",
 ]

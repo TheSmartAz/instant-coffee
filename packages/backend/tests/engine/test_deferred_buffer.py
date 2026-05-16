@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from app.engine.deferred_buffer import DeferredPersistenceBuffer
 
 
 class TestRecording:
-    """Buffer correctly captures and overwrites entries."""
+    """Buffer correctly captures and overwrites product-doc entries."""
 
     def test_record_product_doc_last_write_wins(self):
         buf = DeferredPersistenceBuffer()
@@ -20,21 +18,6 @@ class TestRecording:
         assert buf._product_doc is not None
         assert buf._product_doc.content == "v3"
 
-    def test_record_html_last_write_wins_per_slug(self):
-        buf = DeferredPersistenceBuffer()
-        buf.record_html("landing.html", "<h1>v1</h1>", "landing")
-        buf.record_html("landing.html", "<h1>v2</h1>", "landing")
-        assert len(buf._html) == 1
-        assert buf._html["landing"].content == "<h1>v2</h1>"
-
-    def test_multiple_slugs_independent(self):
-        buf = DeferredPersistenceBuffer()
-        buf.record_html("landing.html", "<h1>Landing</h1>", "landing")
-        buf.record_html("about.html", "<h1>About</h1>", "about")
-        assert len(buf._html) == 2
-        assert buf._html["landing"].content == "<h1>Landing</h1>"
-        assert buf._html["about"].content == "<h1>About</h1>"
-
     def test_has_pending(self):
         buf = DeferredPersistenceBuffer()
         assert not buf.has_pending
@@ -42,29 +25,22 @@ class TestRecording:
         buf.record_product_doc("PRODUCT.md", "content")
         assert buf.has_pending
 
-    def test_has_pending_html(self):
-        buf = DeferredPersistenceBuffer()
-        buf.record_html("index.html", "<h1>Hi</h1>", "index")
-        assert buf.has_pending
-
 
 class TestClear:
-    """clear() discards all buffered writes."""
+    """clear() discards buffered writes."""
 
     def test_clear_discards_everything(self):
         buf = DeferredPersistenceBuffer()
         buf.record_product_doc("PRODUCT.md", "content")
-        buf.record_html("landing.html", "<h1>Hi</h1>", "landing")
         assert buf.has_pending
 
         buf.clear()
         assert not buf.has_pending
         assert buf._product_doc is None
-        assert len(buf._html) == 0
 
 
 class TestFlush:
-    """flush() persists each key exactly once."""
+    """flush() persists the product doc exactly once."""
 
     @patch("app.engine.deferred_buffer.DeferredPersistenceBuffer._flush_product_doc")
     def test_flush_product_doc_called_once(self, mock_flush_pd):
@@ -78,25 +54,11 @@ class TestFlush:
 
         mock_flush_pd.assert_called_once_with(db, "session-1", None)
 
-    @patch("app.engine.deferred_buffer.DeferredPersistenceBuffer._flush_html")
-    def test_flush_html_called_once_per_slug(self, mock_flush_html):
-        buf = DeferredPersistenceBuffer()
-        buf.record_html("landing.html", "<h1>v1</h1>", "landing")
-        buf.record_html("landing.html", "<h1>v2</h1>", "landing")
-        buf.record_html("about.html", "<h1>About</h1>", "about")
-
-        db = MagicMock()
-        buf.flush(db, "session-1", emitter=None)
-
-        assert mock_flush_html.call_count == 2
-
     def test_flush_clears_buffer(self):
         buf = DeferredPersistenceBuffer()
         buf.record_product_doc("PRODUCT.md", "content")
-        buf.record_html("landing.html", "<h1>Hi</h1>", "landing")
 
-        with patch.object(buf, "_flush_product_doc"), \
-             patch.object(buf, "_flush_html"):
+        with patch.object(buf, "_flush_product_doc"):
             buf.flush(MagicMock(), "session-1", emitter=None)
 
         assert not buf.has_pending
@@ -109,19 +71,14 @@ class TestFlush:
         assert not buf.has_pending
 
     @patch("app.engine.deferred_buffer.DeferredPersistenceBuffer._flush_product_doc")
-    def test_flush_continues_on_product_doc_error(self, mock_flush_pd):
-        """If product doc flush fails, HTML flush should still run."""
+    def test_flush_clears_on_product_doc_error(self, mock_flush_pd):
         mock_flush_pd.side_effect = Exception("DB error")
 
         buf = DeferredPersistenceBuffer()
         buf.record_product_doc("PRODUCT.md", "content")
-        buf.record_html("landing.html", "<h1>Hi</h1>", "landing")
 
-        with patch.object(buf, "_flush_html") as mock_flush_html:
-            buf.flush(MagicMock(), "session-1", emitter=None)
-            mock_flush_html.assert_called_once()
+        buf.flush(MagicMock(), "session-1", emitter=None)
 
-        # Buffer should still be cleared
         assert not buf.has_pending
 
 
@@ -165,22 +122,4 @@ class TestFlushIntegration:
             "doc-42",
             content="updated content",
             change_summary="Updated via engine (deferred)",
-        )
-
-    @patch("app.engine.db_tools.persist_html_page")
-    def test_flush_html_calls_persist_html_page(self, mock_persist):
-        buf = DeferredPersistenceBuffer()
-        buf.record_html("landing.html", "<h1>Final</h1>", "landing")
-
-        db = MagicMock()
-        emitter = MagicMock()
-        buf.flush(db, "session-1", emitter=emitter)
-
-        mock_persist.assert_called_once_with(
-            db,
-            "session-1",
-            "landing.html",
-            "<h1>Final</h1>",
-            emitter=emitter,
-            description="Generated by engine (deferred)",
         )

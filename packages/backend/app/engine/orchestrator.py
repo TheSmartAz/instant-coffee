@@ -6,7 +6,6 @@ async-generator interface consumed by the chat API.
 
 from __future__ import annotations
 
-import glob
 import logging
 import os
 import tempfile
@@ -27,7 +26,7 @@ from ..services.message import MessageService
 from ..services.run import RunNotFoundError, RunService, RunStateConflictError
 
 from .config_bridge import backend_settings_to_agent_config
-from .db_tools import DBEditFile, DBMultiEditFile, DBWriteFile, persist_html_page
+from .db_tools import DBEditFile, DBMultiEditFile, DBWriteFile
 from .deferred_buffer import DeferredPersistenceBuffer
 from .event_bridge import EventBridge
 from .prompts import build_system_prompt
@@ -616,8 +615,8 @@ class EngineOrchestrator:
             if result.tool_calls:
                 self._save_design_decisions(result.tool_calls)
 
-            # Sync any HTML files written outside of write_file/edit_file
-            synced_slugs = self._sync_workspace_html(workspace)
+            # Sync React workspace pages to DB so preview/build/versioning work
+            synced_slugs = self._sync_workspace_react_pages(workspace)
 
             # Build final response
             text = result.text or self._bridge.get_accumulated_text()
@@ -673,9 +672,9 @@ class EngineOrchestrator:
                     self._deferred_buffer.flush(self.db, self.session.id, self.event_emitter)
             except Exception:
                 logger.exception("Deferred buffer flush failed during error handling")
-            # Try to sync any files written before the error
+            # Preserve React workspace files written before the error.
             try:
-                synced_slugs = self._sync_workspace_html(workspace)
+                synced_slugs = self._sync_workspace_react_pages(workspace)
                 affected = self._get_affected_pages()
             except Exception:
                 synced_slugs = []
@@ -732,52 +731,63 @@ class EngineOrchestrator:
         except Exception:
             return []
 
-    def _sync_workspace_html(self, workspace: str) -> list[str]:
-        """Persist any HTML files in the workspace that are missing from the DB.
+    def _sync_workspace_react_pages(self, workspace: str) -> list[str]:
+        """Discover React pages from workspace source and sync them to the DB.
 
-        This catches the case where the LLM wrote HTML via the shell tool
-        (e.g. ``cat > index.html``) instead of ``write_file``, bypassing
-        DB persistence entirely.
-
-        If the deferred buffer is still active (hasn't been flushed yet),
-        writes go through the buffer.  Otherwise falls back to direct persist.
-
-        Returns the list of slugs that were newly synced.
+        Scans ``src/pages/*.tsx`` and ensures a ``Page`` + ``PageVersion`` record
+        exists for each so that preview, versioning, and build discovery work.
         """
         from ..services.page import PageService
-        from .db_tools import _slug_from_filename
+        from ..services.page_version import PageVersionService
 
+        ws = Path(workspace)
+        pages_dir = ws / "src" / "pages"
+        slugs: list[str] = []
+
+        if pages_dir.is_dir():
+            for path in sorted(pages_dir.glob("*.tsx")):
+                if path.name.startswith("_"):
+                    continue
+                slugs.append(path.stem)
+
+        if not slugs and (ws / "src" / "App.tsx").is_file():
+            slugs.append("index")
+
+        if not slugs:
+            return []
+
+        page_service = PageService(self.db, event_emitter=self.event_emitter)
+        page_version_service = PageVersionService(self.db, event_emitter=self.event_emitter)
+        existing = {p.slug: p for p in page_service.list_by_session(self.session.id)}
         synced: list[str] = []
-        if self._execution_mode == "plan":
-            return synced
 
-        html_files = glob.glob(os.path.join(workspace, "*.html"))
-        if not html_files:
-            return synced
-
-        page_svc = PageService(self.db)
-        for html_path in html_files:
-            slug = _slug_from_filename(html_path)
-            existing = page_svc.get_by_slug(self.session.id, slug)
-            if existing is not None:
-                continue
-            try:
-                content = Path(html_path).read_text(encoding="utf-8")
-                # Use direct persist here — _sync runs after buffer.flush()
-                # so these are truly orphaned files not captured by tools.
-                persist_html_page(
-                    self.db,
-                    self.session.id,
-                    html_path,
-                    content,
-                    emitter=self.event_emitter,
-                    description="Synced from workspace",
+        for idx, slug in enumerate(slugs):
+            title = slug.replace("-", " ").title()
+            if slug in existing:
+                page = existing[slug]
+                if page.title != title:
+                    page_service.update(page.id, title=title)
+            else:
+                page = page_service.create(
+                    session_id=self.session.id,
+                    title=title,
+                    slug=slug,
+                    order_index=idx,
                 )
-                synced.append(slug)
-                logger.info("Synced orphaned HTML %s → slug=%s", html_path, slug)
-            except Exception:
-                logger.exception("Failed to sync workspace HTML %s", html_path)
 
+            # Ensure a PageVersion record exists so preview API has something to return
+            current = page_version_service.get_current(page.id)
+            if current is None:
+                page_version_service.create(
+                    page_id=page.id,
+                    html="",
+                    description="React source page",
+                    fallback_used=True,
+                    fallback_excerpt="Page version created from React workspace source",
+                )
+            synced.append(slug)
+
+        self.db.commit()
         return synced
 
     def _determine_action(self, result: Any, affected_pages: list[str], synced_slugs: list[str] | None = None) -> str:
@@ -787,9 +797,13 @@ class EngineOrchestrator:
         if "ask_user" in tool_names:
             return "refine_waiting"
 
-        wrote_html = any(
+        wrote_react_source = any(
             tc.get("name") == "write_file"
-            and str(tc.get("arguments", "")).endswith(".html")
+            and (
+                "src/App.tsx" in str(tc.get("arguments", ""))
+                or "src/main.tsx" in str(tc.get("arguments", ""))
+                or "src/pages/" in str(tc.get("arguments", ""))
+            )
             for tc in result.tool_calls
         )
         wrote_product_doc = any(
@@ -797,15 +811,19 @@ class EngineOrchestrator:
             and "product" in str(tc.get("arguments", "")).lower()
             for tc in result.tool_calls
         )
-        edited_html = any(
+        edited_react_source = any(
             tc.get("name") == "edit_file"
-            and str(tc.get("arguments", "")).endswith(".html")
+            and (
+                "src/App.tsx" in str(tc.get("arguments", ""))
+                or "src/main.tsx" in str(tc.get("arguments", ""))
+                or "src/pages/" in str(tc.get("arguments", ""))
+            )
             for tc in result.tool_calls
         )
 
-        if wrote_html:
+        if wrote_react_source:
             return "pages_generated"
-        if edited_html:
+        if edited_react_source:
             return "page_refined"
         if "create_parallel_sub_agents" in tool_names or "create_sub_agent" in tool_names:
             # Sub-agents wrote files — check if pages exist in DB

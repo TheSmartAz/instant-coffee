@@ -363,7 +363,7 @@ class Engine:
         haystack = text.lower()
         keywords = (
             "generate", "build", "create", "implement", "webpage",
-            "web page", "website", "landing page", "html", "index.html",
+            "web page", "website", "landing page", "react", "app", "src/app.tsx",
         )
         return any(token in haystack for token in keywords)
 
@@ -411,11 +411,12 @@ class Engine:
                 return True
         return False
 
-    def _index_written_this_turn(self) -> bool:
+    def _app_written_this_turn(self) -> bool:
         from pathlib import Path
         for change in self._file_changes:
             try:
-                if Path(change.get("path", "")).name == "index.html":
+                path = Path(change.get("path", ""))
+                if path.as_posix().lower().endswith("src/app.tsx"):
                     return True
             except Exception:
                 continue
@@ -439,11 +440,11 @@ class Engine:
             return False
 
         product_doc = workspace / "PRODUCT.md"
-        index_file = workspace / "index.html"
-        if not product_doc.exists() or index_file.exists():
+        app_file = workspace / "src" / "App.tsx"
+        if not product_doc.exists() or app_file.exists():
             return False
 
-        if self._index_written_this_turn():
+        if self._app_written_this_turn():
             return False
 
         # If the agent is asking the user to confirm before generating,
@@ -598,14 +599,15 @@ class Engine:
                         )
                         recovery_prompt = (
                             "Generation recovery: the previous response ended before "
-                            "creating index.html. Continue now and call write_file to "
-                            "create index.html in the workspace root based on PRODUCT.md. "
+                            "creating the React app source. Continue now and call write_file "
+                            "to create src/App.tsx based on PRODUCT.md. Also create "
+                            "src/main.tsx and src/index.css if they are missing. "
                             "Do not ask more questions."
                         )
                         self.context.add_user(recovery_prompt)
                         if self.on_text_delta:
                             retry_msg = (
-                                "\n\n*(Generation stalled before `index.html` was created. "
+                                "\n\n*(Generation stalled before `src/App.tsx` was created. "
                                 "Retrying automatically.)*"
                             )
                             await self._call(self.on_text_delta, retry_msg)
@@ -617,7 +619,7 @@ class Engine:
                         _generation_retries,
                     )
                     fail_msg = (
-                        "\n\n*(Generation ended before creating `index.html` after "
+                        "\n\n*(Generation ended before creating `src/App.tsx` after "
                         "automatic retries. Try rerunning with a faster model or a higher "
                         "model timeout.)*"
                     )

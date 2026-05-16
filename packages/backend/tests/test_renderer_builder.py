@@ -3,8 +3,7 @@ from pathlib import Path
 
 from app.renderer.builder import ReactSSGBuilder
 from app.renderer.file_generator import SchemaFileGenerator
-from app.renderer.html_to_react import ConvertedFile
-from app.renderer.tsx_writer import TsxFileWriter
+from app.renderer.tsx_writer import ConvertedFile, TsxFileWriter
 
 
 def test_schema_file_generator_writes_json_and_pages(tmp_path: Path) -> None:
@@ -114,7 +113,7 @@ def test_react_ssg_builder_builds_from_workspace_source(tmp_path: Path, monkeypa
     assert (builder.dist_dir / "index.html").exists()
 
 
-def test_tsx_writer_replaces_template_page_wrapper_for_html_conversion(tmp_path: Path) -> None:
+def test_tsx_writer_replaces_template_page_wrapper_for_direct_source(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     pages_dir = project_root / "src" / "pages"
     pages_dir.mkdir(parents=True)

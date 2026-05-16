@@ -78,7 +78,7 @@ class WriteFile(BaseTool):
     name = "write_file"
     description = "Write content to a file inside the workspace. Creates parent directories if needed."
     parameters = [
-        ToolParam(name="file_path", description="Path relative to workspace (e.g. 'src/index.html')"),
+        ToolParam(name="file_path", description="Path relative to workspace (e.g. 'src/App.tsx')"),
         ToolParam(name="content", description="The content to write to the file"),
     ]
 

@@ -154,7 +154,6 @@ export function ProjectPage() {
     previewUrl,
     pagePreviewVersion,
     appMode,
-    setAppMode,
     buildPreviewStamp,
     setBuildPreviewStamp,
     loadPagePreview,
@@ -636,7 +635,6 @@ export function ProjectPage() {
                   activeTab={workbenchTab}
                   onTabChange={setWorkbenchTab}
                   appMode={appMode}
-                  onAppModeChange={setAppMode}
                   previewMode={previewMode}
                   onPreviewModeChange={setPreviewMode}
                   onBuildFromDoc={handleBuildFromDoc}

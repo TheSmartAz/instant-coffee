@@ -14,8 +14,6 @@ from typing import Any
 
 from ..services.mobile_shell import ensure_mobile_shell
 from .file_generator import SchemaFileGenerator
-from .html_to_react import ConvertedFile, HtmlToReactConverter, PageHtml
-from .tsx_writer import TsxFileWriter
 
 logger = logging.getLogger(__name__)
 
@@ -106,25 +104,6 @@ class ReactSSGBuilder:
         self._emit_done(result)
         return result
 
-    # ------------------------------------------------------------------
-    # HTML-to-React build path
-    # ------------------------------------------------------------------
-
-    async def build_from_html(
-        self,
-        pages: list[PageHtml],
-        product_doc_content: str | None = None,
-    ) -> dict[str, Any]:
-        """Build from HTML pages via AI conversion to React + Tailwind."""
-        self._emit_start()
-        try:
-            result = await self._build_from_html_async(pages, product_doc_content)
-        except Exception as exc:
-            self._emit_failed(exc)
-            raise
-        self._emit_done(result)
-        return result
-
     async def build_from_workspace_source(
         self,
         source_dir: Path,
@@ -200,85 +179,6 @@ class ReactSSGBuilder:
             ).__dict__,
             "source_mode": "workspace",
         }
-
-    async def _build_from_html_async(
-        self,
-        pages: list[PageHtml],
-        product_doc_content: str | None = None,
-    ) -> dict[str, Any]:
-        if not self.TEMPLATE_PATH.exists():
-            raise BuildError("React SSG template not found", stage="template")
-
-        self._reset_log()
-        self._log("Build started (HTML-to-React path)")
-        self._check_cancelled("init")
-
-        # 1. Copy template
-        self._emit_progress("Copying template", 10)
-        await asyncio.to_thread(self._copy_template)
-
-        # 2. AI conversion
-        self._emit_progress("Converting HTML to React", 15)
-        self._check_cancelled("ai_convert")
-        self._log("Calling AI to convert HTML pages to React components")
-        converter = HtmlToReactConverter()
-        converted_files = await converter.convert(pages, product_doc_content)
-        self._log(f"AI returned {len(converted_files)} files")
-        self._emit_progress("AI conversion complete", 40)
-
-        # 3. Write files
-        self._emit_progress("Writing React files", 45)
-        self._check_cancelled("write_files")
-        page_dicts = [{"slug": p.slug, "title": p.title} for p in pages]
-        await asyncio.to_thread(
-            self._write_converted_files, converted_files, page_dicts
-        )
-        self._emit_progress("Files written", 50)
-
-        # 4. npm install
-        self._emit_progress("Installing dependencies", 55)
-        await asyncio.to_thread(
-            self._run_command,
-            ["npm", "ci"] if (self.work_dir / "package-lock.json").exists() else ["npm", "install"],
-            stage="npm_install",
-        )
-        self._emit_progress("Dependencies installed", 65)
-
-        # 5. npm build (with retry on failure)
-        self._emit_progress("Building project", 70)
-        build_result = await self._npm_build_with_retry(
-            pages, converted_files, product_doc_content, page_dicts
-        )
-        if build_result is not None:
-            converted_files = build_result
-
-        build_dist = self.work_dir / "dist"
-        if not build_dist.exists():
-            raise BuildError("Build output not found", stage="npm_build")
-        self._emit_progress("Build succeeded", 80)
-
-        # 6. Publish dist
-        self._emit_progress("Publishing build artifacts", 90)
-        await asyncio.to_thread(self._publish_dist, build_dist)
-
-        # 7. Mobile shell
-        self._emit_progress("Applying mobile shell", 95)
-        self._check_cancelled("mobile_shell")
-        await asyncio.to_thread(self._apply_mobile_shell)
-
-        # 8. Complete
-        html_pages = sorted(
-            str(p.relative_to(self.dist_dir))
-            for p in self.dist_dir.rglob("*.html")
-            if p.is_file()
-        )
-        self._emit_progress("Build complete", 100)
-
-        return BuildResult(
-            status="success",
-            dist_path=str(self.dist_dir),
-            pages=html_pages,
-        ).__dict__
 
     def _copy_template(self) -> None:
         if self.work_dir.exists():
@@ -362,55 +262,10 @@ class ReactSSGBuilder:
         }
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    def _write_converted_files(
-        self,
-        files: list[ConvertedFile],
-        page_dicts: list[dict],
-    ) -> None:
-        writer = TsxFileWriter(self.work_dir)
-        writer.write_files(files)
-        writer.write_entry_points(page_dicts)
-        self._log(f"Wrote {len(files)} converted files + entry points")
-
     def _publish_dist(self, build_dist: Path) -> None:
         if self.dist_dir.exists():
             shutil.rmtree(self.dist_dir)
         shutil.move(str(build_dist), str(self.dist_dir))
-
-    async def _npm_build_with_retry(
-        self,
-        pages: list[PageHtml],
-        converted_files: list[ConvertedFile],
-        product_doc_content: str | None,
-        page_dicts: list[dict],
-        max_retries: int = 2,
-    ) -> list[ConvertedFile] | None:
-        """Run npm build; on failure, ask AI to fix and retry."""
-        for attempt in range(max_retries + 1):
-            try:
-                await asyncio.to_thread(
-                    self._run_command, ["npm", "run", "build"], stage="npm_build"
-                )
-                return None  # success, no new files
-            except BuildError as exc:
-                if attempt >= max_retries:
-                    raise
-                self._log(
-                    f"Build failed (attempt {attempt + 1}), "
-                    f"asking AI to fix errors"
-                )
-                self._emit_progress(
-                    f"Fixing build errors (retry {attempt + 1})", 75
-                )
-                error_text = exc.stderr or exc.stdout or str(exc)
-                converter = HtmlToReactConverter()
-                converted_files = await converter.retry_with_errors(
-                    pages, converted_files, error_text, product_doc_content
-                )
-                await asyncio.to_thread(
-                    self._write_converted_files, converted_files, page_dicts
-                )
-        return converted_files
 
     def _build_sync(
         self,
@@ -532,6 +387,72 @@ class ReactSSGBuilder:
         if self._cancel_event and self._cancel_event.is_set():
             raise BuildCancelled("Build cancelled", stage=stage)
 
+    _APP_MODE_SCRIPT = (
+        '<script id="ic-app-mode-runtime">'
+        "(function(){"
+        "var S='ic-app-mode',N='ic_nav',ST='ic_state',R='ic_ready',SI='ic_state_init',"
+        "D='instant-coffee:update',MX=100,MR=200,AS={},EL=[],RL=[],AP=false;"
+        "function ex(h){if(!h)return true;if(h[0]==='#')return true;if(h.indexOf('//')===0)return true;"
+        "return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(h)}"
+        "function ns(h){if(!h)return null;if(ex(h))return null;var r=h.split('#')[0].split('?')[0];"
+        "if(!r)return null;if(r.indexOf('./')===0)r=r.slice(2);if(r[0]==='/')r=r.slice(1);"
+        "if(r==='index'||r==='index.html')return'index';if(r.indexOf('pages/')===0)r=r.slice(6);"
+        "if(r.slice(-5)==='.html')r=r.slice(0,-5);if(!r||r.indexOf('/')!==-1)return null;return r}"
+        "function gk(el){if(!el)return null;return el.getAttribute('data-ic-key')||el.name||el.id||null}"
+        "function rv(el){if(!el)return undefined;var t=el.tagName;if(t==='INPUT'){var ty=el.type||'text';"
+        "if(ty==='checkbox')return!!el.checked;if(ty==='radio')return el.checked?el.value:undefined;"
+        "if(ty==='file')return undefined;return el.value}if(t==='SELECT'){if(el.multiple){var v=[];"
+        "for(var i=0;i<el.options.length;i++)if(el.options[i].selected)v.push(el.options[i].value);"
+        "return v}return el.value}if(t==='TEXTAREA')return el.value;return undefined}"
+        "function wv(el,v){if(v===undefined||v===null)return;var t=el.tagName;if(t==='INPUT'){"
+        "var ty=el.type||'text';if(ty==='checkbox'){el.checked=!!v;return}if(ty==='radio'){"
+        "el.checked=String(v)===el.value;return}if(ty==='file')return;el.value=String(v);return}"
+        "if(t==='SELECT'){if(el.multiple&&Array.isArray(v)){for(var i=0;i<el.options.length;i++)"
+        "el.options[i].selected=v.indexOf(el.options[i].value)!==-1;return}el.value=String(v);return}"
+        "if(t==='TEXTAREA')el.value=String(v)}"
+        "function as(){AP=true;try{var fs=document.querySelectorAll('input,select,textarea');"
+        "for(var i=0;i<fs.length;i++){var el=fs[i],k=gk(el);if(!k||!(k in AS))continue;wv(el,AS[k])}}"
+        "finally{AP=false}}"
+        "function eu(){if(!window.parent)return;window.parent.postMessage({type:D,state:AS,events:EL,"
+        "records:RL,timestamp:Date.now()},'*')}"
+        "function pe(n,d){if(!n)return;EL.unshift({name:String(n),data:d===undefined?null:d,"
+        "timestamp:Date.now()});if(EL.length>MX)EL.length=MX;eu()}"
+        "function pr(t,p){var rt=t==='order_submitted'||t==='booking_submitted'||t==='form_submission'?"
+        "t:'form_submission';RL.unshift({type:rt,payload:p,created_at:new Date().toISOString()});"
+        "if(RL.length>MR)RL.length=MR;eu()}"
+        "function ts(v){if(!v)return v;if(typeof File!=='undefined'&&v instanceof File)"
+        "return{name:v.name,size:v.size,type:v.type};return v}"
+        "function cf(f){var d={};if(!f||typeof FormData==='undefined')return d;"
+        "var fd=new FormData(f);fd.forEach(function(v,k){var c=ts(v);if(d[k]===undefined)d[k]=c;"
+        "else if(Array.isArray(d[k]))d[k].push(c);else d[k]=[d[k],c]});return d}"
+        "function ir(f){if(!f||!f.getAttribute)return'form_submission';"
+        "var c=f.getAttribute('data-ic-record-type')||f.getAttribute('data-record-type')||"
+        "f.getAttribute('data-record');if(c==='order_submitted'||c==='booking_submitted'||"
+        "c==='form_submission')return c;return'form_submission'}"
+        "function es(){if(!window.parent)return;window.parent.postMessage({source:S,type:ST,state:AS},'*')}"
+        "function us(k,v){if(!k)return;AS[k]=v;es();pe('state_update',{key:k,value:v})}"
+        "document.addEventListener('input',function(e){if(AP)return;var t=e.target,k=gk(t);"
+        "if(!k)return;var v=rv(t);if(v===undefined)return;us(k,v)},true);"
+        "document.addEventListener('change',function(e){if(AP)return;var t=e.target,k=gk(t);"
+        "if(!k)return;var v=rv(t);if(v===undefined)return;us(k,v)},true);"
+        "document.addEventListener('submit',function(e){var t=e.target;if(!t||t.tagName!=='FORM')return;"
+        "var p=cf(t),rt=ir(t);pr(rt,p);pe('form_submit',{type:rt})},true);"
+        "document.addEventListener('click',function(e){var t=e.target;if(!t||!t.closest)return;"
+        "var a=t.closest('a');if(!a)return;var h=a.getAttribute('href'),s=ns(h);"
+        "if(!s)return;e.preventDefault();pe('navigate',{slug:s,href:h});"
+        "if(window.parent)window.parent.postMessage({source:S,type:N,slug:s},'*')},true);"
+        "window.addEventListener('message',function(e){var d=e.data||{};if(!d||d.source!==S)return;"
+        "if(d.type===SI){AS=d.state&&typeof d.state==='object'?d.state:{};as();eu()}});"
+        "window.IC_APP={getState:function(){return AS},setState:function(k,v){"
+        "if(typeof k==='string'){us(k,v);return}if(k&&typeof k==='object'){for(var key in k)"
+        "if(Object.prototype.hasOwnProperty.call(k,key))AS[key]=k[key];es();"
+        "pe('state_sync',{keys:Object.keys(k)})}},navigate:function(s){"
+        "if(!s||!window.parent)return;window.parent.postMessage({source:S,type:N,slug:s},'*')}};"
+        "if(window.parent){window.parent.postMessage({source:S,type:R},'*');eu()}"
+        "})();"
+        "</script>"
+    )
+
     def _apply_mobile_shell(self) -> None:
         for path in self.dist_dir.rglob("*.html"):
             if not path.is_file():
@@ -539,6 +460,14 @@ class ReactSSGBuilder:
             try:
                 html = path.read_text(encoding="utf-8")
                 patched = ensure_mobile_shell(html)
+                # Inject app-mode runtime for iframe state sync / nav bridging
+                if self._APP_MODE_SCRIPT not in patched:
+                    if "</body>" in patched:
+                        patched = patched.replace("</body>", f"{self._APP_MODE_SCRIPT}</body>")
+                    elif "</head>" in patched:
+                        patched = patched.replace("</head>", f"{self._APP_MODE_SCRIPT}</head>")
+                    else:
+                        patched = f"{patched}{self._APP_MODE_SCRIPT}"
                 if patched != html:
                     path.write_text(patched, encoding="utf-8")
             except OSError:

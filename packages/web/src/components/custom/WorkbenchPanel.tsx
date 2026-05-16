@@ -12,7 +12,6 @@ export type WorkbenchTab = 'preview' | 'product-doc'
 export interface WorkbenchPanelProps {
   sessionId: string
   appMode?: boolean
-  onAppModeChange?: (next: boolean) => void
   previewMode?: 'live' | 'build'
   onPreviewModeChange?: (next: 'live' | 'build') => void
   onBuildFromDoc?: () => void
@@ -61,7 +60,6 @@ const TABS: TabInfo[] = [
 export function WorkbenchPanel({
   sessionId,
   appMode,
-  onAppModeChange,
   previewMode,
   onPreviewModeChange,
   onBuildFromDoc,
@@ -145,7 +143,6 @@ export function WorkbenchPanel({
           <PreviewPanel
             sessionId={sessionId}
             appMode={appMode}
-            onAppModeChange={onAppModeChange}
             previewMode={previewMode}
             onPreviewModeChange={onPreviewModeChange}
             htmlContent={previewHtml ?? undefined}

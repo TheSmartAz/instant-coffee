@@ -11,6 +11,7 @@ type StatusTone = 'running' | 'success' | 'failed' | 'waiting' | 'warning'
 
 const STAGE_LABELS: Record<ChatRunStatusStage, string> = {
   run: 'Run',
+  implement: 'Implement',
   build: 'Build',
   review: 'Review',
   policy: 'Policy',
